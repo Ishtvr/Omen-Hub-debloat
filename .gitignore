@@ -1,0 +1,16 @@
+/target/
+/dist/
+/.tools/
+/.local/
+/.agents/
+/.impeccable/*
+!/.impeccable/config.json
+!/.impeccable/design.json
+!/.impeccable/surface-briefs/
+!/.impeccable/surface-briefs/**
+!/.impeccable/surfaces/
+!/.impeccable/surfaces/**
+*.pdb
+*.dll
+*.sys
+!docs/**/*.md

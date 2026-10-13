@@ -1,0 +1,55 @@
+# Architektur
+
+## Laufzeit
+
+Eine Rust-Binary startet standardmäßig eine native Win32-Oberfläche. Ein blockierender Message-Loop hält sie ohne Render-Timer aktiv. Ein einzelner Worker erfasst das WMI-Inventar bei Start/Refresh in einem temporären, lesenden Child-Prozess und liest NVIDIA- und Windows-CPU-Sensoren alle drei Sekunden, solange das Fenster sichtbar ist. Der Inventory-Child hat eine 5-Sekunden-Deadline und einen Windows-Job mit Kill-on-close. Dadurch bleiben hängende WMI-Provider vom UI-Prozess getrennt. Der Output ist auf 64 KiB begrenzt und wird parallel entleert. Ergebnisse werden über einen kurzen Mutex-Zugriff und `PostMessage` an die Oberfläche übergeben. Im Tray blockiert der Worker auf einem Channel; NVIDIA-Sitzungen und CPU-Zeitbasis werden freigegeben.
+
+Die Anwendung registriert `GUID_ACDC_POWER_SOURCE` und verarbeitet `WM_POWERBROADCAST` für Suspend/Resume. Treiber-Sitzungen werden nach Resume oder Versorgungswechsel neu aufgebaut. Die Registrierung folgt der [Windows-Power-Dokumentation](https://learn.microsoft.com/windows/win32/power/power-setting-guids). Diese Behandlung ist implementiert, muss aber noch an echten Power-Übergängen geprüft werden.
+
+`diagnose` liefert eine einmalige JSON-Erfassung. `inventory` liefert Systemdaten und dient auch dem isolierten Child. `hp-read` und `hp-performance-read` sind feste GETs ausschließlich für 8E35/F.13; D-State 0 bleibt als unbekannter Rohzustand erhalten. `keyboard-read` liest Capability und klassische Farb-/Helligkeitsblöcke. Diese HP-Reader bleiben ohne Setter und ohne eigene Elevation. Die alten HP-Profilvorschauen bleiben nicht anwendbar. Eigene GPU-Profile haben dagegen einen realen Apply-/Restore-Endpunkt über validierte öffentliche NVML. Der GPU-Editor startet für Hardwareaktionen ausschließlich eigene, feste UAC-CLI-Aktionen; er erhöht nicht den normalen Tray-Prozess.
+
+## Grenzen der Module
+
+`omen-core` hat keine Plattformabhängigkeiten. Policies können ohne Zugriff auf ein Gerät getestet werden. Die Prozentwerte der Lüfterkurve sind abstrakt und dürfen erst nach modellspezifischer Umrechnung an Hardware gehen. Der Supervisor beschreibt den zukünftigen Controller-Lifecycle, wird vom aktuellen lesenden Worker nicht als Hardwaresteuerung benutzt.
+
+`omen-platform` kapselt Windows- und Treiberzugriff. Der HP-Reader hat einen privaten Katalog mit fünf belegten GETs: GPU-Status, SystemDesignData, Tastatur-Capability, Farben und Helligkeit. Es gibt keine beliebigen Opcode-Parameter. HP/8E35/F.13, genau eine aktive BIOS-Instanz, direkte COM-Systemfelder, CIM-/VARIANT-Typen, Returncodes und Längen werden geprüft. Die leere Capability-Eingabe behält ihre Bytearray-/Null-SAFEARRAY-Semantik. Vollständige Rohzustände bleiben für weitere Untersuchung erhalten; eine Firmware-Capability ist kein aktueller Leistungsmodus.
+
+NVAPI liefert Temperatur und Takt; NVML liefert Watt und Power-Limit-Metadaten. Beide DLLs werden ausschließlich aus System32 geladen. Nicht verfügbare Werte bleiben `None`; Abfragefehler sind im Diagnosebericht sichtbar. Alle Treiberhandles verbleiben auf dem Worker-Thread und werden per `Drop` freigegeben. Verlorene Sitzungen werden verworfen und im sichtbaren Fenster nach 30 Sekunden neu aufgebaut; einzelne nicht unterstützte Sensorabfragen lösen keinen Reconnect aus.
+
+CPU-Auslastung entsteht aus zwei `GetSystemTimes`-Samples: `(ΔKernel + ΔUser − ΔIdle) / (ΔKernel + ΔUser)`. Kernelzeit enthält Idle bereits. Die reine Berechnung liegt in `omen-core`; zurückgesetzte oder widersprüchliche Zähler bleiben unbekannt. Der Windows-Adapter unterstützt zunächst 1–64 logische Prozessoren, damit keine partielle Prozessorgruppen-Messung als Gesamtwert erscheint. `CallNtPowerInformation(ProcessorInformation)` liefert den Durchschnitt von `CurrentMhz`; dieses OS-Signal ist ausdrücklich kein gemessener Boost-/Effektivtakt. Beide APIs sind lesend und benötigen keinen zusätzlichen Treiber. CPU-Messung läuft unabhängig von NVIDIA-Reconnects und beginnt nach Tray/Resume/AC-Wechsel mit einer frischen Zeitbasis.
+
+CPU-Paketleistung und Prozessortemperatur bleiben `None`. Das lokal vorhandene AMD Ryzen Master SDK ist ein Sensor-Kandidat, derzeit kein Runtime-Backend. Sein C++-/STL-Vertrag verlangt einen versionsgenauen Shim und validierte Initialisierung/Lebensdauer; ein willkürlich nachgebildetes Rust-C-Layout ist ungeeignet. Weder ein AMD-Power-Limit noch eine unzugeordnete ACPI-Thermalzone ersetzt eine echte Messung.
+
+`omen-hub-plus-plus` stellt die Anwendung bereit. Produktname: Omen Hub++. Cargo-Binärname: `omen-hub-pp`, da Rust keine Pluszeichen in Crate-Namen erlaubt. Das Release-Skript nennt das ausgelieferte Programm `Omen Hub++.exe`.
+
+## Schreib-Engine und verbleibende OEM-Adapter
+
+Der Kurveneditor trennt zusätzlich Editing-Policy, Canvas und native Oberflächensteuerung: `core/curve_editor.rs` prüft unveränderliche GPU-Anker, Treibergrenzen und geordnete Lüfterpunkte; `app/curve_widget.rs` behandelt GDI, Maus und Tastatur; `app/curve_ui.rs` lädt und speichert Profile im Hintergrund. Der Editor hat keine Hardware-SET-Aktion. Gespeicherte Lüfterkurven werden erst nach einer eigenen validierten HP-Anbindung anwendbar. Die Hauptoberfläche und der GPU-Profil-Editor öffnen denselben Workbench; Details: [CURVE_EDITOR.md](CURVE_EDITOR.md).
+
+`features.rs` definiert 85 semantische Schlüssel, `profiles.rs` typisierte Werte und Gerätebindung. `transaction.rs` enthält plattformfreie Gesamtprüfung, Originalbild, Readback und umgekehrten Restore. `Backend` liefert pro Feature Capability und adaptereigene Restore-Bilder; `Journal` muss die Originale vor jedem Schreiben dauerhaft speichern. Der Core enthält keine Windows-Handles, Treiberstrukturen oder Rohbefehle. Unsupported Settings sperren das ganze Profil.
+
+`windows/gpu.rs` besitzt die öffentliche NVML-Offset-ABI und die Treibersitzung; `controller.rs` bindet sie an das untersuchte Board/BIOS/GPU/Driver/VBIOS, AC und Temperatur. Controller akzeptieren nur selbst erfasste Restore-Bilder oder vorher vollständig geprüfte persistierte Recovery-Bilder. Ein globaler Mutex serialisiert eigene Schreibprozesse. Treiber-Erfolg allein zählt nicht: jeder Sollwert und anschließend das gesamte Profil werden zurückgelesen, auch nach möglichen Seiteneffekten späterer Settings. Unvollständige Rückkehr lässt das Journal offen.
+
+`core/vf.rs` enthält spannungsgeordnete, vollständige Kurven, exakte Einheitenumrechnung und die Plateau-Policy. `windows/vf.rs` kapselt die nachgewiesene private ABI, vollständige GET-Vorlagen, immutable Spannungsanker, Graphics-Masken und das Thread-/DLL-Lifetime. Das tatsächlich geladene Implementierungsmodul muss dem SHA-256 der untersuchten 617.14-Datei entsprechen. Es wird keine kopierte proprietäre DLL geladen.
+
+`Backend::validate_setting` prüft komplexe Ziele vor irgendeinem Schreiben. `write_order` nennt jede Einstellung genau einmal in Hardware-Abhängigkeitsreihenfolge; Journal und Originale bleiben in Profilreihenfolge. NVIDIA-Memory kommt vor Graphics, weil sein Setter individuelle Kurven löscht. Auch ein einzelner Memory-Adapter erfasst und erhält sämtliche Graphics-Deltas und den zugehörigen globalen Core-Offset. `verify_captured` und `verify_target` kontrollieren vollständige Steuerbilder vor/nach jedem Schritt und nochmals nach dem gesamten Apply/Restore. Frequenzbeobachtungen können bei unveränderten Deltas wandern: `Applied.observed` enthält aktuelle Werte, `Applied.verified` die tatsächlich verifizierten Ziele. V/F-Deltas werden einmal aus dem dauerhaften Capture berechnet, damit ein neuer Prozess exakt dieselben Original-/Zielbilder rekonstruieren kann.
+
+`profile_store.rs` schreibt begrenzte JSON-Dateien atomar über Sync und Write-through-Rename. Der Windows-Benutzertoken bestimmt den Speicherort `.omen-hub-pp` außerhalb umgeleiteter AppData. Eine explizite Legacy-Migration behält alte Daten und offene Recovery-Sperren. CPU/Windows/iGPU-only-Profile prüfen keine beiläufig gespeicherte NVIDIA-Identität und initialisieren keine diskrete GPU-Sitzung.
+
+`startup.rs` prüft die feste installierte Binary, Build-Hash, interaktive Benutzeridentität, Anmeldetrigger und Task-Aktion über öffentliche COM. Die native Task-XML wird strukturell auf genau eine passende Principal-SID geprüft, weil COM diese als Kontonamen normalisieren kann. Die bestätigte Profilversion erhält eine gegen normale Schreibzugriffe geschützte Freigabe. Bei Anmeldung prüft ein kurzlebiger Prozess alle Bedingungen erneut; der Tray läuft weiter ohne erhöhte Dauerpräsenz. Einzelheiten: [GPU_PROFILES.md](GPU_PROFILES.md).
+
+Die Zielengine ersetzt die originalen HP-Omen-Hardwarecontroller vollständig. Der untersuchte klassische Tastaturpfad verwendet eine eigene `ROOT\WMI`-Abbildung; `WMISDK` und `HPSysInfoRpcEndpoint` werden nicht als Runtime-Abkürzung übernommen. Capability und Zustands-GETs sind am Gerät belegt. Da die HP-Dienste während der Proben weiterliefen, fehlen erfolgreicher Betrieb ohne diese Controller sowie Schreib-Readback/Restore weiterhin. [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md) und [REPLACEMENT_PLAN.md](REPLACEMENT_PLAN.md) trennen diese Befunde von Freigaben.
+
+Weitere OEM-/Voltage-/CPU-Adapter benötigen dieselben Transaktionsverträge plus ihre vollständigen gekoppelten Zustände und eigene Evidenz. Die aktuelle NVML-Taktfreigabe ist kein Beleg für deren Sicherheit oder für Unleashed. Exklusive Ownership gegenüber fremden Controller-Schleifen bleibt zu beweisen.
+
+AC-Wechsel, Suspend, Resume und Treiberfehler invalidieren das Armieren des Supervisors. Nach Resume ist erneute Geräteprüfung erforderlich. Das Intervall kommt aus validierten Plattformdaten. Heartbeats werden nicht als Burst nachgeholt. Abbruch setzt keine unbekannten Firmwarewerte blind zurück.
+
+Eine UI als Windows-Dienst wäre für die interaktive Sitzung ungeeignet. Falls ein Dienst nötig wird, läuft dort nur der privilegierte Controller, mit enger lokaler IPC und Zugriffsprüfung. Tray/UI und ein optionaler Autostart verbleiben im Benutzerkonto.
+
+## Noch offene technische Risiken
+
+- Direkte Diagnose-/HP-/Profil-CLI-Aufrufe können beim Provider blockieren. Das Dashboard isoliert WMI. Der GPU-Editor beendet beim Schließen keinen noch laufenden Schreibprozess; dessen eigener Ablauf schließt Readback/Restore ab. Ein abgebrochener Prozess hinterlässt vor dem ersten Setter bereits ein dauerhaftes Originalbild und sperrt neue automatische Versuche. Ein echter Crash-/Stromausfalltest und vollständige Power-Lifecycle-Übergänge stehen aus.
+- Der Prototyp zeigt nur die erste NVIDIA-GPU. Mehrere gleichnamige Geräte benötigen PCI-Identitätsabgleich.
+- Treiberaufrufe können die diskrete GPU wecken; im Tray werden sie vollständig ausgesetzt.
+- Ein Maximal-Limit aus NVML belegt weder OEM-Modus noch dauerhafte Lastleistung.
+- Nicht jede Ryzen-/Intel-Familie unterstützt jeden UXTU-artigen Parameter; Undervolting ist separat zu validieren.

@@ -1,0 +1,10 @@
+/crates/** text eol=lf
+/docs/** text eol=lf
+/scripts/** text eol=lf
+/.github/** text eol=lf
+/*.md text eol=lf
+/Cargo.toml text eol=lf
+/Cargo.lock text eol=lf
+/.gitignore text eol=lf
+/.impeccable/config.json text eol=lf
+/.impeccable/design.json text eol=lf

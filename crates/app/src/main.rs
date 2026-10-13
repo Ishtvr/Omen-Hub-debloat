@@ -1,0 +1,144 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+#[cfg(windows)]
+mod curve_ui;
+#[cfg(windows)]
+mod curve_widget;
+#[cfg(windows)]
+mod gpu_ui;
+#[cfg(windows)]
+mod inventory;
+#[cfg(windows)]
+mod profile_commands;
+#[cfg(windows)]
+mod ui;
+
+fn main() {
+    if let Err(error) = run() {
+        #[cfg(windows)]
+        if std::env::args().count() == 1 || std::env::args().skip(1).eq(["--tray"]) {
+            let body: Vec<u16> = error.encode_utf16().chain(Some(0)).collect();
+            let title: Vec<u16> = omen_core::APP_NAME.encode_utf16().chain(Some(0)).collect();
+            // SAFETY: Strings are terminated and remain alive for the modal call.
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                    std::ptr::null_mut(),
+                    body.as_ptr(),
+                    title.as_ptr(),
+                    windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                        | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                );
+            }
+        }
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+fn run() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if args.is_empty() || args == ["--tray"] {
+        return ui::run(!args.is_empty());
+    }
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "gpu-ui") && args.len() <= 2 {
+        return gpu_ui::run_selected(args.get(1).cloned());
+    }
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "curve-ui") && args.len() <= 2 {
+        return curve_ui::run(args.get(1).cloned());
+    }
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "curve-preview") && args.len() == 3 {
+        return curve_ui::preview(&args[1], std::path::Path::new(&args[2]));
+    }
+    #[cfg(windows)]
+    // Attach to an existing terminal for explicit CLI use; GUI launches create no console.
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(u32::MAX);
+    }
+    #[cfg(windows)]
+    if args
+        .first()
+        .is_some_and(|command| profile_commands::handles(command))
+    {
+        return profile_commands::run(&args);
+    }
+    match args.first().map(String::as_str) {
+        Some("diagnose") if args.len() == 1 => {
+            #[cfg(windows)]
+            let mut cpu = omen_platform::Cpu::new();
+            let inventory = omen_platform::inventory();
+            #[cfg(windows)]
+            let mut nvidia = omen_platform::Nvidia::new();
+            let mut snapshot = omen_core::Snapshot {
+                inventory,
+                power: omen_platform::power_status(),
+                ..Default::default()
+            };
+            #[cfg(windows)]
+            {
+                // A meaningful CPU busy-time reading requires two samples.
+                // Inventory/NVIDIA startup may already have supplied this interval.
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                snapshot.cpu = Some(cpu.sample());
+                snapshot.gpu = nvidia.sample();
+                snapshot.warnings = nvidia.warnings().to_vec();
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?
+            );
+        }
+        Some("inventory") if args.len() == 1 => {
+            println!(
+                "{}",
+                serde_json::to_string(&omen_platform::inventory()).map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
+        Some("hp-read") if args.len() == 1 => {
+            let inventory = omen_platform::inventory();
+            let status = omen_platform::read_hp_gpu_status(&inventory)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
+        Some("hp-performance-read") if args.len() == 1 => {
+            let inventory = omen_platform::inventory();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "gpu_status": omen_platform::read_hp_gpu_status(&inventory),
+                    "system_design": omen_platform::read_hp_system_design(&inventory),
+                    "hardware_applied": false
+                }))
+                .map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
+        Some("keyboard-read") if args.len() == 1 => {
+            let inventory = omen_platform::inventory();
+            let state = omen_platform::read_hp_keyboard_state(&inventory)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?
+            );
+        }
+        Some("plan") if args.len() == 2 => {
+            let profile = omen_core::Profile::parse(&args[1])?;
+            let plan = omen_core::preview_profile(&omen_platform::inventory(), profile);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?
+            );
+        }
+        Some("--help" | "-h") => println!(
+            "Omen Hub++ 0.1.0\n\n  omen-hub-pp.exe           Native dashboard\n  omen-hub-pp.exe --tray    Start hidden in tray\n  omen-hub-pp.exe gpu-ui [id] Native GPU profile editor\n  omen-hub-pp.exe curve-ui [id] Native GPU V/F and CPU/GPU fan curve workbench\n  omen-hub-pp.exe curve-preview gpu|cpu-fan|gpu-fan <bmp-path> Render only our widget\n  omen-hub-pp.exe diagnose  Read-only JSON diagnostics\n  omen-hub-pp.exe inventory Read-only system inventory\n  omen-hub-pp.exe hp-read   HP GPU-status GET (8E35/F.13 only)\n  omen-hub-pp.exe hp-performance-read  HP GPU status and system design GETs\n  omen-hub-pp.exe keyboard-read  Read-only keyboard state (8E35/F.13 only)\n  omen-hub-pp.exe gpu-capabilities [uuid] Read GPU offset limits and feature support\n  omen-hub-pp.exe gpu-curve-read  Read the complete Graphics V/F domain\n  omen-hub-pp.exe gpu-validate-memory-curve Fixed memory-after-curve preservation trial; full restore\n  omen-hub-pp.exe gpu-validate-curve Fixed -15 MHz Graphics frequency trial; full restore\n  omen-hub-pp.exe gpu-validate Two fixed +/-15 MHz GPU and +/-24 MHz VRAM trials; restore after each\n  omen-hub-pp.exe profile-catalog|profile-list\n  omen-hub-pp.exe profile-create <id> <name>\n  omen-hub-pp.exe profile-show|profile-plan|profile-apply <id>\n  omen-hub-pp.exe profile-restore  Recover original state from the latest journal\n  omen-hub-pp.exe profile-set <id> <feature> <value>\n  omen-hub-pp.exe profile-set-vf <id> <anchor-mV> <target-MHz> Save a full plateau curve; no write\n  omen-hub-pp.exe profile-storage|profile-migrate-legacy\n  omen-hub-pp.exe profile-import <json-file>\n  omen-hub-pp.exe profile-startup-enable <id>\n  omen-hub-pp.exe profile-startup-disable|profile-startup-apply|profile-startup-status\n  omen-hub-pp.exe plan quiet|balanced|performance|unleashed\n\nOnly validated adapters may write hardware. Built-in HP profiles remain previews."
+        ),
+        _ => return Err("Use --help for supported commands".into()),
+    }
+    Ok(())
+}
