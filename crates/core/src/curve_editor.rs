@@ -4,6 +4,23 @@ use crate::{
     profiles::{FanPoint, Setting, Value, VfPoint},
     vf::VfState,
 };
+use std::collections::VecDeque;
+
+/// Editing gestures affect a draft, never the driver's voltage anchors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragMode {
+    Point,
+    ReferenceOffset,
+    CurrentOffset,
+    Tilt,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Snapshot {
+    points: Vec<Point>,
+    selected: usize,
+    selection: Option<(usize, usize)>,
+}
+const HISTORY_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -46,6 +63,10 @@ pub struct Curve {
     pub selected: usize,
     original: Vec<Point>,
     gpu: Option<VfState>,
+    selection: Option<(usize, usize)>,
+    undo: VecDeque<Snapshot>,
+    redo: Vec<Snapshot>,
+    gesture: Option<Snapshot>,
 }
 impl Curve {
     pub fn gpu(state: VfState, value: Option<&Value>) -> Result<Self, String> {
@@ -66,9 +87,17 @@ impl Curve {
         Ok(Self {
             kind: Kind::Gpu,
             original: points.clone(),
-            selected: points.len() - 1,
+            selected: points
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, p)| (p.x - 950).abs())
+                .map_or(0, |(i, _)| i),
             points,
             gpu: Some(state),
+            selection: None,
+            undo: VecDeque::new(),
+            redo: Vec::new(),
+            gesture: None,
         })
     }
     pub fn fan(kind: Kind, value: Option<&Value>) -> Result<Self, String> {
@@ -97,6 +126,10 @@ impl Curve {
             points,
             selected: 0,
             gpu: None,
+            selection: None,
+            undo: VecDeque::new(),
+            redo: Vec::new(),
+            gesture: None,
         };
         curve.value()?;
         Ok(curve)
@@ -200,13 +233,9 @@ impl Curve {
             }
             p
         };
-        let old = self.points[index];
-        self.points[index] = p;
-        if let Err(e) = self.value() {
-            self.points[index] = old;
-            return Err(e);
-        }
-        Ok(old != p)
+        let mut points = self.points.clone();
+        points[index] = p;
+        self.replace(points)
     }
     pub fn plateau(&mut self, frequency: i32) -> Result<bool, String> {
         if self.kind != Kind::Gpu {
@@ -215,15 +244,11 @@ impl Curve {
         if self.selected >= self.points.len() {
             return Err("Kein Punkt ausgewählt.".into());
         }
-        let before = self.points.clone();
-        for p in &mut self.points[self.selected..] {
+        let mut points = self.points.clone();
+        for p in &mut points[self.selected..] {
             p.y = frequency;
         }
-        if let Err(e) = self.value() {
-            self.points = before;
-            return Err(e);
-        }
-        Ok(self.points != before)
+        self.replace(points)
     }
     pub fn insert(&mut self) -> Result<(), String> {
         if self.kind == Kind::Gpu {
@@ -253,9 +278,11 @@ impl Curve {
                 y: a.y,
             }
         };
-        self.selected += 1;
-        self.points.insert(self.selected, point);
-        self.value()?;
+        let mut points = self.points.clone();
+        let selected = self.selected + 1;
+        points.insert(selected, point);
+        self.replace(points)?;
+        self.select(selected, false);
         Ok(())
     }
     pub fn remove(&mut self) -> Result<(), String> {
@@ -268,35 +295,266 @@ impl Curve {
         if self.selected >= self.points.len() {
             return Err("Kein Punkt ausgewählt.".into());
         }
-        self.points.remove(self.selected);
-        self.selected = self.selected.min(self.points.len() - 1);
+        let mut points = self.points.clone();
+        points.remove(self.selected);
+        self.replace(points)?;
+        self.select(self.selected.min(self.points.len() - 1), false);
         Ok(())
     }
     pub fn reset(&mut self) {
-        self.points = self.original.clone();
+        // The original was validated when loaded and uses the same GPU grid.
+        let _ = self.replace(self.original.clone());
+        self.select(self.selected.min(self.points.len() - 1), false);
+    }
+    pub fn reference(&self) -> &[Point] {
+        &self.original
+    }
+    pub fn select(&mut self, index: usize, extend: bool) {
+        let index = index.min(self.points.len() - 1);
+        self.selection = if extend {
+            let anchor =
+                self.selection.map_or(
+                    self.selected,
+                    |(a, b)| {
+                        if self.selected == a { b } else { a }
+                    },
+                );
+            Some((anchor.min(index), anchor.max(index)))
+        } else {
+            None
+        };
+        self.selected = index;
+    }
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        self.selection
+    }
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+    pub fn select_all(&mut self) {
+        self.selection = Some((0, self.points.len() - 1));
+    }
+    pub fn select_voltage_range(&mut self, a: i32, b: i32) -> bool {
+        let mut indices = self
+            .points
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| (a.min(b)..=a.max(b)).contains(&p.x))
+            .map(|(i, _)| i);
+        let Some(first) = indices.next() else {
+            self.clear_selection();
+            return false;
+        };
+        let last = indices.next_back().unwrap_or(first);
+        self.selection = Some((first, last));
+        self.selected = first;
+        true
+    }
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            points: self.points.clone(),
+            selected: self.selected,
+            selection: self.selection,
+        }
+    }
+    fn restore_snapshot(&mut self, s: Snapshot) {
+        self.points = s.points;
+        self.selected = s.selected.min(self.points.len() - 1);
+        self.selection = s.selection;
+    }
+    fn remember(&mut self, before: Snapshot) {
+        if self.undo.len() == HISTORY_LIMIT {
+            self.undo.pop_front();
+        }
+        self.undo.push_back(before);
+        self.redo.clear();
+    }
+    fn replace(&mut self, points: Vec<Point>) -> Result<bool, String> {
+        if self.points == points {
+            return Ok(false);
+        }
+        let before = self.snapshot();
+        self.points = points;
+        if let Err(e) = self.value() {
+            self.restore_snapshot(before);
+            return Err(e);
+        }
         self.selected = self.selected.min(self.points.len() - 1);
+        if self.gesture.is_none() {
+            self.remember(before);
+        }
+        Ok(true)
+    }
+    pub fn begin_gesture(&mut self) {
+        self.end_gesture();
+        self.gesture = Some(self.snapshot());
+    }
+    pub fn end_gesture(&mut self) {
+        if let Some(before) = self.gesture.take() {
+            if before.points != self.points {
+                self.remember(before);
+            }
+        }
+    }
+    pub fn cancel_gesture(&mut self) -> bool {
+        if let Some(before) = self.gesture.take() {
+            let changed = before.points != self.points;
+            self.restore_snapshot(before);
+            changed
+        } else {
+            false
+        }
+    }
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+    pub fn undo(&mut self) -> bool {
+        self.end_gesture();
+        if let Some(before) = self.undo.pop_back() {
+            self.redo.push(self.snapshot());
+            self.restore_snapshot(before);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn redo(&mut self) -> bool {
+        if let Some(after) = self.redo.pop() {
+            let before = self.snapshot();
+            self.restore_snapshot(after);
+            if self.undo.len() == HISTORY_LIMIT {
+                self.undo.pop_front();
+            }
+            self.undo.push_back(before);
+            true
+        } else {
+            false
+        }
+    }
+    /// Transform from a fixed gesture snapshot, so mouse events never accumulate
+    /// drift. Group offsets share one clamped delta, preserving their shape.
+    pub fn drag_gpu(
+        &mut self,
+        start: &[Point],
+        mode: DragMode,
+        delta: i32,
+    ) -> Result<bool, String> {
+        if self.kind != Kind::Gpu
+            || start.len() != self.points.len()
+            || start.iter().zip(&self.points).any(|(a, b)| a.x != b.x)
+        {
+            return Err("Vollständiger unveränderter GPU-Spannungsraster erforderlich.".into());
+        }
+        let selected = self.selected;
+        if mode == DragMode::Point && self.selection.is_none() {
+            return self.set(
+                selected,
+                Point {
+                    x: start[selected].x,
+                    y: start[selected].y.saturating_add(delta),
+                },
+                true,
+            );
+        }
+        if mode == DragMode::Tilt {
+            let pivot = if selected < self.points.len() / 2 {
+                self.points.len() - 1
+            } else {
+                0
+            };
+            let divisor = i64::from(start[selected].x - start[pivot].x);
+            if divisor == 0 {
+                return Ok(false);
+            }
+            let mut points = start.to_vec();
+            for p in &mut points {
+                let change = i64::from(delta) * i64::from(p.x - start[pivot].x) / divisor;
+                p.y = i32::try_from(i64::from(p.y) + change)
+                    .map_err(|_| "Frequenz außerhalb des Wertebereichs.")?;
+            }
+            return self.replace(points);
+        }
+        let (first, last) = self.selection.unwrap_or((0, self.points.len() - 1));
+        let basis = if mode == DragMode::ReferenceOffset {
+            &self.original
+        } else {
+            start
+        };
+        let requested =
+            i64::from(start[selected].y) + i64::from(delta) - i64::from(basis[selected].y);
+        let mut lo = i64::MIN;
+        let mut hi = i64::MAX;
+        let gpu = self.gpu.as_ref().ok_or("GPU-Treibergrenzen fehlen.")?;
+        for (i, p) in basis.iter().enumerate().take(last + 1).skip(first) {
+            let n = &gpu.nodes[i];
+            let base = i64::from(n.frequency_khz) - i64::from(n.delta_khz);
+            lo = lo.max(
+                (base + i64::from(gpu.minimum_delta_khz) + 999)
+                    .div_euclid(1000)
+                    .max(1)
+                    - i64::from(p.y),
+            );
+            hi =
+                hi.min((base + i64::from(gpu.maximum_delta_khz)).div_euclid(1000) - i64::from(p.y));
+        }
+        if first > 0 {
+            lo = lo.max(i64::from(start[first - 1].y) - i64::from(basis[first].y));
+        }
+        if last + 1 < start.len() {
+            hi = hi.min(i64::from(start[last + 1].y) - i64::from(basis[last].y));
+        }
+        if lo > hi {
+            return Err("Auswahl und Nachbarpunkte erlauben keinen gemeinsamen Offset.".into());
+        }
+        let offset = requested.clamp(lo, hi);
+        let mut points = start.to_vec();
+        for i in first..=last {
+            points[i].y = i32::try_from(i64::from(basis[i].y) + offset)
+                .map_err(|_| "Frequenz außerhalb des Wertebereichs.")?;
+        }
+        self.replace(points)
+    }
+    pub fn flatten_selection(&mut self) -> Result<bool, String> {
+        if self.kind != Kind::Gpu {
+            return Err("Nur GPU-Frequenzbereiche können abgeflacht werden.".into());
+        }
+        let Some((first, last)) = self.selection else {
+            return self.plateau(self.points[self.selected].y);
+        };
+        let mut points = self.points.clone();
+        let frequency = self.points[self.selected].y;
+        for p in &mut points[first..=last] {
+            p.y = frequency;
+        }
+        self.replace(points)
     }
     pub fn bounds(&self) -> (Point, Point) {
-        if let Some(gpu) = &self.gpu {
-            let max = gpu
-                .nodes
+        if self.kind == Kind::Gpu {
+            let min = self
+                .points
                 .iter()
-                .map(|p| {
-                    (i64::from(p.frequency_khz) - i64::from(p.delta_khz)
-                        + i64::from(gpu.maximum_delta_khz))
-                    .div_euclid(1000)
-                })
+                .chain(&self.original)
+                .map(|p| p.y)
+                .min()
+                .unwrap_or(0);
+            let max = self
+                .points
+                .iter()
+                .chain(&self.original)
+                .map(|p| p.y)
                 .max()
-                .unwrap_or(4000)
-                .clamp(1, 10000) as i32;
+                .unwrap_or(4000);
             (
                 Point {
                     x: self.points[0].x,
-                    y: 0,
+                    y: (min.saturating_sub(200).max(0) / 100) * 100,
                 },
                 Point {
                     x: self.points.last().unwrap().x,
-                    y: ((max + 999) / 1000) * 1000,
+                    y: ((max.saturating_add(299)) / 100) * 100,
                 },
             )
         } else {
@@ -308,6 +566,123 @@ impl Curve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn editor() -> Curve {
+        Curve::gpu(
+            VfState {
+                nodes: (0..4)
+                    .map(|i| crate::vf::VfNode {
+                        index: i,
+                        voltage_uv: 800000 + u32::from(i) * 100000,
+                        frequency_khz: 1000000 + u32::from(i) * 200000,
+                        delta_khz: 0,
+                    })
+                    .collect(),
+                minimum_delta_khz: -400000,
+                maximum_delta_khz: 400000,
+                first_index: 0,
+                last_index: 3,
+            },
+            None,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn shift_reference_and_alt_current_offsets_have_distinct_shapes() {
+        let mut c = editor();
+        c.select(1, false);
+        c.set(1, Point { x: 900, y: 1250 }, false).unwrap();
+        let start = c.points.clone();
+        c.drag_gpu(&start, DragMode::CurrentOffset, 15).unwrap();
+        assert_eq!(
+            c.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1015, 1265, 1415, 1615]
+        );
+        c.drag_gpu(&start, DragMode::ReferenceOffset, 15).unwrap();
+        assert_eq!(
+            c.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1065, 1265, 1465, 1665]
+        );
+        assert_eq!(
+            c.points.iter().map(|p| p.x).collect::<Vec<_>>(),
+            [800, 900, 1000, 1100]
+        );
+    }
+    #[test]
+    fn a_selected_band_shares_one_bound_and_a_drag_is_one_undo_step() {
+        let mut c = editor();
+        assert!(c.select_voltage_range(1050, 850));
+        assert_eq!(c.selection(), Some((1, 2)));
+        let start = c.points.clone();
+        c.begin_gesture();
+        c.drag_gpu(&start, DragMode::CurrentOffset, 30).unwrap();
+        c.drag_gpu(&start, DragMode::CurrentOffset, 900).unwrap();
+        assert_eq!(
+            c.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1000, 1400, 1600, 1600]
+        );
+        c.end_gesture();
+        assert!(c.undo());
+        assert_eq!(c.points, start);
+        assert!(!c.can_undo());
+        assert!(c.redo());
+        assert_eq!(c.points[2].y, 1600);
+        c.begin_gesture();
+        let before = c.points.clone();
+        c.drag_gpu(&before, DragMode::CurrentOffset, -50).unwrap();
+        assert!(c.cancel_gesture());
+        assert_eq!(c.points, before);
+    }
+    #[test]
+    fn tilt_keeps_the_opposite_anchor_and_invalid_edits_are_atomic() {
+        let mut c = editor();
+        let start = c.points.clone();
+        c.select(3, false);
+        c.drag_gpu(&start, DragMode::Tilt, 200).unwrap();
+        assert_eq!(
+            c.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1000, 1266, 1533, 1800]
+        );
+        let before = c.points.clone();
+        assert!(c.drag_gpu(&start, DragMode::Tilt, 500).is_err());
+        assert_eq!(c.points, before);
+        assert!(c.drag_gpu(&start[..3], DragMode::CurrentOffset, 5).is_err());
+        assert_eq!(c.points, before);
+    }
+    #[test]
+    fn selection_flatten_and_redo_preserve_the_grid_and_branch_history() {
+        let mut c = editor();
+        c.select_voltage_range(900, 1000);
+        c.flatten_selection().unwrap();
+        assert_eq!(
+            c.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1000, 1200, 1200, 1600]
+        );
+        assert!(c.undo());
+        assert!(c.can_redo());
+        c.select(3, false);
+        c.set(3, Point { x: 1100, y: 1610 }, false).unwrap();
+        assert!(!c.can_redo());
+        c.select_all();
+        c.select(0, true);
+        assert!(c.selection().is_some());
+        c.value().unwrap();
+        for i in 0..100 {
+            c.set(
+                3,
+                Point {
+                    x: 1100,
+                    y: 1610 + i,
+                },
+                false,
+            )
+            .unwrap();
+        }
+        let mut undos = 0;
+        while c.undo() {
+            undos += 1;
+        }
+        assert_eq!(undos, HISTORY_LIMIT);
+    }
     #[test]
     fn gpu_anchors_and_complete_driver_bounds_survive_edit_and_rejected_plateau() {
         let state = VfState {

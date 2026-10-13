@@ -63,11 +63,15 @@ try {
     $taskMemory = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,311)
     $taskName = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,309)
     $taskApply = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,304)
-    [void][OmenGpuUiSmoke]::SetWindowText($taskCore,'keinezahl')
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]0x02000136,[IntPtr]::Zero)
+    $taskUsesActiveCurve=-not[OmenGpuUiSmoke]::IsWindowEnabled($taskCore)
+    $taskInvalidField=if($taskUsesActiveCurve){$taskMemory}else{$taskCore}
+    [void][OmenGpuUiSmoke]::SetWindowText($taskInvalidField,'keinezahl')
+    $taskInvalidNotification=if($taskUsesActiveCurve){0x02000137}else{0x02000136}
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]$taskInvalidNotification,[IntPtr]::Zero)
     Start-Sleep -Milliseconds 150
     if ([OmenGpuUiSmoke]::IsWindowEnabled($taskApply)) { throw 'Apply remains enabled for an unsaved/invalid draft.' }
-    if ([OmenGpuUiSmoke]::Text($taskWindow) -notmatch 'GPU-Offset als ganze MHz-Zahl') { throw ('Inline numeric validation is missing: ' + [OmenGpuUiSmoke]::Text($taskWindow)) }
+    $taskExpectedError=if($taskUsesActiveCurve){'VRAM-Offset als ganze MHz-Zahl'}else{'GPU-Offset als ganze MHz-Zahl'}
+    if ([OmenGpuUiSmoke]::Text($taskWindow) -notmatch $taskExpectedError) { throw ('Inline numeric validation is missing: ' + [OmenGpuUiSmoke]::Text($taskWindow)) }
     [void][OmenGpuUiSmoke]::SetWindowText($taskName,$taskProfileName)
     [void][OmenGpuUiSmoke]::SetWindowText($taskCore,'0')
     [void][OmenGpuUiSmoke]::SetWindowText($taskMemory,'0')
@@ -83,12 +87,19 @@ try {
         $taskProfile = Get-Content -LiteralPath $taskFile.FullName -Raw | ConvertFrom-Json
         if ($taskProfile.name -eq $taskProfileName) { $taskCreated = $taskFile.FullName; break }
     }
-    if (-not $taskCreated -or $taskProfile.schema -ne 1 -or $taskProfile.settings.Count -ne 2 -or @($taskProfile.settings | Where-Object { $_.value.value -ne 0 }).Count -ne 0) { throw 'Saved typed profile does not match the draft.' }
+    if (-not $taskCreated -or $taskProfile.schema -ne 1 -or $taskProfile.settings.Count -ne 2) { throw 'Saved typed profile does not match the draft.' }
+    if($taskUsesActiveCurve){
+        $taskInitialCurve=@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')
+        if($taskInitialCurve.Count-ne1-or$taskInitialCurve[0].value.value.Count-ne127-or@($taskProfile.settings|Where-Object feature -eq 'gpu_core_offset_mhz').Count-ne0){throw 'Active individual curve was not preserved.'}
+        # Boost observations can change between reads. Compare anchors here;
+        # complete point preservation is checked below against an imported draft.
+        for($taskI=0;$taskI-lt127;$taskI++){if($taskInitialCurve[0].value.value[$taskI].voltage_mv-ne($taskCurveBefore.nodes[$taskI].voltage_uv/1000)){throw 'Saving the active curve altered a voltage anchor.'}}
+    }elseif(@($taskProfile.settings | Where-Object { $_.value.value -ne 0 }).Count -ne 0){throw 'Saved scalar offsets do not match the draft.'}
     if (-not [OmenGpuUiSmoke]::IsWindowEnabled($taskApply)) { throw 'Verified supported saved profile did not enable Apply.' }
     $taskCurveCheck = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,312)
     $taskVoltage = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,313)
     $taskFrequency = [OmenGpuUiSmoke]::GetDlgItem($taskWindow,314)
-    [void][OmenGpuUiSmoke]::Message($taskCurveCheck,0x00F5)
+    if(-not$taskUsesActiveCurve){[void][OmenGpuUiSmoke]::Message($taskCurveCheck,0x00F5)}
     if ([OmenGpuUiSmoke]::IsWindowEnabled($taskCore) -or -not [OmenGpuUiSmoke]::IsWindowEnabled($taskFrequency)) { throw 'Curve mode did not exclude global core-offset editing.' }
     [void][OmenGpuUiSmoke]::SetWindowText($taskFrequency,'keinezahl')
     [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]0x0200013A,[IntPtr]::Zero)

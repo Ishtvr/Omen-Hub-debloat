@@ -19,11 +19,15 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
+    Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
     Graphics::Gdi::*,
     System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Controls::{BST_CHECKED, BST_UNCHECKED, EM_SETLIMITTEXT, EM_SETREADONLY},
-        Input::KeyboardAndMouse::{EnableWindow, GetKeyState},
+        Controls::{
+            BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETREADONLY, EM_SETSEL,
+            ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, SetWindowTheme,
+        },
+        Input::KeyboardAndMouse::{EnableWindow, GetKeyState, SetFocus},
         WindowsAndMessaging::*,
     },
 };
@@ -49,6 +53,13 @@ const OPEN: usize = 517;
 const RELOAD: usize = 518;
 const CANVAS: usize = 519;
 const STATUS: usize = 520;
+const UNDO: usize = 521;
+const REDO: usize = 522;
+const ZOOM_IN: usize = 523;
+const ZOOM_OUT: usize = 524;
+const FIT: usize = 525;
+const HELP: usize = 526;
+const FOCUS: usize = 527;
 const KINDS: [Kind; 3] = [Kind::Gpu, Kind::CpuFan, Kind::GpuFan];
 #[derive(Clone)]
 struct Row {
@@ -261,6 +272,11 @@ struct Controls {
     status: HWND,
     open: HWND,
     reload: HWND,
+    undo: HWND,
+    redo: HWND,
+    zoom: [HWND; 3],
+    help: HWND,
+    focus: HWND,
 }
 struct State {
     tx: mpsc::Sender<Request>,
@@ -272,6 +288,9 @@ struct State {
     busy: Cell<bool>,
     rendering: Cell<bool>,
     dirty: Cell<bool>,
+    graph_only: Cell<bool>,
+    background: Cell<HBRUSH>,
+    surface: Cell<HBRUSH>,
 }
 fn selected(s: &State) -> Option<String> {
     s.view
@@ -355,6 +374,18 @@ fn enabled(s: &State) {
             EnableWindow(h, (ready && s.mode.get() != 0) as i32);
         }
         EnableWindow(c.plateau, (ready && s.mode.get() == 0) as i32);
+        let model = plot::curve(c.canvas);
+        EnableWindow(
+            c.undo,
+            (ready && model.as_ref().is_some_and(Curve::can_undo)) as i32,
+        );
+        EnableWindow(
+            c.redo,
+            (ready && model.as_ref().is_some_and(Curve::can_redo)) as i32,
+        );
+        for h in c.zoom {
+            EnableWindow(h, ready as i32);
+        }
         EnableWindow(c.save, (view.is_some() && !s.busy.get()) as i32);
         EnableWindow(
             c.open,
@@ -490,7 +521,7 @@ fn show(s: &State, view: View, status: &str) {
     text(
         c.status,
         if status.is_empty() {
-            "Punkte ziehen oder links/rechts wählen, oben/unten ändern; Umschalt = 10 Schritte.\r\nLüfter: Strg + links/rechts ändert die Temperatur. Einfg/Entf fügt hinzu oder entfernt."
+            "Entwurf · Speichern verändert keine Hardware. Shift: Kurve/Bereich · Strg + Z: Rückgängig · F1: Tastenkürzel"
         } else {
             status
         },
@@ -506,27 +537,71 @@ fn layout(hwnd: HWND, s: &State) {
     }
     let w = r.right.max(780);
     let h = r.bottom.max(620);
-    let plot_height = (h - 405).max(200);
-    let bottom = 190 + plot_height;
+    let regular = [
+        c.profiles, c.name, c.new, c.reload, c.include, c.source, c.points, c.xlabel, c.x,
+        c.ylabel, c.y, c.set, c.add, c.remove, c.plateau, c.reset, c.open,
+    ];
+    unsafe {
+        for handle in regular {
+            ShowWindow(handle, if s.graph_only.get() { SW_HIDE } else { SW_SHOW });
+        }
+    }
+    if s.graph_only.get() {
+        let narrow = w < 1130;
+        let top = if narrow { 94 } else { 54 };
+        let toolbar = if narrow { 54 } else { 14 };
+        let mut boxes = vec![
+            (c.canvas, [8, top, w - 16, h - top - 54]),
+            (c.save, [if narrow { 20 } else { 400 }, toolbar, 115, 30]),
+            (c.undo, [if narrow { 150 } else { 530 }, toolbar, 125, 30]),
+            (c.redo, [if narrow { 290 } else { 670 }, toolbar, 135, 30]),
+            (c.help, [w - 300, 14, 135, 30]),
+            (c.focus, [w - 155, 14, 135, 30]),
+            (c.status, [20, h - 42, w - 375, 32]),
+            (c.zoom[0], [w - 340, h - 44, 90, 30]),
+            (c.zoom[1], [w - 240, h - 44, 90, 30]),
+            (c.zoom[2], [w - 140, h - 44, 120, 30]),
+        ];
+        for (i, handle) in c.modes.iter().enumerate() {
+            boxes.push((*handle, [20 + i as i32 * 125, 14, 120, 28]));
+        }
+        unsafe {
+            for (handle, b) in boxes {
+                MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
+            }
+        }
+        text(c.focus, "Profil / Werte …");
+        return;
+    }
+    text(c.focus, "Diagrammansicht");
+    let plot_height = (h - 417).max(200);
+    let bottom = 202 + plot_height;
     let mut boxes = vec![
         (c.profiles, [20, 54, 290, 240]),
         (c.name, [326, 54, w - 510, 32]),
         (c.save, [w - 170, 54, 150, 34]),
         (c.new, [20, 14, 100, 30]),
         (c.reload, [132, 14, 140, 30]),
+        (c.undo, [286, 14, 125, 30]),
+        (c.redo, [425, 14, 135, 30]),
+        (c.help, [w - 300, 14, 135, 30]),
+        (c.focus, [w - 155, 14, 135, 30]),
         (c.include, [580, 104, w - 600, 28]),
-        (c.source, [20, 142, w - 40, 42]),
-        (c.canvas, [20, 190, w - 40, plot_height]),
+        (c.source, [20, 142, w - 40, 50]),
+        (c.canvas, [20, 202, w - 40, plot_height]),
         (c.points, [20, bottom + 12, w - 40, 240]),
         (c.xlabel, [20, bottom + 55, 176, 28]),
         (c.x, [200, bottom + 52, 100, 32]),
         (c.ylabel, [324, bottom + 55, 150, 28]),
         (c.y, [480, bottom + 52, 100, 32]),
         (c.set, [600, bottom + 52, w - 620, 34]),
-        (c.add, [20, bottom + 96, 155, 34]),
-        (c.remove, [190, bottom + 96, 155, 34]),
-        (c.plateau, [360, bottom + 96, 195, 34]),
-        (c.reset, [570, bottom + 96, w - 590, 34]),
+        (c.add, [20, bottom + 96, 145, 34]),
+        (c.remove, [175, bottom + 96, 145, 34]),
+        (c.plateau, [20, bottom + 96, 170, 34]),
+        (c.reset, [200, bottom + 96, 200, 34]),
+        (c.zoom[0], [w - 340, bottom + 96, 90, 34]),
+        (c.zoom[1], [w - 240, bottom + 96, 90, 34]),
+        (c.zoom[2], [w - 140, bottom + 96, 120, 34]),
         (c.status, [20, h - 68, w - 255, 58]),
         (c.open, [w - 220, h - 68, 200, 58]),
     ];
@@ -536,6 +611,70 @@ fn layout(hwnd: HWND, s: &State) {
     unsafe {
         for (handle, b) in boxes {
             MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
+        }
+        ShowWindow(c.add, if s.mode.get() != 0 { SW_SHOW } else { SW_HIDE });
+        ShowWindow(c.remove, if s.mode.get() != 0 { SW_SHOW } else { SW_HIDE });
+        ShowWindow(c.plateau, if s.mode.get() == 0 { SW_SHOW } else { SW_HIDE });
+        if s.mode.get() != 0 {
+            MoveWindow(c.reset, 340, bottom + 96, 180, 34, 1);
+        }
+    }
+}
+fn help(hwnd: HWND) {
+    let message = "GPU-Kurve\r\nZiehen: Punkt oder ausgewählten Bereich vertikal verschieben.\r\nShift + Punkt ziehen: geladene Ausgangskurve/Auswahl verschieben.\r\nAlt + Punkt ziehen: aktuellen Entwurf/Auswahl gleichmäßig verschieben.\r\nStrg + Punkt ziehen: Kurve um den gegenüberliegenden Randpunkt neigen.\r\nShift + Ziehen im freien Diagramm: Spannungsbereich auswählen.\r\nShift + Links/Rechts: Auswahl erweitern. Strg + A: alle Punkte.\r\nShift + Enter: Auswahl abflachen; ohne Auswahl Plateau ab dem Punkt.\r\nEsc oder Doppelklick: Auswahl aufheben; Esc beim Ziehen: abbrechen.\r\n\r\nGemeinsame Bedienung\r\nLinks/Rechts: Punkt wählen. Oben/Unten: 1 MHz bzw. 1 %.\r\nStrg + Oben/Unten: 10 Schritte. Enter: Zahlenfeld bearbeiten.\r\nStrg + Z: Rückgängig. Strg + Y / Strg + Shift + Z: Wiederholen.\r\nStrg + D: geladenen Entwurf zurücksetzen. Strg + S: Profil speichern.\r\nMausrad oder +/−: Spannung/Temperatur zoomen. Strg: Y-Achse.\r\nShift + Mausrad: horizontal verschieben. Strg + 0: ganze Kurve.\r\n\r\nLüfter\r\nStrg + Links/Rechts: Temperatur bearbeiten. Shift: größere Schritte.\r\nEinfg/Entf: Punkt hinzufügen/entfernen. Separate CPU-/GPU-Kurven.\r\n\r\nSpeichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.\r\nLüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner sind noch nicht verfügbar.";
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            wide(message).as_ptr(),
+            wide("Kurveneditor – Tastenkürzel").as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+unsafe fn draw_button(s: &State, item: &DRAWITEMSTRUCT) {
+    unsafe {
+        let disabled = item.itemState & ODS_DISABLED != 0;
+        let pressed = item.itemState & ODS_SELECTED != 0;
+        let color = if pressed {
+            plot::BACKGROUND
+        } else {
+            plot::SURFACE
+        };
+        let fill = CreateSolidBrush(color);
+        FillRect(item.hDC, &item.rcItem, fill);
+        DeleteObject(fill);
+        SetBkMode(item.hDC, TRANSPARENT as i32);
+        SetTextColor(
+            item.hDC,
+            if disabled {
+                0x00918a82
+            } else {
+                plot::FOREGROUND
+            },
+        );
+        SelectObject(item.hDC, s.font.get());
+        let title = input(item.hwndItem).unwrap_or_default();
+        let title = wide(&title);
+        let mut r = item.rcItem;
+        DrawTextW(
+            item.hDC,
+            title.as_ptr(),
+            (title.len() - 1) as i32,
+            &mut r,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        if item.CtlID == SAVE as u32 || item.itemState & ODS_FOCUS != 0 {
+            let pen = CreatePen(
+                PS_SOLID,
+                1,
+                if disabled { 0x00918a82 } else { plot::ACCENT },
+            );
+            let old = SelectObject(item.hDC, pen);
+            let fill = SelectObject(item.hDC, GetStockObject(HOLLOW_BRUSH));
+            Rectangle(item.hDC, r.left, r.top, r.right, r.bottom);
+            SelectObject(item.hDC, fill);
+            SelectObject(item.hDC, old);
+            DeleteObject(pen);
         }
     }
 }
@@ -561,6 +700,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 s.font.set(CreateFontIndirectW(&f));
                 let f = s.font.get();
                 let child = |id, class, label, style| {
+                    let style = if class == "BUTTON"
+                        && style & (BS_AUTORADIOBUTTON | BS_AUTOCHECKBOX) as u32 == 0
+                    {
+                        style | BS_OWNERDRAW as u32
+                    } else {
+                        style
+                    };
                     control(hwnd, f, id, class, label, style, [0, 0, 100, 30])
                 };
                 let profiles = child(SELECT, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST as u32);
@@ -620,7 +766,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     add: child(ADD, "BUTTON", "Punkt &hinzufügen", WS_TABSTOP),
                     remove: child(REMOVE, "BUTTON", "Punkt &entfernen", WS_TABSTOP),
                     plateau: child(PLATEAU, "BUTTON", "Ab hier P&lateau", WS_TABSTOP),
-                    reset: child(RESET, "BUTTON", "Kurve &zurücksetzen", WS_TABSTOP),
+                    reset: child(RESET, "BUTTON", "&Zurücksetzen", WS_TABSTOP),
                     status: child(
                         STATUS,
                         "EDIT",
@@ -633,7 +779,21 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     ),
                     open: child(OPEN, "BUTTON", "Anwenden & Startoptionen …", WS_TABSTOP),
                     reload: child(RELOAD, "BUTTON", "Neu &laden", WS_TABSTOP),
+                    undo: child(UNDO, "BUTTON", "Rückgängig", WS_TABSTOP),
+                    redo: child(REDO, "BUTTON", "Wiederholen", WS_TABSTOP),
+                    zoom: [
+                        child(ZOOM_IN, "BUTTON", "Zoom +", WS_TABSTOP),
+                        child(ZOOM_OUT, "BUTTON", "Zoom −", WS_TABSTOP),
+                        child(FIT, "BUTTON", "Ganze Kurve", WS_TABSTOP),
+                    ],
+                    help: child(HELP, "BUTTON", "Tastenkürzel", WS_TABSTOP),
+                    focus: child(FOCUS, "BUTTON", "Profil / Werte …", WS_TABSTOP),
                 };
+                // Public theme API: classic native radios/checks honour the
+                // window's WM_CTLCOLOR foreground and retain native semantics.
+                for handle in c.modes.into_iter().chain([c.include]) {
+                    SetWindowTheme(handle, wide("").as_ptr(), wide("").as_ptr());
+                }
                 if [
                     c.profiles, c.name, c.save, c.source, c.canvas, c.points, c.x, c.y, c.set,
                     c.status, c.open,
@@ -654,7 +814,59 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(l as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 820, y: 710 };
+                info.ptMinTrackSize = POINT { x: 960, y: 710 };
+                0
+            }
+            WM_ERASEBKGND => {
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                FillRect(w as HDC, &r, s.background.get());
+                1
+            }
+            WM_PRINTCLIENT => {
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                FillRect(w as HDC, &r, s.background.get());
+                0
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+                let dc = w as HDC;
+                SetTextColor(dc, plot::FOREGROUND);
+                let input = message == WM_CTLCOLOREDIT
+                    || message == WM_CTLCOLORLISTBOX
+                    || s.controls.get().is_some_and(|c| l == c.status as isize);
+                SetBkColor(
+                    dc,
+                    if input {
+                        plot::SURFACE
+                    } else {
+                        plot::BACKGROUND
+                    },
+                );
+                if input {
+                    s.surface.get() as isize
+                } else {
+                    s.background.get() as isize
+                }
+            }
+            WM_DRAWITEM => {
+                let item = &*(l as *const DRAWITEMSTRUCT);
+                if item.CtlType == ODT_BUTTON {
+                    draw_button(s, item);
+                    1
+                } else {
+                    0
+                }
+            }
+            plot::EDIT_VALUE => {
+                if let Some(c) = s.controls.get() {
+                    if l == c.canvas as isize {
+                        s.graph_only.set(false);
+                        layout(hwnd, s);
+                        SetFocus(c.y);
+                        SendMessageW(c.y, EM_SETSEL, 0, -1);
+                    }
+                }
                 0
             }
             UPDATE => {
@@ -727,7 +939,35 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         Request::Load(selected(s)),
                         "Gespeicherte Kurven werden erneut geladen …",
                     ),
-                    GPU | CPU_FAN | GPU_FAN => mode(s, id - GPU, true),
+                    GPU | CPU_FAN | GPU_FAN => {
+                        mode(s, id - GPU, true);
+                        layout(hwnd, s);
+                    }
+                    UNDO | REDO => {
+                        SendMessageW(
+                            c.canvas,
+                            if id == UNDO { plot::UNDO } else { plot::REDO },
+                            0,
+                            0,
+                        );
+                    }
+                    ZOOM_IN | ZOOM_OUT | FIT => {
+                        SendMessageW(
+                            c.canvas,
+                            match id {
+                                ZOOM_IN => plot::ZOOM_IN,
+                                ZOOM_OUT => plot::ZOOM_OUT,
+                                _ => plot::FIT,
+                            },
+                            0,
+                            0,
+                        );
+                    }
+                    HELP => help(hwnd),
+                    FOCUS => {
+                        s.graph_only.set(!s.graph_only.get());
+                        layout(hwnd, s);
+                    }
                     INCLUDE => {
                         if let Some(v) = s.view.borrow_mut().as_mut() {
                             v.rows[s.mode.get()].enabled =
@@ -739,7 +979,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         let i = SendMessageW(c.points, CB_GETCURSEL, 0, 0);
                         let _ = plot::mutate(c.canvas, |curve| {
                             if let Ok(i) = usize::try_from(i) {
-                                curve.selected = i.min(curve.points.len() - 1);
+                                curve.select(i, false);
                             }
                             Ok(false)
                         });
@@ -840,6 +1080,26 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
 }
 pub fn preview(kind: &str, path: &Path) -> Result<(), String> {
+    let preview = match kind {
+        "gpu-window" | "gpu-example" => Some((0, false, 1380, 940)),
+        "gpu-small" => Some((0, false, 960, 710)),
+        "gpu-controls" => Some((0, true, 1380, 940)),
+        "cpu-fan-window" => Some((1, false, 1380, 940)),
+        _ => None,
+    };
+    if let Some((mode, regular, width, height)) = preview {
+        return run_window(
+            None,
+            Some(Preview {
+                path: path.into(),
+                mode,
+                regular,
+                width,
+                height,
+                example: kind == "gpu-example",
+            }),
+        );
+    }
     let view = load(None)?;
     let i = match kind {
         "gpu" => 0,
@@ -855,7 +1115,18 @@ pub fn preview(kind: &str, path: &Path) -> Result<(), String> {
             .ok_or("Kurve nicht verfügbar.")?,
     )
 }
+struct Preview {
+    path: std::path::PathBuf,
+    mode: usize,
+    regular: bool,
+    width: i32,
+    height: i32,
+    example: bool,
+}
 pub fn run(id: Option<String>) -> Result<(), String> {
+    run_window(id, None)
+}
+fn run_window(id: Option<String>, preview: Option<Preview>) -> Result<(), String> {
     if let Some(id) = &id {
         omen_core::profiles::validate_id(id)?;
     }
@@ -867,10 +1138,13 @@ pub fn run(id: Option<String>) -> Result<(), String> {
         view: RefCell::new(None),
         controls: Cell::new(None),
         font: Cell::new(ptr::null_mut()),
-        mode: Cell::new(0),
+        mode: Cell::new(preview.as_ref().map_or(0, |p| p.mode)),
         busy: Cell::new(false),
         rendering: Cell::new(false),
         dirty: Cell::new(false),
+        graph_only: Cell::new(preview.as_ref().is_none_or(|p| !p.regular)),
+        background: Cell::new(unsafe { CreateSolidBrush(plot::BACKGROUND) }),
+        surface: Cell::new(unsafe { CreateSolidBrush(plot::SURFACE) }),
     });
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
@@ -880,7 +1154,7 @@ pub fn run(id: Option<String>) -> Result<(), String> {
         registration.hInstance = instance;
         registration.lpszClassName = class.as_ptr();
         registration.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
-        registration.hbrBackground = (COLOR_BTNFACE + 1) as HBRUSH;
+        registration.hbrBackground = state.background.get();
         if RegisterClassW(&registration) == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -891,8 +1165,8 @@ pub fn run(id: Option<String>) -> Result<(), String> {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            960,
-            810,
+            preview.as_ref().map_or(1380, |p| p.width),
+            preview.as_ref().map_or(940, |p| p.height),
             ptr::null_mut(),
             ptr::null_mut(),
             instance,
@@ -902,10 +1176,18 @@ pub fn run(id: Option<String>) -> Result<(), String> {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let handle = hwnd as usize;
+        let dark: i32 = 1;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&dark as *const i32).cast(),
+            size_of::<i32>() as u32,
+        );
         let thread = thread::spawn(move || worker(handle, requests, updates));
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });
         dispatch(&state, Request::Load(id), "Kurven werden gelesen …");
         let mut msg: MSG = std::mem::zeroed();
+        let mut preview_error = None;
         let result = loop {
             let result = GetMessageW(&mut msg, ptr::null_mut(), 0, 0);
             if result <= 0 {
@@ -915,9 +1197,56 @@ pub fn run(id: Option<String>) -> Result<(), String> {
                 PostMessageW(hwnd, WM_COMMAND, SAVE, 0);
                 continue;
             }
+            if msg.message == WM_KEYDOWN && msg.wParam == 0x70 {
+                help(hwnd);
+                continue;
+            }
             if IsDialogMessageW(hwnd, &msg) == 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+            if let Some(preview) = &preview {
+                if msg.message == UPDATE && !state.busy.get() {
+                    if state.view.borrow().is_some() {
+                        if preview.example {
+                            if let Some(c) = state.controls.get() {
+                                let edited = plot::mutate(c.canvas, |curve| {
+                                    let start = curve.points.clone();
+                                    curve.drag_gpu(
+                                        &start,
+                                        omen_core::curve_editor::DragMode::CurrentOffset,
+                                        120,
+                                    )?;
+                                    let index = curve
+                                        .points
+                                        .iter()
+                                        .position(|p| p.x >= 1000)
+                                        .ok_or("Kein 1000-mV-Anker für den Beispielentwurf.")?;
+                                    curve.select(index, false);
+                                    curve.plateau(curve.points[index].y)?;
+                                    curve.select_voltage_range(1000, 1250);
+                                    Ok(true)
+                                });
+                                if let Err(e) = edited {
+                                    preview_error = Some(e);
+                                }
+                                sync(&state);
+                                text(
+                                    c.status,
+                                    "Beispielentwurf · nicht gespeichert oder angewendet. Speichern ändert keine Hardware.",
+                                );
+                            }
+                        }
+                        if let Err(e) = plot::render_window(hwnd, &preview.path) {
+                            preview_error = Some(e);
+                        }
+                    } else {
+                        preview_error =
+                            Some("Der native Preview konnte die Kurven nicht laden.".into());
+                    }
+                    DestroyWindow(hwnd);
+                    break 1;
+                }
             }
         };
         let _ = state.tx.send(Request::Stop);
@@ -927,7 +1256,11 @@ pub fn run(id: Option<String>) -> Result<(), String> {
         if !state.font.get().is_null() {
             DeleteObject(state.font.get());
         }
-        if result < 0 {
+        DeleteObject(state.background.get());
+        DeleteObject(state.surface.get());
+        if let Some(e) = preview_error {
+            Err(e)
+        } else if result < 0 {
             Err(std::io::Error::last_os_error().to_string())
         } else {
             Ok(())

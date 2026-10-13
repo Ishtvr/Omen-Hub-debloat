@@ -4,7 +4,7 @@ Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Lap
 
 ## Bereits geprüft
 
-- Die inzwischen **57 Rust-Tests** behandeln zusätzlich typisierte Profile/Einheiten, Gesamt-Preflight, fehlerhafte Setter mit bereits erfolgter Mutation, Treiberrundung, gekoppelte Werte, Netzteilverlust nach dem letzten Schritt, Trial-Restore, persistierte Recovery, atomaren Speicher, Startup-Revisionsbindung, beschädigte Dateien, strukturelle Task-SID-Prüfung und Erhalt offener Recovery-Sperren bei Migration. Die Unit-Tests verwenden Fake-Adapter und schreiben keine Hardwarewerte. Reale Taktversuche sind separat dokumentiert.
+- Die inzwischen **63 Rust-Tests** behandeln typisierte Profile/Einheiten, Gesamt-Preflight, fehlerhafte Setter mit bereits erfolgter Mutation, Treiberrundung, gekoppelte Werte, Netzteilverlust nach dem letzten Schritt, Trial-Restore, persistierte Recovery, atomaren Speicher, Startup-Revisionsbindung, beschädigte Dateien, strukturelle Task-SID-Prüfung, Migrationssperren und die plattformfreien Kurvenregeln. Die zusätzlichen Kurventests prüfen Gruppen-/Bereichsgrenzen, unterschiedliche Shift-/Alt-Bezugsformen, Strg-Neigung, atomare Ablehnung, begrenzte Historie, Abbruch eines Drags sowie Zoom/Pan ohne Datenänderung. Die Unit-Tests schreiben keine Hardwarewerte. Reale Taktversuche sind separat dokumentiert.
 - `cargo fmt --all -- --check` und `cargo clippy --workspace --all-targets --locked -- -D warnings` liefen erfolgreich. Der optimierte Windows-Release wurde gebaut.
 - `diagnose` liest Modell/Board/BIOS, CPU/GPU-Namen, AC/Akku und NVIDIA-Telemetrie ohne Warnung. Eine Stichprobe am 13. Oktober lieferte 46 °C, 2280 MHz und 31,168 W. Das sind Momentwerte während der Entwicklung, keine Gaming-Lastmessung.
 - Nach der CPU-Erweiterung lieferte `diagnose` zusätzlich 14,02 % CPU-Auslastung, 2401 MHz als Windows-Meldung und 32 logische Prozessoren, ebenfalls ohne Warnung. Die GPU meldete dabei 45 °C, 2362 MHz und 33,961 W. CPU-Paketleistung und Prozessortemperatur blieben korrekt `null`. Die CPU-Auslastung ist aktive Zeit, die MHz sind kein gemessener Boost; diese Entwicklungsstichprobe ist kein Leistungsbenchmark.
@@ -122,6 +122,28 @@ Am 13. Oktober um **21:04 CEST** wurde die finale Binary nach 30 Sekunden im Tra
 
 Dieser Build liegt unter dem 50-MB-Tray-Ziel. Hauptfenster-, GPU-Profil- und Kurveneditor-Funktionstests bestehen mit derselben Binary. Die 57 Rust-Tests, Formatprüfung, Clippy ohne Warnungen und der optimierte Release-Build sind erfolgreich. Die Widgets wurden mit der tatsächlich verwendeten Segoe-UI-Schrift gerendert und in zwei begrenzten visuellen Runden bestätigt. Es wurden keine Hardware-Schreibversuche zur UI-Verifikation ausgeführt. Testprofile wurden entfernt; globale GPU-/VRAM-Offsets und alle Graphics-Deltas stehen wieder bei 0, die Anmeldungsauswahl ist ausgeschaltet.
 
+## Erweiterter V/F-Editor im Stil der Benutzerreferenz
+
+Am **13. Oktober um 22:51 CEST** wurde der finale Release mit dunklem GDI-Diagramm, quadratischen Punkten, geladener Referenz, Bereichsauswahl, Gruppenbearbeitung, Historie und Zoom/Pan erneut 30 Sekunden im Tray gemessen:
+
+| Kennzahl | Ergebnis |
+| --- | --- |
+| Binärgröße | 1539584 Bytes (rund 1,54 MB) |
+| Working Set | **12,55 MiB (rund 13,16 MB)** |
+| Private Memory | 2,00 MiB |
+| CPU-Zeit | 0,03125 Sekunden |
+| CPU-Zuwachs nach den ersten 5 Sekunden | 0,0 Sekunden |
+| Reagiert auf Nachrichten | Ja |
+| SHA-256 | `5812C234C1E8FE61067367E01A35812966D5EC8A541283F9662B438184DBB270` |
+
+Formatprüfung, **63 Workspace-Tests**, Clippy ohne Warnungen und Release-Build bestehen. Alle drei nativen Funktionstests bestehen mit dieser Binary. Der Kurventest prüft echtes Shift-Ziehen aller 127 Punkte mit gemeinsamem Offset, feste Spannungsanker, Bereichsauswahl mit Shift+Enter, einen Rückgängig-Schritt pro Drag, Wiederholen, Zoom/Fit ohne Kurvenänderung sowie getrennte Lüfterkurven, Speicherung und Erhalt des VRAM-Settings. Der GPU-Profiltest berücksichtigt jetzt auch eine bereits aktive individuelle Kurve; er prüft die aktivierte Eingabe statt eines absichtlich gesperrten globalen Core-Feldes. Die vollständige importierte Kurve bleibt bei Namensänderungen erhalten.
+
+Die lesende Abschlussstichprobe um **22:35 CEST** liefert weiterhin 8E35/F.13, RTX 5070 Laptop und NVIDIA 617.14. Globale Core-/Memory-Offsets stehen bei **0/0 MHz**, die 127 Graphics-Punkte enthalten aber **31 verschiedene programmierte Deltas**. Der vorhandene individuelle Kurvenzustand wird erhalten; die Capability sperrt deshalb den globalen Core-Offset. Die früheren Restore-Endstände mit lauter 0-Deltas sind historische Messungen, keine Aussage über diese spätere Lesestichprobe. In dieser UI-Arbeit wurden keine GPU-, Power-, Voltage- oder HP-Setter ausgeführt; der Funktionstest vergleicht die programmierten Controls vor und nach der Bedienung. Weder eine Herkunft der vorhandenen Kurve noch deren Laststabilität wird daraus abgeleitet.
+
+Die zwei begrenzten visuellen Runden verwenden den tatsächlichen GDI-Canvas und die eigenen nativen Fenster-Controls als **Client-Renderings im Speicher**, keine Aufnahme des Desktops. Die separate Impeccable-Prüfung hat **`ship`** für die gezeigte Diagrammansicht und Controls bei 1364×901 sowie 944×671 logischen Pixeln vergeben. Der markierte Beispielentwurf ist sichtbar als nicht gespeichert und nicht angewendet gekennzeichnet. Die Renderings stammen vom Build `F156650C…`; danach wurden der Supporttext im separaten GPU-Profilfenster und das Abbrechen einer laufenden Bereichsauswahl ergänzt. Die geprüften Zeichenfunktionen, Farben und Layoutregeln blieben unverändert.
+
+Die vollständige Zahlen-/Profilansicht ist **nicht visuell freigegeben**: versteckte native EDIT-/COMBOBOX-Texte werden durch WM_PRINT unvollständig dargestellt, weshalb dieses Rendering ausgeschlossen wurde. Deren Werte und Bedienung sind durch die eigenen Control-Funktionstests geprüft. Titelrahmen, mehrere DPI-Konfigurationen und eine vollständige Accessibility-Prüfung bleiben offen. Der HTML-/CSS-Detektor ist für Win32/GDI nicht anwendbar. Fester Spannungs-/Takt-Lock, OC Scanner und Hardware-Anwendung von Lüfterkurven sind weiterhin nicht implementiert.
+
 ## Noch ausstehend
 
 Die Tastatur-GETs sind auf 8E35/F.13 bestätigt, keine Beleuchtungs-Schreibfunktion ist freigegeben. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.
@@ -135,4 +157,4 @@ Die Tastatur-GETs sind auf 8E35/F.13 bestätigt, keine Beleuchtungs-Schreibfunkt
 - Lüfter, Max-Fan, RGB, MUX, CPU-Tuning, GPU-/VRAM-Spannung und vollständiger Unleashed-Adapter. Tatsächlicher Reboot mit ausgewähltem Profil und ein gegebenenfalls nötiger privilegierter Dienst.
 - Visuelle Prüfung und Skalierung bei mehreren DPI-/Display-Konfigurationen; längere Tray- und Sensor-Dauerläufe.
 
-Die Runtime enthält keine Netzwerkaufrufe. Build und lokale Werkzeuginstallation benötigen dagegen Downloads. Proprietäre Analysedaten und lokale Diagnoseberichte liegen in ignorierten `.local/`- bzw. `.tools/`-Ordnern. Alle beschriebenen Funktionsänderungen liegen derzeit lokal im Projekt.
+Die Runtime enthält keine Netzwerkaufrufe. Build und lokale Werkzeuginstallation benötigen dagegen Downloads. Proprietäre Analysedaten und lokale Diagnoseberichte liegen in ignorierten `.local/`- bzw. `.tools/`-Ordnern. Versioniert werden Originalcode und kompakte Interface- und Validierungsbefunde.

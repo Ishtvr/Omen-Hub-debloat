@@ -2,7 +2,7 @@
 
 Eine native, leichtgewichtige Open-Source-Alternative zum OMEN Gaming Hub in Rust. Ziel sind HP-Systemkontrolle und die relevanten Tuning-Möglichkeiten von UXTU in einer einzigen Anwendung: ohne Werbung, Overlay, Telemetrie, Konto oder Hintergrund-Updater.
 
-**Status: native Diagnose, GPU-/VRAM-Taktsteuerung, vollständige GPU-V/F-Kurven und eigene gespeicherte Profile; noch kein vollständiger Gaming-Hub-Ersatz.** Die NVIDIA-Steuerpfade sind auf dem Referenzgerät mit Readback und Restore validiert. Der GPU-Editor speichert globale Offsets oder ein Frequenzziel ab einem vorhandenen Spannungsanker. V/F-Kurven ermöglichen Tuning für Undervolting; ein hartes Spannungslimit und der physische Effekt unter Last sind damit nicht bewiesen. Unleashed, direkte mV-Offsets und VRAM-Spannungssteuerung bleiben gesperrt. Die vier HP-Systemprofile im Dashboard sind weiterhin ausdrücklich Vorschauen.
+**Status: native Diagnose, GPU-/VRAM-Taktsteuerung, vollständige GPU-V/F-Kurven und eigene gespeicherte Profile; noch kein vollständiger Gaming-Hub-Ersatz.** Die NVIDIA-Steuerpfade sind auf dem Referenzgerät mit Readback und Restore validiert. Der GPU-Profil-Editor speichert globale Offsets oder vollständige Frequenzkurven über alle 127 vorhandenen Spannungsanker. Der gemeinsame Kurveneditor bietet dafür Punkt-/Bereichsbearbeitung, Shift/Alt/Strg-Gesten, Plateau und Verlauf. V/F-Kurven ermöglichen Tuning für Undervolting; ein hartes Spannungslimit und der physische Effekt unter Last sind damit nicht bewiesen. Unleashed, direkte mV-Offsets und VRAM-Spannungssteuerung bleiben gesperrt. Die vier HP-Systemprofile im Dashboard sind weiterhin ausdrücklich Vorschauen.
 
 ## Ausführen
 
@@ -13,6 +13,7 @@ cargo run -p omen-hub-plus-plus
 cargo run -p omen-hub-plus-plus -- --tray
 cargo run -p omen-hub-plus-plus -- diagnose
 cargo run -p omen-hub-plus-plus -- gpu-ui
+cargo run -p omen-hub-plus-plus -- curve-ui
 cargo run -p omen-hub-plus-plus -- gpu-capabilities
 cargo run -p omen-hub-plus-plus -- profile-list
 cargo run -p omen-hub-plus-plus -- hp-read
@@ -51,7 +52,7 @@ Das Fenster zeigt GPU- und CPU-Leistung vor den Systemdetails und aktualisiert d
 | Native Oberfläche, Tray, AC-/Standby-Ereignisse | Implementiert; Suspend/Resume auf Hardware noch zu prüfen |
 | Quiet/Balanced/Performance/Unleashed | Vorschau; nicht anwendbar |
 | Lüfterkurven | Getestete Interpolation/Failsafe-Policy, noch kein EC-/WMI-Adapter |
-| Interaktiver Kurveneditor | Native GPU-V/F- und separate CPU-/GPU-Lüfter-Widgets mit Maus, Tastatur, Zahlenfeldern und Profilspeicherung; Lüfter-Hardwareanwendung noch gesperrt |
+| Interaktiver Kurveneditor | Dunkles natives V/F-Diagramm mit unveränderten 127 GPU-Ankern, Bereichsauswahl, Shift/Alt/Strg-Gesten, Abflachen, Undo/Redo und Zoom; getrennte CPU-/GPU-Lüfterentwürfe, Zahlenfelder und Profilspeicherung; Lüfter-Hardwareanwendung noch gesperrt |
 | Keep-Alive | Getestete Lifecycle-Policy, kein laufender Firmware-Heartbeat |
 | CPU-Wattlimits, Undervolting, MUX, RGB-Steuerung | Geplant; noch nicht implementiert |
 | Tastaturtyp / RGB- und Helligkeitszustand | Nativer fester GET implementiert und erhöht auf 8E35/F.13 validiert: vier Zonen mit Nummernblock; keine Beleuchtungsänderung |
@@ -88,7 +89,7 @@ Omen Hub++ soll den originalen Hub und seine Hintergrundcontroller vollständig 
 
 ## Leistungsziel
 
-**Lüfter & V/F …** öffnet den gemeinsamen nativen Kurveneditor. GPU-Frequenzpunkte und getrennte CPU-/GPU-Lüfterkurven lassen sich mit Maus, Tastatur und Zahlenfeldern bearbeiten und im Profil speichern. Lüfterkurven bleiben bis zum validierten Hardwareadapter Entwürfe. Bedienung und Einschränkungen: [Kurveneditor](docs/CURVE_EDITOR.md).
+**Lüfter & V/F …** öffnet den gemeinsamen nativen Kurveneditor in einer dunklen Diagrammansicht nach der MSI-Afterburner-Referenz des Benutzers. GPU-Frequenzpunkte und Spannungsbereiche lassen sich mit Shift/Alt/Strg-Gesten, Tastatur, Abflachen und 64-Schritt-Verlauf bearbeiten. Separate CPU-/GPU-Lüfterentwürfe bleiben beim Ansichtswechsel erhalten. **Profil / Werte …** oder Enter im Diagramm öffnet die numerische Bearbeitung; F1 zeigt die Tastenkürzel. Zoom und **Ganze Kurve** verändern nur den Ausschnitt. Bearbeiten und Speichern ändern keine Hardware; Anwenden erfolgt getrennt im GPU-Profilfenster. Lüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner bleiben nicht unterstützt. Bedienung und Einschränkungen: [Kurveneditor](docs/CURVE_EDITOR.md).
 
 Der Unleashed-Modus soll den **vom konkreten Gerät vorgesehenen** Leistungsrahmen einschließlich Dynamic Boost korrekt aktivieren und erhalten. Er verspricht kein Umgehen von VBIOS-, Firmware-, Netzteil- oder thermischen Grenzen. Ein gemeldetes maximales Power-Limit ist kein Nachweis dauerhaft erreichbarer GPU-Leistung.
 

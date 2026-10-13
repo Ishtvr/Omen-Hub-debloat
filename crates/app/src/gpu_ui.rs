@@ -580,9 +580,14 @@ fn show(state: &State, view: View, status: &str) {
         );
     }
     let ranges = if view.ready {
+        let core_range = if view.core_ready {
+            format!("GPU {} bis {}", view.ranges[0].0, view.ranges[0].1)
+        } else {
+            "GPU: vollständige aktive V/F-Kurve verwenden; globaler Offset gesperrt".into()
+        };
         format!(
-            "Treiberspannen: GPU {} bis {} / VRAM {} bis {} MHz.\r\nDiese Grenzen bestätigen keine Stabilität. VRAM-Werte sind NVML-MHz.",
-            view.ranges[0].0, view.ranges[0].1, view.ranges[1].0, view.ranges[1].1
+            "Treiberspannen: {core_range} / VRAM {} bis {} MHz.\r\nDiese Grenzen bestätigen keine Stabilität. VRAM-Werte sind NVML-MHz.",
+            view.ranges[1].0, view.ranges[1].1
         )
     } else {
         "Taktsteuerung für diese Kombination nicht freigegeben.\r\nKeine verifizierten Schreibgrenzen verfügbar.".into()
