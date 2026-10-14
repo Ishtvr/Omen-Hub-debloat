@@ -1,4 +1,4 @@
-# Own-process native editor test. All mutations are profile metadata, never SETs.
+﻿# Own-process native editor test. All mutations are profile metadata, never SETs.
 #requires -Version 5.1
 param()
 $ErrorActionPreference='Stop'
@@ -55,7 +55,7 @@ try{
     if($taskWindow-eq[IntPtr]::Zero){throw 'No owned curve window found.'}
     Wait-OmenText $taskWindow 'GPU-Spannungsanker sind fest'|Out-Null
     # Reveal numeric/profile controls from the default chart-focused view.
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]527,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]527),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     $taskCanvas=[OmenCurveSmoke]::GetDlgItem($taskWindow,519)
     $taskPoints=[OmenCurveSmoke]::GetDlgItem($taskWindow,509)
@@ -65,7 +65,7 @@ try{
     # Numeric voltage-anchor tampering is rejected even outside the readonly UI.
     $taskAnchor=[int][OmenCurveSmoke]::Text($taskX)
     [OmenCurveSmoke]::SetText($taskX,([string]($taskAnchor+5)))
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]512,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]512),[IntPtr]::Zero)
     Wait-OmenText $taskWindow 'GPU-Spannungsanker bleiben unverändert'|Out-Null
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x28)
     Start-Sleep -Milliseconds 120
@@ -87,7 +87,7 @@ try{
     Start-Sleep -Milliseconds 120
     if([int][OmenCurveSmoke]::Text($taskX)-ne$taskAnchor){throw 'GPU horizontal drag altered the voltage grid.'}
     # Start from the loaded draft; Shift-drag offsets all 127 nodes equally.
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]516,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]516),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     $taskBaseline=[OmenCurveSmoke]::Items($taskPoints)
     $taskGroupY=[int][OmenCurveSmoke]::Text($taskY)
@@ -145,11 +145,11 @@ try{
     Start-Sleep -Milliseconds 100
     # View commands change the accessible viewport, never draft data.
     $taskViewBefore=[OmenCurveSmoke]::Text($taskCanvas)
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]523,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]523),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if([OmenCurveSmoke]::Text($taskCanvas)-ceq$taskViewBefore){throw 'Native zoom did not change the viewport.'}
     if(([OmenCurveSmoke]::Items($taskPoints)-join '|')-cne($taskFlattened-join '|')){throw 'Zoom edited the draft.'}
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]525,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]525),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     $taskFitCaption=[OmenCurveSmoke]::Text($taskCanvas)
     if($taskFitCaption-notmatch 'Ansicht:\s*(\d+).(\d+) mV,\s*(\d+).(\d+) MHz\.'){throw 'Missing accessible fitted viewport.'}
@@ -157,10 +157,10 @@ try{
     if($taskFitLoX-ne$taskViewXMin-or$taskFitHiX-ne$taskViewXMax){throw 'Fit did not restore the complete voltage grid.'}
     foreach($taskItem in $taskFlattened){if($taskItem-notmatch '^(\d+) mV.*?(\d+) MHz$'){throw 'Missing fitted point.'};if([int]$Matches[2]-lt$taskFitLoY-or[int]$Matches[2]-gt$taskFitHiY){throw 'Fit hid an edited frequency.'}}
     # Separate CPU fan curve, real drag with ordered temperature/duty constraints.
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]506,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]506),[IntPtr]::Zero)
     Wait-OmenText $taskWindow 'CPU-Lüfter'|Out-Null
     [void][OmenCurveSmoke]::Message($taskPoints,0x014E,1)
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]0x000101FD,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]0x000101FD),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     $taskFanX=[int][OmenCurveSmoke]::Text($taskX);$taskFanY=[int][OmenCurveSmoke]::Text($taskY)
     $taskPx=[int](72+($taskFanX/110)*($taskRect.Right-100));$taskPy=[int]($taskRect.Bottom-54-($taskFanY/100)*($taskRect.Bottom-92))
@@ -169,17 +169,17 @@ try{
     [OmenCurveSmoke]::Mouse($taskCanvas,0x0202,($taskPx+20),($taskPy-20),0)
     Start-Sleep -Milliseconds 100
     if([int][OmenCurveSmoke]::Text($taskY)-le$taskFanY){throw 'CPU fan drag did not edit the draft.'}
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]513,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]513),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if([OmenCurveSmoke]::Message($taskPoints,0x0146)-ne5){throw 'Fan point insertion failed.'}
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]514,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]514),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if([OmenCurveSmoke]::Message($taskPoints,0x0146)-ne4){throw 'Fan point removal failed.'}
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]507,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]507),[IntPtr]::Zero)
     Wait-OmenText $taskWindow 'GPU-Lüfter'|Out-Null
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x26)
     Start-Sleep -Milliseconds 100
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]503,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]503),[IntPtr]::Zero)
     Wait-OmenText $taskWindow 'Profil gespeichert. Keine Hardware verändert'|Out-Null
     $taskSaved=Get-Content -LiteralPath $taskProfilePath -Raw|ConvertFrom-Json
     if($taskSaved.settings.Count-ne4){throw 'Other profile settings or separate curve settings were lost.'}
@@ -190,7 +190,7 @@ try{
     $taskPlan=Invoke-Omen @('profile-plan',$taskId)
     if($taskPlan.applicable){throw 'Fan draft incorrectly claims hardware-write support.'}
     # Reopen saved state in the same window and verify native persistence.
-    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]518,[IntPtr]::Zero)
+    [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]518),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 150
     Wait-OmenText $taskWindow 'Gespeicherte Kurve'|Out-Null
     $taskAfter=Invoke-Omen @('gpu-capabilities');$taskCurveAfter=Invoke-Omen @('gpu-curve-read')

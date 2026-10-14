@@ -24,7 +24,7 @@ Das ist **Frequenzsteuerung an Spannungsankern**, wie sie für Undervolting-Ziel
 
 Der neue gemeinsame [Kurveneditor](CURVE_EDITOR.md) ist über **Lüfter & V/F …** erreichbar. Er bearbeitet einzelne GPU-Frequenzpunkte und getrennte CPU-/GPU-Lüfterkurven interaktiv. Er speichert ausschließlich Metadaten; ein enthaltenes Lüfter-Setting sperrt die Hardware-Anwendung weiterhin bis zur validierten HP-Anbindung.
 
-Das versionierte Format enthält **85 typisierte Feature-Schlüssel** aus den relevanten GPU-, CPU/APU-, Intel-, Windows-, Radeon-, Upscaling- und OMEN-Funktionsgruppen. Das ist ein Datenkatalog, keine Zusage von 85 funktionierenden Adaptern. Derzeit sind Core-/Memory-Offsets und vollständige Graphics-V/F-Kurven schreibbar.
+Das versionierte Format enthält **85 typisierte Feature-Schlüssel** aus den relevanten GPU-, CPU/APU-, Intel-, Windows-, Radeon-, Upscaling- und OMEN-Funktionsgruppen. Das ist ein Datenkatalog, keine Zusage von 85 funktionierenden Adaptern. Im NVIDIA-Bereich sind Core-/Memory-Offsets und vollständige Graphics-V/F-Kurven schreibbar. Seit 14. Oktober sind zusätzlich modellgebundene Vier-Zonen-Farben und der statische/Firmware-Beleuchtungsmodus manuell anwendbar; diese Settings bleiben für Startup gesperrt. Bedienung und Grenzen: [KEYBOARD_UI.md](KEYBOARD_UI.md).
 
 Integer, Schalter, Auswahllisten, V/F-Punkte, Werte pro CPU-Kern, Core-Ratios, Lüfterkurven und RGB-Farben sind verschiedene Datentypen. Einheiten sind explizit: MHz, mV, mW, °C oder Curve-Optimizer-Schritte. Curve Optimizer wird nicht als Millivolt-Offset ausgegeben. Profile enthalten keine Shell-Kommandos, frei wählbaren Opcodes, EC-Adressen oder Treiberstrukturen.
 

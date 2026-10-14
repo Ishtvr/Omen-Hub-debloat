@@ -1,4 +1,4 @@
-# Metadata-only integration test scoped to a newly launched Omen Hub++ process.
+﻿# Metadata-only integration test scoped to a newly launched Omen Hub++ process.
 # Never invokes apply, restore, startup enable or any hardware setter.
 #requires -Version 5.1
 param()
@@ -67,7 +67,7 @@ try {
     $taskInvalidField=if($taskUsesActiveCurve){$taskMemory}else{$taskCore}
     [void][OmenGpuUiSmoke]::SetWindowText($taskInvalidField,'keinezahl')
     $taskInvalidNotification=if($taskUsesActiveCurve){0x02000137}else{0x02000136}
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]$taskInvalidNotification,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]$taskInvalidNotification),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 150
     if ([OmenGpuUiSmoke]::IsWindowEnabled($taskApply)) { throw 'Apply remains enabled for an unsaved/invalid draft.' }
     $taskExpectedError=if($taskUsesActiveCurve){'VRAM-Offset als ganze MHz-Zahl'}else{'GPU-Offset als ganze MHz-Zahl'}
@@ -75,7 +75,7 @@ try {
     [void][OmenGpuUiSmoke]::SetWindowText($taskName,$taskProfileName)
     [void][OmenGpuUiSmoke]::SetWindowText($taskCore,'0')
     [void][OmenGpuUiSmoke]::SetWindowText($taskMemory,'0')
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]303,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]303),[IntPtr]::Zero)
     $taskDeadline = (Get-Date).AddSeconds(12)
     do {
         $taskText = [OmenGpuUiSmoke]::Text($taskWindow)
@@ -102,14 +102,14 @@ try {
     if(-not$taskUsesActiveCurve){[void][OmenGpuUiSmoke]::Message($taskCurveCheck,0x00F5)}
     if ([OmenGpuUiSmoke]::IsWindowEnabled($taskCore) -or -not [OmenGpuUiSmoke]::IsWindowEnabled($taskFrequency)) { throw 'Curve mode did not exclude global core-offset editing.' }
     [void][OmenGpuUiSmoke]::SetWindowText($taskFrequency,'keinezahl')
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]0x0200013A,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]0x0200013A),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if ([OmenGpuUiSmoke]::Text($taskWindow) -notmatch 'Frequenzziel als ganze MHz-Zahl') { throw 'Curve target validation is missing.' }
     $taskLast = $taskCurveBefore.nodes[-1]
     [void][OmenGpuUiSmoke]::Message($taskVoltage,0x014E,[uint64]($taskCurveBefore.nodes.Count - 1))
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]0x00010139,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]0x00010139),[IntPtr]::Zero)
     [void][OmenGpuUiSmoke]::SetWindowText($taskFrequency,([string]($taskLast.frequency_khz / 1000)))
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]303,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]303),[IntPtr]::Zero)
     $taskDeadline = (Get-Date).AddSeconds(12)
     do {
         Start-Sleep -Milliseconds 100
@@ -122,12 +122,14 @@ try {
     # A distinct, full custom curve must survive name-only editing. This is metadata.
     foreach ($taskPoint in $taskSavedCurve[0].value.value) { $taskPoint.frequency_mhz -= 15 }
     $taskExpectedCurve = $taskSavedCurve[0].value | ConvertTo-Json -Depth 8 -Compress
-    $taskProfile | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $taskCreated -Encoding UTF8
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]308,[IntPtr]::Zero)
+    # Windows PowerShell 5.1's Set-Content UTF8 emits a BOM; the strict profile
+    # parser expects ordinary UTF-8 JSON, as written by the production store.
+    [IO.File]::WriteAllText($taskCreated, ($taskProfile | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]308),[IntPtr]::Zero)
     $taskDeadline = (Get-Date).AddSeconds(12)
     do { Start-Sleep -Milliseconds 100 } while (-not [OmenGpuUiSmoke]::IsWindowEnabled([OmenGpuUiSmoke]::GetDlgItem($taskWindow,303)) -and (Get-Date) -lt $taskDeadline)
     [void][OmenGpuUiSmoke]::SetWindowText($taskName,($taskProfileName + ' curve'))
-    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]303,[IntPtr]::Zero)
+    [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]303),[IntPtr]::Zero)
     $taskDeadline = (Get-Date).AddSeconds(12)
     do { Start-Sleep -Milliseconds 100; $taskText = [OmenGpuUiSmoke]::Text($taskWindow) } while ($taskText -notmatch 'Profil gespeichert' -and (Get-Date) -lt $taskDeadline)
     $taskProfile = Get-Content -LiteralPath $taskCreated -Raw | ConvertFrom-Json

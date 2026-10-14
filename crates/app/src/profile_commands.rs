@@ -43,6 +43,9 @@ pub fn handles(command: &str) -> bool {
     matches!(
         command,
         "gpu-capabilities"
+            | "keyboard-validate-colors"
+            | "keyboard-validate-lighting"
+            | "keyboard-ui-read"
             | "gpu-curve-read"
             | "gpu-validate-curve"
             | "gpu-validate-memory-curve"
@@ -75,8 +78,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // request, without overwriting a more detailed transaction/rollback result.
     if let Err(error) = &result {
         let ui = match args.first().map(String::as_str) {
+            Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
+                Some(("keyboard_read", args[1].as_str()))
+            }
             Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
+            Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
                 Some(("startup", args[2].as_str()))
             }
@@ -98,6 +105,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 fn run_inner(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
+            validate_nonce(Some(&args[1]))?;
+            let store = ProfileStore::user_data()?;
+            let mut controller = if let Some(id) = args.get(2) {
+                Controller::for_profile(&store.load(id)?)?
+            } else {
+                Controller::new(false, None)?
+            };
+            let state = controller.keyboard_state()?;
+            let plan = args
+                .get(2)
+                .map(|id| {
+                    store
+                        .load(id)
+                        .map(|p| transaction::plan(&p, &mut controller, false))
+                })
+                .transpose()?;
+            let result = serde_json::json!({"state":state,"plan":plan,"binding":controller.context()?.binding});
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"keyboard_read","nonce":args[1],"result":{"Ok":result}}))?;
+            return print(&result);
+        }
         Some("gpu-curve-read") if args.len() == 1 => {
             let mut controller = Controller::new(true, None)?;
             return print(&controller.gpu_curve()?);
@@ -131,6 +159,49 @@ fn run_inner(args: &[String]) -> Result<(), String> {
     }
     let mut store = ProfileStore::user_data()?;
     match args.first().map(String::as_str) {
+        Some("keyboard-validate-colors" | "keyboard-validate-lighting") if args.len() == 1 => {
+            let _lease = ControlLease::acquire()?;
+            if store.pending()? {
+                return Err("Pending recovery blocks the fixed keyboard color trial".into());
+            }
+            let mut controller = Controller::new(false, None)?;
+            let before = controller.keyboard_state()?;
+            let checkpoint = store.checkpoint_completed_journal()?;
+            let mode = args[0] == "keyboard-validate-lighting";
+            let result = if mode {
+                controller.validate_keyboard_lighting(&mut store)
+            } else {
+                controller.validate_keyboard_colors(&mut store)
+            };
+            let after = controller.keyboard_state();
+            let final_check = after
+                .as_ref()
+                .map_err(|e| format!("Final keyboard GET failed: {e}"))
+                .and_then(|state| {
+                    if *state == before {
+                        Ok(())
+                    } else {
+                        Err("Keyboard state changed after the trial restore".into())
+                    }
+                });
+            if result.is_ok() && final_check.is_ok() {
+                let completed = store.last_transaction::<RestoreState>()?;
+                store.restore_completed_trial_checkpoint(
+                    checkpoint,
+                    if mode {
+                        "keyboard-lighting-validation"
+                    } else {
+                        "keyboard-color-validation"
+                    },
+                    &completed.profile_digest,
+                )?;
+            }
+            print(
+                &serde_json::json!({"before":before,"transaction":result,"after":after,"final_check":final_check,"hardware_scope":if mode {"one zone1 RGB byte and exact64/E4 static/preset switch; immediate full restore; no power/voltage writes"}else{"one zone1 RGB byte; immediate full restore; no brightness/power/voltage writes"}}),
+            )?;
+            result.map(|_| ())?;
+            final_check
+        }
         Some("gpu-validate-memory-curve") if args.len() == 1 => {
             let _lease = ControlLease::acquire()?;
             if store.pending()? {
@@ -246,20 +317,29 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
         }
         Some("profile-restore" | "profile-ui-restore")
-            if args.len() == 1 || (args[0] == "profile-ui-restore" && args.len() == 2) =>
+            if args.len() == 1
+                || (args[0] == "profile-ui-restore" && (args.len() == 2 || args.len() == 3)) =>
         {
             let _lease = ControlLease::acquire()?;
-            let nonce = args.get(1).map(String::as_str);
+            let nonce = if args.len() == 3 {
+                args.get(2)
+            } else {
+                args.get(1)
+            }
+            .map(String::as_str);
             validate_nonce(nonce)?;
+            let saved = store.last_transaction::<RestoreState>()?;
+            if args.len() == 3 && saved.profile_id != args[1] {
+                return Err("Das letzte Originalbild gehört zu einem anderen Profil. Neu laden, bevor es wiederhergestellt wird.".into());
+            }
             // Disable further automatic application before explicit recovery.
             store.disable_startup()?;
-            let saved = store.last_transaction::<RestoreState>()?;
-            let mut controller = Controller::new(true, saved.binding.nvidia_uuid.as_deref())?;
+            let mut controller = Controller::for_recovery(&saved)?;
             let result = transaction::recover(&saved, &mut controller, &mut store);
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result}))?;
             result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
             print(
-                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":controller.gpu_report()?}),
+                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":if saved.requested.iter().any(|s|s.feature.descriptor().category==omen_core::features::Category::Gpu){Some(controller.gpu_report()?)}else{None}}),
             )
         }
         Some("profile-startup-enable" | "profile-ui-startup-enable")

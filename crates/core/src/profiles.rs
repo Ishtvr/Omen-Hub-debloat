@@ -77,6 +77,7 @@ pub enum Choice {
     Manual,
     Maximum,
     Static,
+    FirmwareDefault,
     Breathing,
     Wave,
     Off,
@@ -209,7 +210,11 @@ impl Setting {
                     }
                     Feature::KeyboardEffect => matches!(
                         value,
-                        Choice::Static | Choice::Breathing | Choice::Wave | Choice::Off
+                        Choice::Static
+                            | Choice::FirmwareDefault
+                            | Choice::Breathing
+                            | Choice::Wave
+                            | Choice::Off
                     ),
                     _ => false,
                 };

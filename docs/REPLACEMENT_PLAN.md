@@ -2,7 +2,7 @@
 
 Der Benutzer hat am 13. Oktober 2026 klargestellt: **Omen Hub++ soll den originalen Hub vollständig ersetzen.** Die Zielengine soll keine laufenden HP-Omen-Controller oder deren proprietäre RPC-Wrapper benötigen. Windows-, Firmware- und reguläre Gerätetreiber bleiben technische Plattformgrundlagen; ihre Entfernung ist kein Nachweis für einen vollständigen Ersatz.
 
-Dieser Plan unterscheidet den bereits unabhängigen Diagnosebetrieb von noch unvalidierter Hardwaresteuerung. Während der Untersuchung wurden keine Herstellerdienste gestoppt, keine Treiber installiert und keine Hardwarewerte geändert.
+Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen vollständigen Ersatzbetrieb. NVIDIA-Takt-/Kurvensteuerung und begrenzte Vier-Zonen-Farben-/Modussteuerung sind am Referenzgerät mit Readback/Restore validiert. Herstellerdienste wurden nicht gestoppt und keine Treiber installiert. Der vorhandene Windows-/Firmwarepfad wurde mit weiterhin laufenden HP-Controllern geprüft.
 
 | Bereich | Eigener Weg | Stand / fehlender Nachweis |
 | --- | --- | --- |
@@ -10,13 +10,13 @@ Dieser Plan unterscheidet den bereits unabhängigen Diagnosebetrieb von noch unv
 | GPU-Watt / Temperatur / Takt | Öffentliche NVML / NVAPI | Implementiert; regulärer NVIDIA-Treiber erforderlich |
 | CPU-Auslastung / Windows-MHz | Windows-Zeitdifferenzen / Power-API | Implementiert; kein Watt-/Boost-Ersatzwert |
 | CPU-Paketwatt / Temperatur | Optionaler, exakt passender Sensoradapter | AMD-SDK-Kandidat identifiziert; tatsächlicher Sensor-Readback offen |
-| Tastaturfarbe / Helligkeit | Eigener BIOS-WMI-Transport | Capability und vollständige GET-Zustände auf 8E35/F.13 validiert; Setter, Readback nach Änderung und Restore offen |
+| Tastaturfarbe / Anzeigemodus | Eigener BIOS-WMI-Transport | Vier-Zonen-Farben und eigene Farben/Firmware-Voreinstellung auf 8E35/F.13 manuell freigegeben; vollständiger Readback/Restore sowie persistierte Recovery in getrennten Prozessen; allgemeine Helligkeit und Lifecycle offen |
 | Tastatureffekte / RGB pro Taste | Fähigkeitsabhängig WMI oder eigener HID-Adapter | Get-/Set-/Persistenzunterschiede gefunden; kein vollständiger Restore-Vertrag für alle Varianten |
 | HP-Leistungsprofile / GPU-Leistungsrahmen | Modellbezogene BIOS-WMI-Engine | Statische Befunde und begrenzter Statusreader; keine Write-Freigabe |
 | Keep-alive / AC / Standby | Ein eigener Controller mit geprüftem Lifecycle | Reine Policy und Windows-Ereignisse vorhanden; Firmware-Heartbeat noch nicht ausgeführt/validiert |
 | Lüfter / Max-Fan | Modellbezogener EC-/WMI-Adapter | Kurvenpolicy vorhanden; Transport/Skalierung/Restore offen |
 | MUX / Displaymodi / Tastaturmakros | Eigene validierte Geräteadapter | Weitere Analyse erforderlich; bisher keine Steuerung |
-| Profilpersistenz / Tray / Autostart | Eigene lokale Konfiguration und Benutzer-App | Tray vorhanden; Persistenz und expliziter Autostart ausstehend |
+| Profilpersistenz / Tray / Autostart | Eigene lokale Konfiguration und Benutzer-App | Versionierte Profile, dauerhaftes Originaljournal und geschützter fester Anmeldungseinstieg implementiert; Task mit GPU-Profil geprüft, kein echter Reboot; Beleuchtungssettings nicht für Startup freigegeben |
 
 ## Welche heutigen Aufgaben übernommen werden müssen
 
@@ -36,6 +36,6 @@ Für privilegierte Funktionen kann ein eigener kleiner Controller im Dienst oder
 
 ## Nachweis für den späteren Umstieg
 
-Capabilities und klassischer Tastaturzustand sind auf 8E35/F.13 über den eigenen direkten Windows-WMI-Adapter gelesen. Es wurden keine HP-RPC-/SDK-Wrapper geladen; vorhandene HP-Dienste wurden jedoch nicht gestoppt. Danach müssen eigene Farb-/Profiltransaktionen einschließlich Rücklesen, Wiederherstellung, Entsperren und Power-Übergängen gemessen werden. Erst ein separat geplanter Umstieg zeigt den Betrieb ohne ursprüngliche HP-Omen-Writer. Ein erfolgreich gesendeter Befehl oder eine geschlossene Herstelleroberfläche genügt dafür nicht.
+Capabilities und klassischer Tastaturzustand sind auf 8E35/F.13 über den eigenen direkten Windows-WMI-Adapter gelesen. Farb-/Modustransaktionen mit vollständigem Rücklesen und Wiederherstellung, auch aus einem persistierten Journal in einem neuen Prozess, sind inzwischen gemessen. Es wurden keine HP-RPC-/SDK-Wrapper geladen; vorhandene HP-Dienste wurden jedoch nicht gestoppt. Entsperren, Helligkeitstasten und Power-Übergänge brauchen eigene Prüfungen. Erst ein separat geplanter Umstieg zeigt den Betrieb ohne ursprüngliche HP-Omen-Writer. Ein erfolgreich gesendeter Befehl oder eine geschlossene Herstelleroberfläche genügt dafür nicht.
 
 Auswahl und Unterstützung anderer Boards bleiben explizit. Der vorhandene Hub-Code und ein generischer Modulname ersetzen keine Modellfreigabe. Details zum ersten Beleuchtungspfad stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md).

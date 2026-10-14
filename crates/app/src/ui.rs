@@ -20,6 +20,7 @@ const REFRESH: usize = 101;
 const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
+const KEYBOARD: usize = 105;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
 
@@ -412,13 +413,23 @@ unsafe extern "system" fn window_proc(
                 );
                 control(
                     "STATIC",
-                    "Beim Schließen bleibt die App im Tray. Rechtsklick auf das Tray-Symbol: Beenden.",
+                    "Schließen: im Tray weiterlaufen. Tray-Rechtsklick: Beenden.",
                     0,
                     20,
                     601,
-                    750,
+                    550,
                     28,
                     0,
+                );
+                control(
+                    "BUTTON",
+                    "Beleuchtung …",
+                    WS_TABSTOP,
+                    596,
+                    596,
+                    174,
+                    34,
+                    KEYBOARD,
                 );
                 if state.details.get().is_null()
                     || state.profile.get().is_null()
@@ -436,10 +447,14 @@ unsafe extern "system" fn window_proc(
                 if id == REFRESH {
                     let _ = state.tx.send(Request::Refresh);
                 }
-                if id == GPU_PROFILES || id == CURVES {
+                if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
                         std::process::Command::new(path)
-                            .arg(if id == CURVES { "curve-ui" } else { "gpu-ui" })
+                            .arg(match id {
+                                CURVES => "curve-ui",
+                                KEYBOARD => "keyboard-ui",
+                                _ => "gpu-ui",
+                            })
                             .spawn()
                     }) {
                         Ok(_) => {}

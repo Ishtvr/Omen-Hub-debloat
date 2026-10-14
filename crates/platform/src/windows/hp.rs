@@ -1,8 +1,8 @@
-//! Opt-in, one-shot HP reads. No setters, watchdog or public raw opcode API.
+//! Fixed, model-bound HP BIOS contracts. No watchdog or public raw opcode API.
 use omen_core::{
     Inventory,
     hp::{GpuPowerStatus, SystemDesignData, decode_gpu_status, decode_system_design},
-    keyboard::{KeyboardState, decode_keyboard_capability, decode_legacy_lighting},
+    keyboard::{KeyboardKind, KeyboardState, decode_keyboard_capability, decode_legacy_lighting},
 };
 use windows::{
     Win32::System::{
@@ -91,12 +91,47 @@ impl HpBios {
 
     fn get(&self, read: Read) -> WMIResult<(u32, Vec<u8>)> {
         let contract = read.contract();
+        self.invoke(&contract, contract.input)
+    }
+    fn set_colors(&self, colors: &[u8]) -> WMIResult<()> {
+        if colors.len() != 128 {
+            return Err(WMIError::ConvertVariantError(
+                "A complete 128-byte color image is required".into(),
+            ));
+        }
+        // Installed FourZone/OmenHsaClient: read full color image, replace RGB,
+        // send command 0x20009/type3/size128 via hpqBIOSInt4. No brightness SET.
+        let contract = ReadContract {
+            command: 0x20009,
+            command_type: 3,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, colors).map(|_| ())
+    }
+    fn set_classic_mode_byte(&self, raw: u8) -> WMIResult<()> {
+        if ![0x64, 0xe4].contains(&raw) {
+            return Err(WMIError::ConvertVariantError(
+                "Only measured classic mode bytes64/E4 can be written".into(),
+            ));
+        }
+        let contract = ReadContract {
+            command: 0x20009,
+            command_type: 5,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &[raw, 0, 0, 0]).map(|_| ())
+    }
+    fn invoke(&self, contract: &ReadContract, bytes: &[u8]) -> WMIResult<(u32, Vec<u8>)> {
         let data = self.connection.get_object("hpqBDataIn")?.spawn_instance()?;
         data.put_property("Command", contract.command)?;
         data.put_property("CommandType", contract.command_type)?;
-        data.put_property("Size", contract.input.len() as u32)?;
+        data.put_property("Size", bytes.len() as u32)?;
         data.put_property("Sign", vec![0x53_u8, 0x45, 0x43, 0x55])?;
-        if contract.input.is_empty() {
+        if bytes.is_empty() {
             // wmi 0.18.4 converts Vec::<u8>::new() into VT_NULL, losing array type.
             // HP's native size-0 path uses VT_ARRAY|VT_UI1 with a null SAFEARRAY.
             let empty = empty_byte_array();
@@ -107,7 +142,7 @@ impl HpBios {
                 data.inner.Put(w!("hpqBData"), 0, &empty, 0)?;
             }
         } else {
-            data.put_property("hpqBData", contract.input.to_vec())?;
+            data.put_property("hpqBData", bytes.to_vec())?;
         }
         let signature = self
             .connection
@@ -151,6 +186,105 @@ impl HpBios {
             )));
         }
         Ok((code, bytes))
+    }
+}
+
+/// Private typed RGB transport. The controller owns calibration/write gating,
+/// durable capture, readback, and recovery; the transport never accepts opcodes.
+pub(super) struct KeyboardControl {
+    bios: HpBios,
+    board: String,
+    bios_version: String,
+}
+impl KeyboardControl {
+    pub fn new(inventory: &Inventory) -> Result<Self, String> {
+        Ok(Self {
+            bios: HpBios::new(inventory).map_err(|e| query_error("keyboard", e))?,
+            board: inventory.board.clone(),
+            bios_version: inventory.bios.clone(),
+        })
+    }
+    pub fn read(&self) -> Result<KeyboardState, String> {
+        let get = |read| self.bios.get(read).map_err(|e| query_error("keyboard", e));
+        let (code, bytes) = get(Read::KeyboardCapability)?;
+        let capability = decode_keyboard_capability(code, &bytes)?;
+        // Exact measured board/layout. One-zone and MCU variants need their own
+        // SET/readback/restore qualification before this adapter can write them.
+        if capability.kind != KeyboardKind::FourZoneWithNumpad || capability.raw != [1, 0, 0, 0] {
+            return Err(
+                "RGB control is restricted to the measured four-zone keyboard with numpad".into(),
+            );
+        }
+        let (cc, colors) = get(Read::KeyboardColors)?;
+        let (bc, brightness) = get(Read::KeyboardBrightness)?;
+        Ok(KeyboardState {
+            board: self.board.clone(),
+            bios: self.bios_version.clone(),
+            legacy: Some(decode_legacy_lighting(
+                capability.kind,
+                cc,
+                &colors,
+                bc,
+                &brightness,
+            )?),
+            capability,
+        })
+    }
+    pub fn set(
+        &self,
+        expected: &KeyboardState,
+        colors: &[[u8; 3]],
+    ) -> Result<KeyboardState, String> {
+        expected.validate()?;
+        let current = self.read()?;
+        if current != *expected {
+            return Err("Keyboard state changed after capture; no RGB SET was sent".into());
+        }
+        let target = current.with_colors(colors)?;
+        if target != current {
+            self.bios
+                .set_colors(
+                    &target
+                        .legacy
+                        .as_ref()
+                        .ok_or("No legacy RGB image")?
+                        .colors_raw,
+                )
+                .map_err(|e| query_error("keyboard-color SET", e))?;
+        }
+        Ok(target)
+    }
+    pub fn set_mode(
+        &self,
+        expected: &KeyboardState,
+        custom: bool,
+    ) -> Result<KeyboardState, String> {
+        expected.validate()?;
+        let current = self.read()?;
+        if current != *expected {
+            return Err("Keyboard state changed before mode SET".into());
+        }
+        let raw = current
+            .legacy
+            .as_ref()
+            .ok_or("No classic keyboard state")?
+            .brightness_raw_byte;
+        if ![0x64, 0xe4].contains(&raw) {
+            return Err("Mode/restore is qualified only at the observed100/228 raw states".into());
+        }
+        let target = current.with_classic_mode(custom)?;
+        if target != current {
+            self.bios
+                .set_classic_mode_byte(
+                    target
+                        .legacy
+                        .as_ref()
+                        .ok_or("Missing mode target")?
+                        .brightness_raw_byte,
+                )
+                .map_err(|e| query_error("keyboard mode SET", e))?;
+        }
+        Ok(target)
     }
 }
 

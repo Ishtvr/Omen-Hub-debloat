@@ -11,17 +11,15 @@ use std::{
     ptr,
     sync::mpsc,
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::UI::{
     Controls::{BST_CHECKED, BST_UNCHECKED, EM_SETLIMITTEXT},
     Input::KeyboardAndMouse::EnableWindow,
 };
 use windows_sys::Win32::{
-    Foundation::*,
-    Graphics::Gdi::*,
-    System::{LibraryLoader::GetModuleHandleW, Threading::*},
-    UI::{Shell::*, WindowsAndMessaging::*},
+    Foundation::*, Graphics::Gdi::*, System::LibraryLoader::GetModuleHandleW,
+    UI::WindowsAndMessaging::*,
 };
 
 const UPDATE: u32 = WM_APP + 11;
@@ -140,112 +138,25 @@ enum Update {
     Status(String),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
-    Apply,
-    Restore,
-    Startup,
-}
-impl Action {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Apply => "apply",
-            Self::Restore => "restore",
-            Self::Startup => "startup",
-        }
-    }
-}
-
+use crate::elevation::{self, Action};
 fn elevated(
     id: Option<&str>,
     action: Action,
     receiver: &mpsc::Receiver<Request>,
 ) -> Result<String, String> {
-    let nonce = token();
-    let arguments = if action == Action::Restore {
-        format!("profile-ui-restore {nonce}")
-    } else {
-        let id = id.ok_or("Zuerst ein Profil speichern.")?;
-        omen_core::profiles::validate_id(id)?;
-        match action {
-            Action::Apply => format!("profile-ui-apply {id} {nonce}"),
-            Action::Startup => format!("profile-ui-startup-enable {id} {nonce}"),
-            Action::Restore => unreachable!(),
-        }
-    };
-    let file = wide(
-        &std::env::current_exe()
-            .map_err(|e| e.to_string())?
-            .to_string_lossy(),
-    );
-    let parameters = wide(&arguments);
-    let verb = wide("runas");
-    let mut execute: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    execute.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
-    execute.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-    execute.lpVerb = verb.as_ptr();
-    execute.lpFile = file.as_ptr();
-    execute.lpParameters = parameters.as_ptr();
-    execute.nShow = SW_HIDE;
-    // SAFETY: Only our executable and fixed typed commands; strings live through launch.
-    if unsafe { ShellExecuteExW(&mut execute) } == 0 {
-        return Err(format!(
-            "Windows-Freigabe nicht erfolgt: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    if execute.hProcess.is_null() {
-        return Err("Windows gab keinen Prozess zur Ergebnisprüfung zurück.".into());
-    }
-    let result = (|| {
-        let deadline = std::time::Instant::now() + Duration::from_secs(45);
-        loop {
-            // SAFETY: Handle was returned with SEE_MASK_NOCLOSEPROCESS and is live.
-            match unsafe { WaitForSingleObject(execute.hProcess, 50) } {
-                WAIT_OBJECT_0 => break,
-                WAIT_TIMEOUT => {}
-                _ => return Err(std::io::Error::last_os_error().to_string()),
-            }
-            if matches!(
-                receiver.try_recv(),
-                Ok(Request::Stop) | Err(mpsc::TryRecvError::Disconnected)
-            ) {
-                return Err("Fenster geschlossen; die laufende Transaktion schließt ihre Prüfung und Wiederherstellung selbst ab.".into());
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err("Der Steuerprozess läuft noch. Sein Ergebnis prüfen, bevor eine weitere Aktion begonnen wird.".into());
-            }
-        }
-        let mut code = 1;
-        // SAFETY: Live process handle and initialized DWORD output.
-        if unsafe { GetExitCodeProcess(execute.hProcess, &mut code) } == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let record = ProfileStore::user_data()?.control_result()?;
-        if record["schema"] != 1
-            || record["nonce"].as_str() != Some(&nonce)
-            || record["operation"].as_str() != Some(action.name())
-        {
-            return Err("Kein passendes Ergebnisprotokoll vorhanden. Steuerung ist nicht als erfolgreich bestätigt.".into());
-        }
-        if code != 0 || record["result"].get("Err").is_some() {
-            return Err(format!(
-                "Anwendung fehlgeschlagen: {}",
-                record["result"]["Err"]
-            ));
-        }
-        if record["result"].get("Ok").is_none() {
-            return Err("Ergebnis enthält keinen verifizierten Abschluss.".into());
-        }
-        Ok(match action { Action::Restore => "Die aufgezeichneten Originalwerte wurden vollständig zurückgelesen und wiederhergestellt. Autostart-Auswahl ist ausgeschaltet.", Action::Apply => "Das gespeicherte Profil wurde angewendet und seine vollständigen Steuerwerte zurückgelesen.", Action::Startup => "Die geprüfte Profilversion wurde mit Administratorfreigabe für die nächste Windows-Anmeldung ausgewählt." }.into())
-    })();
-    // SAFETY: Closing the handle never kills a still-running hardware transaction.
-    unsafe {
-        CloseHandle(execute.hProcess);
-    }
-    result
+    elevation::run(id, action, || {
+        matches!(
+            receiver.try_recv(),
+            Ok(Request::Stop) | Err(mpsc::TryRecvError::Disconnected)
+        )
+    })?;
+    Ok(match action {
+        Action::Restore=>"Die aufgezeichneten Originalwerte wurden vollständig zurückgelesen und wiederhergestellt. Autostart-Auswahl ist ausgeschaltet.",
+        Action::Apply=>"Das gespeicherte Profil wurde angewendet und seine vollständigen Steuerwerte zurückgelesen.",
+        Action::Startup=>"Die geprüfte Profilversion wurde mit Administratorfreigabe für die nächste Windows-Anmeldung ausgewählt.",
+        Action::KeyboardRead=>"Der Tastaturzustand wurde gelesen.",
+    }.into())
 }
-
 fn worker(hwnd: usize, receiver: mpsc::Receiver<Request>, updates: mpsc::Sender<Update>) {
     let mut selected: Option<String> = None;
     while let Ok(request) = receiver.recv() {

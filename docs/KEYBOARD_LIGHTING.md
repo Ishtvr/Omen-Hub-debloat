@@ -1,8 +1,8 @@
 # Tastaturbeleuchtung: Schnittstellenbefund
 
-Stand: 13. Oktober 2026. Referenzgerät: OMEN 16-ap0xxx, Board **8E35**, BIOS **F.13**. Untersucht wurde die tatsächlich installierte OMEN-Gaming-Hub-Version **1101.2609.3.0**, mit ILSpy 11.1.0.9782 und Ghidra 12.1.4 über PyGhidra-MCP 0.2.7 / PyGhidra 3.1.0. Nach der statischen Analyse wurden Tastatur-Capability, Farben und Helligkeit erfolgreich über eigene lesende Windows-WMI-Abfragen erfasst. Keine Beleuchtung wurde verändert.
+Stand: 14. Oktober 2026. Referenzgerät: OMEN 16-ap0xxx, Board **8E35**, BIOS **F.13**. Untersucht wurde die tatsächlich installierte OMEN-Gaming-Hub-Version **1101.2609.3.0**, mit ILSpy 11.1.0.9782 und Ghidra 12.1.4 über PyGhidra-MCP 0.2.7 / PyGhidra 3.1.0. Auf die erfolgreichen GETs vom 13. Oktober folgten am 14. Oktober gemessene Farb-/Modusänderungen mit vollständigem Readback und Restore. Der native Editor speichert und wendet vier Zonenfarben sowie den eigenen Farbmodus oder die Firmware-Voreinstellung getrennt an.
 
-Das Ziel ist ein vollständiger Ersatz des originalen Hubs. Die HP-Module sind Analysequellen; eine Abhängigkeit von deren Hintergrundprozessen oder RPC-Diensten ist kein Ziel für die eigene Beleuchtungsengine. Direkte GETs ohne Laden der HP-RPC-/SDK-Wrapper sind bestätigt. Die HP-Dienste liefen währenddessen weiter; Betrieb ohne diese Controller sowie Schreib-/Restore-Prüfung stehen noch aus.
+Das Ziel ist ein vollständiger Ersatz des originalen Hubs. Die HP-Module sind Analysequellen; eine Abhängigkeit von deren Hintergrundprozessen oder RPC-Diensten ist kein Ziel für die eigene Beleuchtungsengine. Direkte GETs und die unten begrenzten SETs ohne Laden der HP-RPC-/SDK-Wrapper sind bestätigt. Die HP-Dienste liefen währenddessen weiter; unabhängiger Betrieb ohne diese Controller und der vollständige Lifecycle sind weiterhin ungemessen.
 
 ## Modell und tatsächliche Tastaturvariante
 
@@ -24,7 +24,7 @@ Windows meldet die interne Tastatur als **ACPI HPQ8001 / i8042prt** und außerde
 
 ## Klassischer Farb- und Helligkeitspfad
 
-Diese Verträge wurden im verwalteten `OmenHsaClient` und im `FourZone`-Hintergrundmodul gefunden. Die drei GETs sind auf 8E35/F.13 erfolgreich gemessen; daraus folgt keine Schreibfreigabe:
+Diese Verträge wurden im verwalteten `OmenHsaClient` und im `FourZone`-Hintergrundmodul gefunden. Die drei GETs und die begrenzten Farb-/Modus-SETs sind auf 8E35/F.13 mit tatsächlicher Capability **[1,0,0,0]** erfolgreich gemessen. Andere Typen und allgemeine Helligkeitswerte erhalten keine Schreibfreigabe:
 
 | Command / Type | Beobachtete Aufgabe | Eingabe | Ausgabe |
 | --- | --- | --- | --- |
@@ -34,9 +34,9 @@ Diese Verträge wurden im verwalteten `OmenHsaClient` und im `FourZone`-Hintergr
 | 0x20009 / 4 | Helligkeitszustand lesen | ein Nullbyte | 128 Bytes |
 | 0x20009 / 5 | Helligkeitswert schreiben | vier Bytes, Wert in Byte 0 | 4 Bytes und Firmwarestatus |
 
-Farben liegen im gelesenen Block ab **Offset 25**, mit **drei RGB-Bytes pro Zone**. Der verwaltete Setter liest zuerst den vollständigen Block, ersetzt nur die zugehörigen RGB-Bytes und erhält den Rest. Einzonenvarianten verwenden eine Zone, die übrigen einschlägigen Varianten vier. Für einen eigenen Setter ist dieser erhaltene Zustand der Kandidat für Readback und Restore; beides muss am Gerät gemessen werden.
+Farben liegen im gelesenen Block ab **Offset 25**, mit **drei RGB-Bytes pro Zone**. Der verwaltete Setter liest zuerst den vollständigen Block, ersetzt nur die zugehörigen RGB-Bytes und erhält den Rest. Einzonenvarianten verwenden eine Zone, die übrigen einschlägigen Varianten vier. Der eigene freigegebene Setter übernimmt nur das belegte Vierzonenschema: Er liest frisch, verlangt den vollständigen erwarteten Zustand, ersetzt ausschließlich Bytes 25…36 und vergleicht nach dem SET Capability und beide vollständigen 128-Byte-Blöcke. Das Originalbild bleibt dauerhaft im Transaktionsjournal.
 
-Der Helligkeitswert ist noch keine bestätigte universelle Prozentzahl. **Bit 7 beeinflusst die Herstellerlogik für `DefaultMode` und `SetFnF4StatusAsync`.** Ein beobachteter Pfad schreibt 0xE4, wenn Bit 7 zuvor gelöscht war; ein anderer schreibt 0x64. Eine vollständige Bedeutung aller Bits oder eine allgemeine Helligkeitsskala ist damit nicht belegt. Der Reader speichert den Wert als Rohbyte.
+Der Helligkeitswert ist keine bestätigte universelle Prozentzahl. **Bit 7 entscheidet im untersuchten `FourZone`-Modul zwischen eigenen Farben und der Firmware-Voreinstellung.** `InitialDefaultMode` und der Update-Pfad verwenden bei gesetztem Bit die eigenen Farben; bei gelöschtem Bit die Voreinstellung. `SetFnF4StatusAsync(true)` schreibt 0xE4, wenn Bit 7 gelöscht war, sonst erhält es den Wert; `false` schreibt 0x64. Der eigene Modusadapter ist auf die gemessenen Ausgangs-/Zielwerte **0x64 und 0xE4** beschränkt. Er sendet genau `[raw,0,0,0]`, prüft sämtliche übrigen Zustandsbytes und lässt Farben unverändert. Das belegt diese zwei Moduszustände, keine allgemeine Helligkeitsskala oder Animation.
 
 ## Native Transportbestätigung mit Ghidra
 
@@ -71,9 +71,9 @@ Die eigene Engine muss gespeicherte Profile, Entsperren, Standby-/Resume-Neuvali
 
 Der Originalcode berücksichtigt Light Studio und Windows Dynamic Lighting. Im Zielbetrieb ersetzt Omen Hub++ die HP-Writer vollständig; Windows-Lampensteuerung ist ein zusätzliches Betriebssystemfeature. Global aktiv bedeutet dabei nicht automatisch Kontrolle der Tastatur: Der Hersteller prüft auch Verbindung und den gerätespezifischen Enable-Zustand. Die hier beobachteten Einstellungen belegen keine aktuelle Windows-Übernahme. Originale Ownership-Helfer werden nicht für Diagnose aufgerufen, da einzelne davon Publisherdaten verändern können.
 
-## Implementierte Reader und aktueller Messstand
+## Reader und ursprünglicher GET-Messstand
 
-`keyboard-read` ist der native Rust-Reader für **8E35/F.13**. Er liest zuerst die Variante und nur bei klassischen Typen 1/2/4/5 anschließend Farben und Helligkeit. Andere bekannte Typen liefern ihre Capability mit `legacy = null`; ein unbekannter Typ ist ein Fehler und löst keine Folgeabfragen aus. Die Implementierung bietet keine Setter, freien Opcodes, automatische Rechteerhöhung oder Dienststeuerung. CIM- und VARIANT-Datentypen, Firmwarestatus und Antwortlänge werden geprüft. Die vier festen GET-Verträge einschließlich GPU-Status bleiben im privaten Windows-Adapter; Decoder und Zustandsmodelle liegen im plattformunabhängigen Core.
+`keyboard-read` ist der native Rust-Reader für **8E35/F.13**. Er liest zuerst die Variante und nur bei klassischen Typen 1/2/4/5 anschließend Farben und Helligkeit. Andere bekannte Typen liefern ihre Capability mit `legacy = null`; ein unbekannter Typ ist ein Fehler und löst keine Folgeabfragen aus. Dieser CLI-Befehl führt ausschließlich GETs aus, erhöht seine Rechte nicht selbst und steuert keine Dienste. CIM- und VARIANT-Datentypen, Firmwarestatus und Antwortlänge werden geprüft. Feste GET-/SET-Verträge bleiben im privaten Windows-Adapter; Decoder und Zustandsmodelle liegen im plattformunabhängigen Core.
 
 Aus einem Administrator-Terminal:
 
@@ -87,7 +87,7 @@ Aus einem Administrator-Terminal:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\Omen Gaming Hub Rewrite\scripts\read-keyboard-state.ps1'
 ```
 
-Ein normaler Prozess erhält beim Lesen der `hpqBIntM`-Instanz **AccessDenied / 0x80041003**. Der PowerShell-Fehlerdatensatz nennt `operation = bios_instance` und **bios_calls_attempted = 0**. Für die Geräteproben wurden einzelne Prozesse über Windows-UAC erhöht gestartet und anschließend beendet. Der aufrufende Codex-Prozess blieb uneleviert; die gespeicherte Windows-PowerShell-Richtlinie blieb `Restricted`. Das ist keine automatische Rechteerhöhung im Produkt.
+Ein normaler Prozess erhält beim Lesen der `hpqBIntM`-Instanz **AccessDenied / 0x80041003**. Der PowerShell-Fehlerdatensatz nennt `operation = bios_instance` und **bios_calls_attempted = 0**. Für die Geräteproben wurden einzelne Prozesse über Windows-UAC erhöht gestartet und anschließend beendet. Der aufrufende Codex-Prozess blieb uneleviert; die gespeicherte Windows-PowerShell-Richtlinie blieb `Restricted`. Der neue Editor fordert für ausdrückliches Prüfen, Anwenden und Wiederherstellen ebenfalls eine feste UAC-Kindaktion an; Öffnen und Speichern benötigen diese Freigabe nicht.
 
 Die native Größe-0-Eingabe verwendet einen Null-SAFEARRAY-Zeiger mit Bytearray-Typ. Ein gewöhnliches leeres `Vec<u8>` wird von `wmi` 0.18.4 zu `VT_NULL` umgewandelt. Der eigene Adapter bildet deshalb ausdrücklich **VT_ARRAY | VT_UI1** mit Null-SAFEARRAY ab, anhand der Windows-COM-Definitionen und der nativen HP-Beobachtung. Ein Regressionstest prüft diese Darstellung. Die Geräteantwort bestätigt das Marshalling: Sowohl CIM mit leerem `byte[]` als auch die eigene native Darstellung liefern die erfolgreiche Capability.
 
@@ -97,7 +97,19 @@ Die erste native Probe fand einen zusätzlichen Adapterfehler: generische WMI-Ma
 
 Der Adapter folgt den öffentlichen Verträgen für [IWbemClassObject::Put](https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemclassobject-put) und [IWbemClassObject::Get](https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemclassobject-get). Die Prozessgeltung der Startoption ist in [Microsofts Execution-Policy-Dokumentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1) beschrieben.
 
-Capability und Zustands-GETs sind damit bestätigt. Vor Schreibfreigabe fehlen weiterhin ein typgerechter Setter, gemessener Farb-Readback nach einer Änderung und vollständige Wiederherstellung auf diesem Board/BIOS. Für Animationen fehlt zusätzlich ein vollständiger Zustandsvertrag. Der derzeitige Getter läuft nur auf ausdrücklichen CLI-Aufruf, nicht als periodische Dashboard-Abfrage oder Heartbeat.
+Die GET-Messungen allein begründeten noch keine Schreibfreigabe. Die folgenden Prüfungen ergänzen sie. Der Getter läuft auf ausdrücklichen CLI-/Editor-Aufruf, nicht als periodische Dashboard-Abfrage oder Heartbeat.
+
+## Farb-/Modussteuerung und Wiederherstellung — 14. Oktober 2026
+
+**02:35 CEST:** Der feste `keyboard-validate-colors`-Trial änderte ausschließlich eine RGB-Komponente in Zone 1 um eins. Firmwarestatus und vollständiger Sollzustand bestanden; der dauerhafte Originalzustand wurde sofort vollständig restauriert. **02:48 CEST:** `keyboard-validate-lighting` ergänzte den Moduswechsel **0x64 → 0xE4**, prüfte beide gekoppelten Settings und stellte Farben, Modus, Capability und sämtliche übrigen Bytes exakt zurück. NVIDIA-Indizes, Spannungsanker und programmierte Frequenz-Deltas blieben bei beiden Versuchen unverändert. Erfolgreiche Trials archivieren das bisherige abgeschlossene Journal und geben es nach geprüftem Restore wieder zurück; ein Fehler lässt die neue Recovery-Sperre bestehen.
+
+**03:25 CEST:** Ein lokaler, ignorierter Test-Runner verwendete die aktuellen Core-/Platform-Crates mit einem isolierten `ProfileStore`. Ein Prozess wendete ein gespeichertes Profil mit vier einzelnen, um eins veränderten RGB-Komponenten und dem gegenüberliegenden 0x64/0xE4-Modus an. Ein zweiter Prozess öffnete ausschließlich das persistierte Journal und führte über eine neue Controller-/WMI-Sitzung `transaction::recover` aus. Vollständiger Ziel-Readback und Original-Restore bestanden, GPU-Steuerwerte waren gleich. Das vorhandene Benutzerjournal und die Startup-Auswahl wurden nicht verändert. Das ist ein Nachweis für Prozess- und Journal-Wiederherstellung, kein Reboot-/Anmeldetest.
+
+Der Produktionsadapter prüft vor jedem Schreiben das genaue Board/BIOS und den gesamten erfassten Zustand. Bei gekoppelten Farben-/Modus-Settings akzeptiert er als Zwischenzustand ausschließlich das eigene vollständige Transaktionsziel. Persistierte Recovery validiert Gerätebindung, semantische Daten gegen Rohblöcke und unveränderte Steuerbytes; RGB und Modus müssen zum Original oder beantragten Ziel gehören. Payloads entstehen aus einem frischen gültigen Firmwarebild. Undurchsichtige Bytes aus einer Diagnosedatei werden nicht als freier Schreibblock verwendet. Teilfehler werden restauriert; ungeklärte Zustände bleiben gesperrt.
+
+`keyboard-ui [id]` beziehungsweise **Beleuchtung …** öffnet den nativen Vierzoneneditor. Hex-Felder und Windows-Farbwahl bearbeiten Profilwerte. **Speichern** erhält andere Settings und ändert keine Hardware. **Firmware prüfen …** liest den tatsächlichen Zustand und prüft das gesamte gespeicherte Profil; **Gesamtes Profil anwenden …** bleibt bis zur erfolgreichen Prüfung gesperrt. **Original wiederherstellen …** verlangt im erhöhten Kindprozess das Journal des ausgewählten Profils. Alte Firmwareanzeigen und die Kopierquelle werden vor möglichen Schreibversuchen verworfen, auch bei Fehlern. Bedienung: [KEYBOARD_UI.md](KEYBOARD_UI.md).
+
+Farben und Modus sind ausdrücklich **nicht `startup_safe`**. Eine Profilversion mit diesen Settings kann manuell angewendet werden, aber nicht für automatische Anwendung zur Anmeldung freigegeben werden. Fn-F4, Entsperren, Resume, konkurrierende HP-/Windows-Lampen-Writer, Animationen, andere Tastaturtypen und vollständiger Ersatzbetrieb brauchen separate Nachweise. Die aktuellen Proben installieren oder stoppen keine Treiber/Dienste, flashen keine Firmware und ändern keine Power-/Voltage-Werte. Binary-Identitäten und Messgrenzen stehen im [Validierungsprotokoll](VALIDATION.md).
 
 ## Quellenidentität
 

@@ -5,7 +5,8 @@ use super::{
 use omen_core::{
     Inventory,
     features::Feature,
-    profiles::{DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
+    keyboard::KeyboardState,
+    profiles::{Choice, DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
     transaction::{
         self, Access, Applied, Backend, Capability, Captured, Context, Journal, PendingTransaction,
     },
@@ -21,10 +22,21 @@ const CLOCK_WRITE_VERIFIED: bool = true;
 // 2026-10-13 18:02 CEST: all 127 Graphics deltas -15000 kHz, exact
 // full-curve readback and restore; voltage anchors/global offsets unchanged.
 const CURVE_WRITE_VERIFIED: bool = true;
+// 2026-10-14 02:35 CEST, build98F3B089...: zone1 red +/-1 byte,
+// complete 128-byte color/brightness/capability readback and original restore;
+// existing programmed GPU controls and prior journal/startup retained.
+// This qualifies classic RGB only, not animation or logon/lifecycle ownership.
+const KEYBOARD_COLOR_WRITE_VERIFIED: bool = true;
+// 2026-10-14 02:48 CEST, build5E5926A8...: coupled RGB plus64->E4,
+// exact complete readback,64/original RGB restore, GPU controls unchanged.
+const KEYBOARD_MODE_WRITE_VERIFIED: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "adapter", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RestoreState {
+    HpKeyboardColors {
+        state: KeyboardState,
+    },
     NvidiaOffset {
         identity: NvidiaIdentity,
         state: OffsetState,
@@ -49,6 +61,10 @@ pub struct Controller {
     captured: BTreeMap<Feature, Captured<RestoreState>>,
     curve_target: Option<(Value, omen_core::vf::VfState)>,
     memory_last_trial: bool,
+    keyboard: Option<super::hp::KeyboardControl>,
+    keyboard_calibration: Option<Vec<[u8; 3]>>,
+    keyboard_target: Option<KeyboardState>,
+    keyboard_mode_calibration: Option<Choice>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -56,6 +72,41 @@ fn uses_nvidia(feature: Feature) -> bool {
         feature.descriptor().category,
         omen_core::features::Category::Gpu
     )
+}
+fn uses_keyboard(feature: Feature) -> bool {
+    matches!(feature, Feature::KeyboardColors | Feature::KeyboardEffect)
+}
+fn keyboard_value(feature: Feature, state: &KeyboardState) -> Result<Value, String> {
+    match feature {
+        Feature::KeyboardColors => state.colors().map(Value::Colors),
+        Feature::KeyboardEffect => Ok(Value::Choice(if state.custom_colors_enabled()? {
+            Choice::Static
+        } else {
+            Choice::FirmwareDefault
+        })),
+        _ => Err("Not a classic keyboard feature".into()),
+    }
+}
+fn lighting_target(state: &KeyboardState, settings: &[Setting]) -> Result<KeyboardState, String> {
+    let mut target = state.clone();
+    for s in settings {
+        match (&s.feature, &s.value) {
+            (Feature::KeyboardColors, Value::Colors(colors)) => {
+                target = target.with_colors(colors)?
+            }
+            (Feature::KeyboardEffect, Value::Choice(Choice::Static)) => {
+                target = target.with_classic_mode(true)?
+            }
+            (Feature::KeyboardEffect, Value::Choice(Choice::FirmwareDefault)) => {
+                target = target.with_classic_mode(false)?
+            }
+            (Feature::KeyboardEffect, _) => {
+                return Err("Only own static colors and firmware preset are qualified".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(target)
 }
 
 impl Controller {
@@ -73,6 +124,10 @@ impl Controller {
             captured: BTreeMap::new(),
             curve_target: None,
             memory_last_trial: false,
+            keyboard: None,
+            keyboard_calibration: None,
+            keyboard_target: None,
+            keyboard_mode_calibration: None,
         })
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
@@ -80,6 +135,109 @@ impl Controller {
             profile.settings.iter().any(|s| uses_nvidia(s.feature)),
             profile.binding.nvidia_uuid.as_deref(),
         )
+    }
+    pub fn for_recovery(saved: &PendingTransaction<RestoreState>) -> Result<Self, String> {
+        Self::new(
+            saved.requested.iter().any(|s| uses_nvidia(s.feature)),
+            saved.binding.nvidia_uuid.as_deref(),
+        )
+    }
+    fn keyboard(&mut self) -> Result<&super::hp::KeyboardControl, String> {
+        if self.keyboard.is_none() {
+            self.keyboard = Some(super::hp::KeyboardControl::new(&self.inventory)?);
+        }
+        self.keyboard
+            .as_ref()
+            .ok_or("HP keyboard connection is missing".into())
+    }
+    pub fn keyboard_state(&mut self) -> Result<KeyboardState, String> {
+        self.keyboard()?.read()
+    }
+    pub fn validate_keyboard_lighting(
+        &mut self,
+        journal: &mut impl Journal<RestoreState>,
+    ) -> Result<Applied, String> {
+        let before = self.keyboard_state()?;
+        if ![0x64, 0xe4].contains(
+            &before
+                .legacy
+                .as_ref()
+                .ok_or("Missing classic state")?
+                .brightness_raw_byte,
+        ) {
+            return Err("Fixed mode trial requires64/E4 raw brightness".into());
+        }
+        let mode = if before.custom_colors_enabled()? {
+            Choice::FirmwareDefault
+        } else {
+            Choice::Static
+        };
+        let mut colors = before.colors()?;
+        colors[0][0] = if colors[0][0] == 255 {
+            254
+        } else {
+            colors[0][0] + 1
+        };
+        let profile = PerformanceProfile {
+            schema: PROFILE_SCHEMA,
+            id: "keyboard-lighting-validation".into(),
+            name: "Fixed coupled RGB/mode qualification".into(),
+            binding: self.context()?.binding.for_settings(&[]),
+            settings: vec![
+                Setting {
+                    feature: Feature::KeyboardColors,
+                    value: Value::Colors(colors.clone()),
+                },
+                Setting {
+                    feature: Feature::KeyboardEffect,
+                    value: Value::Choice(mode),
+                },
+            ],
+        };
+        let digest = crate::profile_store::profile_digest(&profile)?;
+        self.keyboard_calibration = Some(colors);
+        self.keyboard_mode_calibration = Some(mode);
+        let result = transaction::trial(&profile, &digest, self, journal);
+        self.keyboard_calibration = None;
+        self.keyboard_mode_calibration = None;
+        let result = result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+        if self.keyboard_state()? != before {
+            return Err("The coupled lighting trial did not fully restore".into());
+        }
+        Ok(result)
+    }
+    /// Fixed color-only qualification: change one component in zone 1 by one
+    /// byte, verify the entire state and restore through the durable journal.
+    pub fn validate_keyboard_colors(
+        &mut self,
+        journal: &mut impl Journal<RestoreState>,
+    ) -> Result<Applied, String> {
+        let before = self.keyboard_state()?;
+        let mut colors = before.colors()?;
+        colors[0][0] = if colors[0][0] == 255 {
+            254
+        } else {
+            colors[0][0] + 1
+        };
+        let profile = PerformanceProfile {
+            schema: PROFILE_SCHEMA,
+            id: "keyboard-color-validation".into(),
+            name: "Fixed keyboard color qualification".into(),
+            binding: self.context()?.binding.for_settings(&[]),
+            settings: vec![Setting {
+                feature: Feature::KeyboardColors,
+                value: Value::Colors(colors.clone()),
+            }],
+        };
+        let digest = crate::profile_store::profile_digest(&profile)?;
+        self.keyboard_calibration = Some(colors);
+        let result = transaction::trial(&profile, &digest, self, journal);
+        self.keyboard_calibration = None;
+        let result = result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+        if self.keyboard_state()? != before {
+            return Err("Keyboard trial did not restore the complete original".into());
+        }
+        Ok(result)
     }
     fn gpu(&self) -> Result<&NvidiaControl, String> {
         self.nvidia
@@ -373,7 +531,11 @@ impl Backend for Controller {
         }
         // Measured 617.14 behavior: the NVML memory setter resets a custom
         // Graphics curve. Preserve it, then apply the final Graphics target.
-        order.sort_by_key(|i| settings[*i].feature != Feature::GpuMemoryOffsetMhz);
+        order.sort_by_key(|i| match settings[*i].feature {
+            Feature::GpuMemoryOffsetMhz => 0,
+            Feature::KeyboardEffect => 2,
+            _ => 1,
+        });
         order
     }
     fn context(&mut self) -> Result<Context, String> {
@@ -393,6 +555,21 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if feature == Feature::KeyboardEffect {
+            return match self.keyboard_state() {
+                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe:false},
+                Ok(_)=>Capability::unsupported(feature,"Mode restore is not qualified at this raw brightness level"),
+                Err(reason)=>Capability::unsupported(feature,reason),
+            };
+        }
+        if feature == Feature::KeyboardColors {
+            return match self.keyboard_state() {
+                Ok(_)=>Capability {feature,access:if KEYBOARD_COLOR_WRITE_VERIFIED||self.keyboard_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},
+                    reason:"Direct board8E35/F.13 classic four-zone RGB; complete opaque/brightness state must remain unchanged. Animations and independent HP-controller replacement are not qualified".into(),
+                    integer_range:None,requires_ac:false,startup_safe:false},
+                Err(reason)=>Capability::unsupported(feature,reason),
+            };
+        }
         if feature == Feature::GpuVfCurve {
             let state: Result<omen_core::vf::VfState, String> = (|| {
                 let state = self.gpu_curve()?;
@@ -511,6 +688,9 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if uses_keyboard(feature) {
+            return keyboard_value(feature, &self.keyboard_state()?);
+        }
         if feature == Feature::GpuVfCurve {
             return self.gpu_curve()?.value();
         }
@@ -520,6 +700,16 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if uses_keyboard(feature) {
+            let state = self.keyboard_state()?;
+            let saved = Captured {
+                feature,
+                value: keyboard_value(feature, &state)?,
+                restore: RestoreState::HpKeyboardColors { state },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if feature == Feature::GpuVfCurve {
             let state = self.gpu_curve()?;
             self.curve_target = Some((state.value()?, state.clone()));
@@ -572,10 +762,38 @@ impl Backend for Controller {
     }
 
     fn restore(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
-        self.qualifies()?;
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Restore state was not captured by this controller session".into());
         }
+        if let RestoreState::HpKeyboardColors { state } = &saved.restore {
+            if !uses_keyboard(saved.feature) || saved.value != keyboard_value(saved.feature, state)?
+            {
+                return Err("Keyboard restore image/value differs".into());
+            }
+            let current = self.keyboard_state()?;
+            if state.board != current.board
+                || state.bios != current.bios
+                || state.capability != current.capability
+            {
+                return Err(
+                    "Keyboard identity changed; restore will not address another device".into(),
+                );
+            }
+            // Best-effort rollback of the bounded RGB fields uses a fresh wire
+            // image. Never send opaque bytes from the saved image. A concurrent
+            // brightness/mode change remains untouched and fails full verification.
+            self.keyboard()?.set(&current, &state.colors()?)?;
+            if self.captured.contains_key(&Feature::KeyboardEffect) {
+                let live = self.keyboard_state()?;
+                self.keyboard()?
+                    .set_mode(&live, state.custom_colors_enabled()?)?;
+            }
+            if self.keyboard_state()? != *state {
+                return Err("Complete keyboard original did not restore".into());
+            }
+            return Ok(());
+        }
+        self.qualifies()?;
         if let RestoreState::NvidiaVfCurve {
             identity,
             state,
@@ -627,6 +845,13 @@ impl Backend for Controller {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Control verification image is not owned by this session".into());
         }
+        if let RestoreState::HpKeyboardColors { state } = &saved.restore {
+            let actual = self.keyboard_state()?;
+            if actual != *state && self.keyboard_target.as_ref() != Some(&actual) {
+                return Err("Keyboard controls differ from the captured complete state".into());
+            }
+            return Ok(());
+        }
         let (offset, curve, related) = match &saved.restore {
             RestoreState::NvidiaOffset {
                 state,
@@ -637,6 +862,7 @@ impl Backend for Controller {
             RestoreState::NvidiaVfCurve {
                 state, core_offset, ..
             } => (core_offset, Some(state), None),
+            RestoreState::HpKeyboardColors { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -686,6 +912,18 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if uses_keyboard(setting.feature) {
+            let expected = self
+                .keyboard_target
+                .as_ref()
+                .ok_or("No complete keyboard target proof")?
+                .clone();
+            let actual = self.keyboard_state()?;
+            if actual != expected || setting.value != keyboard_value(setting.feature, &actual)? {
+                return Err("Keyboard target, opaque fields or brightness readback differs".into());
+            }
+            return Ok(setting.value.clone());
+        }
         if matches!(
             setting.feature,
             Feature::GpuVfCurve | Feature::GpuCoreOffsetMhz
@@ -750,13 +988,67 @@ impl Backend for Controller {
         transaction: &PendingTransaction<RestoreState>,
     ) -> Result<(), String> {
         transaction.validate()?;
-        self.qualifies()?;
+        if transaction.requested.iter().any(|s| uses_nvidia(s.feature)) {
+            self.qualifies()?;
+        }
         if !transaction.binding.matches(&self.context()?.binding) {
             return Err("Recovery device binding differs".into());
         }
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::HpKeyboardColors { state } = &saved.restore {
+                if !uses_keyboard(saved.feature)
+                    || requested.feature != saved.feature
+                    || saved.value != keyboard_value(saved.feature, state)?
+                {
+                    return Err("Persisted keyboard restore image/value differs".into());
+                }
+                let target = lighting_target(state, &transaction.requested)?;
+                let allow_mode = transaction
+                    .requested
+                    .iter()
+                    .any(|s| s.feature == Feature::KeyboardEffect);
+                let current = self.keyboard_state()?;
+                if !state.same_invariant_controls(&current, allow_mode)? {
+                    return Err("Keyboard opaque fields differ; no recovery SET is allowed".into());
+                }
+                let original = state.colors()?;
+                let live = current.colors()?;
+                let colors = target.colors()?;
+                if original
+                    .iter()
+                    .zip(&live)
+                    .zip(&colors)
+                    .any(|((old, now), wanted)| {
+                        (0..3).any(|i| now[i] != old[i] && now[i] != wanted[i])
+                    })
+                {
+                    return Err(
+                        "Keyboard colors differ from both original and requested controls".into(),
+                    );
+                }
+                let original_raw = state
+                    .legacy
+                    .as_ref()
+                    .ok_or("Missing original mode")?
+                    .brightness_raw_byte;
+                let wanted_raw = target
+                    .legacy
+                    .as_ref()
+                    .ok_or("Missing target mode")?
+                    .brightness_raw_byte;
+                let live_raw = current
+                    .legacy
+                    .as_ref()
+                    .ok_or("Missing live mode")?
+                    .brightness_raw_byte;
+                if live_raw != original_raw && live_raw != wanted_raw {
+                    return Err("Keyboard mode differs from original and requested controls".into());
+                }
+                self.keyboard_target = Some(target);
+                continue;
+            }
             if let RestoreState::NvidiaVfCurve {
                 identity,
                 state,
@@ -942,6 +1234,60 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if setting.feature == Feature::KeyboardEffect {
+            let Value::Choice(mode) = setting.value else {
+                return Err("Missing classic keyboard mode".into());
+            };
+            if !matches!(mode, Choice::Static | Choice::FirmwareDefault)
+                || self
+                    .keyboard_mode_calibration
+                    .is_some_and(|allowed| allowed != mode)
+            {
+                return Err("Keyboard mode is outside the qualified operation".into());
+            }
+            let saved = self
+                .captured
+                .get(&setting.feature)
+                .ok_or("No durable mode capture")?
+                .clone();
+            let RestoreState::HpKeyboardColors { state } = saved.restore else {
+                return Err("Wrong keyboard mode adapter".into());
+            };
+            let live = self.keyboard_state()?;
+            if live != state && self.keyboard_target.as_ref() != Some(&live) {
+                return Err("Mode controls changed outside this transaction".into());
+            }
+            self.keyboard_target = Some(self.keyboard()?.set_mode(&live, mode == Choice::Static)?);
+            return Ok(());
+        }
+        if setting.feature == Feature::KeyboardColors {
+            let Value::Colors(colors) = &setting.value else {
+                return Err("Keyboard color target is not typed RGB".into());
+            };
+            if self
+                .keyboard_calibration
+                .as_ref()
+                .is_some_and(|allowed| allowed != colors)
+            {
+                return Err(
+                    "Keyboard calibration permits only its fixed one-component delta".into(),
+                );
+            }
+            let saved = self
+                .captured
+                .get(&setting.feature)
+                .ok_or("No durable keyboard capture")?
+                .clone();
+            let RestoreState::HpKeyboardColors { state } = saved.restore else {
+                return Err("Keyboard capture has another adapter".into());
+            };
+            let live = self.keyboard_state()?;
+            if live != state && self.keyboard_target.as_ref() != Some(&live) {
+                return Err("RGB controls changed outside this transaction".into());
+            }
+            self.keyboard_target = Some(self.keyboard()?.set(&live, colors)?);
+            return Ok(());
+        }
         if setting.feature == Feature::GpuVfCurve {
             self.validate_setting(setting)?;
             self.gpu()?.thermal_guard(87)?;
@@ -996,6 +1342,31 @@ impl Backend for Controller {
     }
     fn validate_setting(&mut self, setting: &Setting) -> Result<(), String> {
         setting.validate()?;
+        if setting.feature == Feature::KeyboardEffect {
+            let Value::Choice(mode) = setting.value else {
+                return Err("Typed keyboard mode missing".into());
+            };
+            if !matches!(mode, Choice::Static | Choice::FirmwareDefault)
+                || self
+                    .keyboard_mode_calibration
+                    .is_some_and(|allowed| allowed != mode)
+            {
+                return Err("Only the measured classic mode choices are supported".into());
+            }
+        }
+        if setting.feature == Feature::KeyboardColors {
+            let Value::Colors(colors) = &setting.value else {
+                return Err("Typed RGB colors are required".into());
+            };
+            self.keyboard_state()?.with_colors(colors)?;
+            if self
+                .keyboard_calibration
+                .as_ref()
+                .is_some_and(|allowed| allowed != colors)
+            {
+                return Err("The fixed RGB trial does not allow other targets".into());
+            }
+        }
         if setting.feature == Feature::GpuVfCurve {
             let Value::VfCurve(points) = &setting.value else {
                 return Err("V/F curve value missing".into());

@@ -919,9 +919,8 @@ pub fn render_window(hwnd: HWND, path: &Path) -> Result<(), String> {
         bitmap(path, rect.right, rect.bottom, |dc, _| {
             // Child WM_PRINT includes its own nonclient border. Position each
             // visible child in client space; a top-level print adds a titlebar.
-            let fill = CreateSolidBrush(BACKGROUND);
+            let fill = GetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND) as HBRUSH;
             FillRect(dc, &rect, fill);
-            DeleteObject(fill);
             let mut child = GetWindow(hwnd, GW_CHILD);
             while !child.is_null() {
                 if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {

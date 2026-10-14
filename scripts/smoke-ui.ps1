@@ -1,4 +1,4 @@
-param([string]$Executable)
+﻿param([string]$Executable)
 $ErrorActionPreference = 'Stop'
 $taskRepo = Split-Path -Parent $PSScriptRoot
 if (-not $Executable) { $Executable = Join-Path $taskRepo 'dist\Omen Hub++.exe' }
@@ -68,8 +68,8 @@ try {
     }
     if ($taskText -notmatch 'Auslastung: \d+[\.,]\d+ %') { throw 'CPU busy-time measurement did not become ready.' }
     $taskCombo = [OmenUiSmoke]::GetDlgItem($taskWindow, 102)
-    [void][OmenUiSmoke]::SendMessage($taskCombo, 0x014E, [UIntPtr]3, [IntPtr]::Zero)
-    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]0x00010066, [IntPtr]::Zero)
+    [void][OmenUiSmoke]::SendMessage($taskCombo, 0x014E, [UIntPtr]::new([uint64]3), [IntPtr]::Zero)
+    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]0x00010066), [IntPtr]::Zero)
     Start-Sleep -Milliseconds 150
     $taskText = [OmenUiSmoke]::ChildrenText($taskWindow)
     if ($taskText -notmatch 'Unleashed: Vorschau') { throw 'Profile preview did not update.' }
@@ -81,7 +81,7 @@ try {
     if ([OmenUiSmoke]::IsWindowVisible($taskWindow)) { throw 'Close did not hide the application in tray.' }
     $taskProcess.Refresh()
     if ($taskProcess.HasExited) { throw 'Close unexpectedly exited the tray application.' }
-    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]202, [IntPtr]::Zero)
+    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]202), [IntPtr]::Zero)
     if (-not $taskProcess.WaitForExit(3000)) { throw 'Application did not exit within 3 seconds.' }
     if ($taskProcess.ExitCode -ne 0) { throw "Application failed: $($taskProcess.ExitCode)" }
     Write-Output 'Native window, inventory, CPU/GPU telemetry, profile preview, close-to-tray and clean exit passed.'

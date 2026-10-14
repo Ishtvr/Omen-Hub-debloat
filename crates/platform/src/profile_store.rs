@@ -42,6 +42,11 @@ pub struct StartupSelection {
 pub struct ProfileStore {
     root: PathBuf,
 }
+/// A scoped qualification must not discard the last user transaction/approval.
+pub struct JournalCheckpoint {
+    root: PathBuf,
+    previous: Option<JournalFile<serde_json::Value>>,
+}
 impl ProfileStore {
     pub fn user_data() -> Result<Self, String> {
         #[cfg(windows)]
@@ -62,6 +67,59 @@ impl ProfileStore {
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+    pub fn checkpoint_completed_journal(&self) -> Result<JournalCheckpoint, String> {
+        if self.pending()? {
+            return Err("Pending recovery blocks a qualification checkpoint".into());
+        }
+        let previous = if self
+            .journal_path()
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            let file: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
+            let bytes = serde_json::to_vec(&file).map_err(|e| e.to_string())?;
+            let path = self
+                .root
+                .join("control-history")
+                .join(format!("{:x}.json", Sha256::digest(bytes)));
+            fs::create_dir_all(self.root.join("control-history")).map_err(|e| e.to_string())?;
+            atomic_json(&path, &file)?;
+            Some(file)
+        } else {
+            None
+        };
+        Ok(JournalCheckpoint {
+            root: self.root.clone(),
+            previous,
+        })
+    }
+    pub fn restore_completed_trial_checkpoint(
+        &self,
+        checkpoint: JournalCheckpoint,
+        id: &str,
+        digest: &str,
+    ) -> Result<(), String> {
+        if checkpoint.root != self.root {
+            return Err("Qualification checkpoint belongs to another store".into());
+        }
+        let current: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
+        current.transaction.validate()?;
+        if current.schema != 1
+            || current.pending
+            || current.completion != Some(Completion::Restored)
+            || current.transaction.profile_id != id
+            || current.transaction.profile_digest != digest
+        {
+            return Err(
+                "Only the exact completely restored qualification can return to its checkpoint"
+                    .into(),
+            );
+        }
+        if let Some(previous) = checkpoint.previous {
+            atomic_json(&self.journal_path(), &previous)?;
+        }
+        Ok(())
     }
     /// Explicit migration: never overwrite an existing store or enable startup.
     /// Keep the old files; a pending original journal is copied before profiles.
@@ -404,7 +462,11 @@ mod tests {
         fn drop(&mut self) {
             // Remove only files created in this isolated test fixture; no recursive deletion.
             let root = self.0.root();
-            for directory in [root.join("profiles"), root.to_owned()] {
+            for directory in [
+                root.join("control-history"),
+                root.join("profiles"),
+                root.to_owned(),
+            ] {
                 if let Ok(entries) = fs::read_dir(&directory) {
                     for entry in entries.flatten() {
                         if entry.file_type().is_ok_and(|t| t.is_file()) {
@@ -414,6 +476,7 @@ mod tests {
                 }
             }
             let _ = fs::remove_dir(root.join("profiles"));
+            let _ = fs::remove_dir(root.join("control-history"));
             let _ = fs::remove_dir(root);
         }
     }
@@ -453,6 +516,44 @@ mod tests {
     }
     fn finish(store: &mut ProfileStore, completion: Completion) {
         <ProfileStore as Journal<Value>>::finish(store, completion).unwrap();
+    }
+    #[test]
+    fn restored_qualification_retains_the_previous_journal_and_startup_selection() {
+        let mut fixture = Fixture::new();
+        let store = &mut fixture.0;
+        let original = profile();
+        store.save(&original).unwrap();
+        let original_tx = transaction(&original);
+        store.begin(&original_tx).unwrap();
+        finish(store, Completion::Applied);
+        store.enable_startup(&original.id).unwrap();
+        let startup = serde_json::to_value(store.startup().unwrap()).unwrap();
+        let checkpoint = store.checkpoint_completed_journal().unwrap();
+        let mut trial_profile = profile();
+        trial_profile.id = "trial".into();
+        let trial = transaction(&trial_profile);
+        store.begin(&trial).unwrap();
+        assert!(store.checkpoint_completed_journal().is_err());
+        finish(store, Completion::Restored);
+        store
+            .restore_completed_trial_checkpoint(
+                checkpoint,
+                &trial.profile_id,
+                &trial.profile_digest,
+            )
+            .unwrap();
+        assert_eq!(store.last_transaction::<Value>().unwrap(), original_tx);
+        assert_eq!(
+            serde_json::to_value(store.startup().unwrap()).unwrap(),
+            startup
+        );
+        assert_eq!(store.startup_profile().unwrap().unwrap(), original);
+        assert_eq!(
+            fs::read_dir(store.root.join("control-history"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
     #[test]
     fn startup_requires_applied_exact_revision_and_rejects_edits() {

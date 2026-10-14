@@ -14,14 +14,15 @@ Omen Hub++ soll alle praktisch nutzbaren OMEN-Hardwarefunktionen in einer native
 - [x] Native BIOS-WMI-Abbildung und virtuellen Lampentreiber mit Ghidra/PyGhidra-MCP statisch nachvollziehen.
 - [x] Feste lesende Tastaturerfassung vorbereiten; unelevierter Fehler vor BIOS-Methodenaufruf nachgewiesen.
 - [x] Tatsächliche Tastatur-Capability und vollständigen Farb-/Helligkeitszustand in PowerShell und nativem Rust lesen; 8E35/F.13 meldet vier Zonen mit Nummernblock.
-- [ ] Tastatur-Setter, Readback nach einer Änderung und vollständiges Restore validieren.
+- [x] Direkte Vier-Zonen-RGB- und statisch/Firmware-Modus-Setter auf 8E35/F.13 mit vollständigem Readback/Restore validieren; dauerhaftes Apply und Recovery in getrennten Prozessen prüfen.
+- [ ] Tastatur-Lifecycle bei Reboot, Suspend/Resume und Hotkeys sowie Betrieb ohne ursprüngliche HP-Controller messen; Helligkeit/Aus/Animationen und andere Tastaturtypen separat qualifizieren.
 - [ ] Notwendige Hersteller-Lifecycle-Funktionen in der eigenen Engine übernehmen und vollständigen Ersatz ohne originale HP-Omen-Controller nachweisen.
 - [ ] CPU-Sensoradapter mit echtem Watt-/Temperatur-Readback und geprüftem SDK-Lifecycle auf 8E35/F.13 validieren.
 - [x] Feste GPU-Status-/SystemDesignData-GETs auf 8E35/F.13 messen; D-State 0 bleibt ohne erfundene Bedeutung erhalten, Original-Hub laut Benutzer Unleashed.
 - [ ] Bedeutung der tatsächlichen GPU-Status-Antwort auf 8E35/F.13 und Zuordnung zum Originalprofil klären.
 - [ ] HSA/CAP-RPC bis zum tatsächlichen WMI-/EC-/Treiberaufruf vollständig verfolgen.
 - [x] Zuordnete 8E35/Khalilah25C1-Ressource finden: PL1, TPP, Thermal-/IR-Parameter, 30000-ms-Heartbeat und Unleashed-Support; Laufzeitwirkung bleibt separat zu validieren.
-- [ ] Lüfter, Max-Fan, MUX und RGB: Get/Set-Paare, Rückgabecodes, Zustandsübergänge identifizieren.
+- [ ] Lüfter, Max-Fan und MUX: Get/Set-Paare, Rückgabecodes und Zustandsübergänge identifizieren.
 - [ ] Originalzustände, Gaming-Hub-Verhalten und Lastmessungen vergleichen: Netzteil, BIOS, Temperaturen, CPU-Watt, GPU-Watt, Akkudrain und Throttle-Gründe.
 - [ ] Verhalten nach Standby, Netzteilwechsel und Ausfall eines Controllers dokumentieren.
 
@@ -34,6 +35,8 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [x] Heartbeat-Lifecycle mit Entschärfung bei AC-Wechsel, Suspend, Resume und Fehler.
 - [ ] Ein einzelner privilegierter Controller mit exklusivem Gerätezugriff; keine konkurrierenden HP-/Drittanbieter-Schleifen.
 - [x] Typisierter lesender HP-WMI-Transport mit festen GETs, Begrenzung auf 8E35/F.13 sowie strengen Datentyp-/Längen-/Rückgabecode-Prüfungen; Größe-0-Eingabe am Gerät validiert.
+- [x] Typisierter direkter HP-BIOS-Tastaturadapter für Capability `[1,0,0,0]`: vollständige RGB-Bilder, exakte Modusbytes 0x64/0xE4, dauerhafte Originale, Readback und Recovery; übrige Steuerbytes erhalten.
+- [ ] Beleuchtungssettings für automatisches Anwenden freigeben, erst nach belegtem Lifecycle und Controller-Ownership; derzeit `startup_safe = false`.
 - [x] Typisierte Gesamt-Transaktionen mit 85 semantischen Profil-Features, dauerhaften Originalbildern und Sperren bei nicht unterstützten Settings.
 - [x] NVIDIA-Core-/VRAM-Offsets auf dem Referenzgerät: GET/SET, exakter Readback, Teilfehler-Rollback und persistierte Recovery.
 - [x] Exakte NVIDIA-Graphics-V/F-ABI mit Ghidra und lesenden Proben belegen; alle 127 Frequenz-Deltas schreiben, zurücklesen und vollständig restaurieren.
@@ -60,7 +63,9 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Native GPU-Profile speichern, aktuellen Offset-Zustand anzeigen, anwenden und wiederherstellen; die HP-Systemmodi bleiben Vorschau.
 - [x] Native V/F-Kurvenbearbeitung mit vorhandenem Spannungsanker, Plateau-Frequenzziel und Erhalt eigener vollständiger Kurven bei Name-/VRAM-Änderungen.
 - [x] Gemeinsames natives Kurven-Widget mit GPU-V/F, CPU-/GPU-Lüfterentwürfen, Maus-/Tastatur-/Zahlenbedienung und eigener Profilspeicherung; Lüfter-Hardwareadapter bleibt offen.
-- [ ] Editierbare Lüfterkurven, Max-Fan, RGB und MUX samt nötigem Neustartverhalten.
+- [x] Nativer Vier-Zonen-Beleuchtungseditor mit Hex-/Farbauswahl, Metadaten-Save, UAC-Firmwareprüfung, Gesamtprofil-Apply und profilgebundenem Original-Restore.
+- [ ] Lüfterkurven auf Hardware anwenden, Max-Fan und MUX samt nötigem Neustartverhalten.
+- [ ] Erweiterte Tastaturbeleuchtung mit validierter Helligkeit, Aus-/Animationszuständen und unabhängigem Power-/Hotkey-Lifecycle.
 - [x] Versionierte Profile, atomarer Speicher außerhalb MSIX-AppData, kontrollierte Migration und geschützter Windows-Anmeldungseinstieg für bestätigte Revisionen.
 - [ ] Tatsächlichen Reboot, Suspend/Resume, AC-Wechsel und langfristige Stabilität mit ausgewähltem Profil messen.
 - [ ] Dienst nur für privilegierte Hardwarefunktionen; UI bleibt im Benutzerkonto.
