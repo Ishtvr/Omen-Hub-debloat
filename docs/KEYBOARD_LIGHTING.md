@@ -111,6 +111,8 @@ Der Produktionsadapter prüft vor jedem Schreiben das genaue Board/BIOS und den 
 
 Farben und Modus sind ausdrücklich **nicht `startup_safe`**. Eine Profilversion mit diesen Settings kann manuell angewendet werden, aber nicht für automatische Anwendung zur Anmeldung freigegeben werden. Fn-F4, Entsperren, Resume, konkurrierende HP-/Windows-Lampen-Writer, Animationen, andere Tastaturtypen und vollständiger Ersatzbetrieb brauchen separate Nachweise. Die aktuellen Proben installieren oder stoppen keine Treiber/Dienste, flashen keine Firmware und ändern keine Power-/Voltage-Werte. Binary-Identitäten und Messgrenzen stehen im [Validierungsprotokoll](VALIDATION.md).
 
+Der Benutzer bestätigte am 14. Oktober **„Statische Farbe“** als aktuelle Auswahl im ursprünglichen OMEN Hub. Dies bestimmt die Ausgangslage für weitere Tests, beweist aber nicht, dass ein HP-Hintergrundprozess keine Farben erneut setzt. Es gab dazu keinen neuen zeitgleichen Firmware-GET und keine neue Hardwareänderung. Die Bestätigung wird deshalb getrennt von der gemessenen 0x64/0xE4-Moduswirkung und den Restore-Nachweisen geführt.
+
 ## Quellenidentität
 
 | Datei | Dateiversion | SHA-256 |
