@@ -56,9 +56,60 @@ pub struct CpuSample {
     pub logical_processors: Option<u32>,
     /// Requires a verified CPU-family-specific hardware reader; never estimated from load.
     pub package_power_w: Option<f64>,
-    /// CPU die/package temperature only; an ACPI zone is not substituted.
+    /// CPU hardware temperature; see hardware.temperature_kind (Tctl here).
+    /// An ACPI thermal zone is never substituted.
     pub temperature_c: Option<f64>,
+    /// Explicit provenance/interval for optional, verified hardware readings.
+    pub hardware: Option<CpuHardwareSample>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuHardwareSample {
+    pub schema: u32,
+    pub source: CpuHardwareSource,
+    pub temperature_kind: CpuTemperatureKind,
+    pub package_power_w: Option<f64>,
+    pub temperature_c: Option<f64>,
+    pub power_interval_ms: Option<u64>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuHardwareSource {
+    PawnioAmdRapl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuTemperatureKind {
+    AmdTctl,
+}
+
+impl CpuHardwareSample {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != 1
+            || self
+                .package_power_w
+                .is_some_and(|v| !v.is_finite() || !(0.0..=300.0).contains(&v))
+            || self
+                .temperature_c
+                .is_some_and(|v| !v.is_finite() || !(0.0..=125.0).contains(&v))
+            || self
+                .power_interval_ms
+                .is_some_and(|v| !(200..=10_000).contains(&v))
+            || self.package_power_w.is_some() != self.power_interval_ms.is_some()
+            || self.warnings.len() > 8
+            || self.warnings.iter().any(|w| w.len() > 512)
+        {
+            return Err(
+                "CPU sensor response schema, values or measured interval is invalid".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -67,8 +118,23 @@ pub struct Snapshot {
     pub power: PowerStatus,
     #[serde(default)]
     pub cpu: Option<CpuSample>,
+    #[serde(default)]
+    pub cpu_hardware_status: CpuHardwareStatus,
+    /// Diagnostic identity of our approved reader, never a hardware control.
+    pub cpu_reader_pid: Option<u32>,
     pub gpu: Option<GpuSample>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", content = "detail", rename_all = "snake_case")]
+pub enum CpuHardwareStatus {
+    #[default]
+    Off,
+    Starting,
+    Active,
+    Paused,
+    Error(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

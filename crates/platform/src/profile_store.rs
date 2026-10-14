@@ -318,6 +318,17 @@ impl ProfileStore {
     pub fn control_result(&self) -> Result<serde_json::Value, String> {
         read_json(&self.root.join("last-control-result.json"))
     }
+    pub fn save_cpu_error<T: Serialize>(&self, value: &T) -> Result<(), String> {
+        atomic_json(&self.root.join("last-cpu-error.json"), value)
+    }
+    pub fn cpu_error(&self) -> Result<Option<serde_json::Value>, String> {
+        let path = self.root.join("last-cpu-error.json");
+        if path.try_exists().map_err(|e| e.to_string())? {
+            read_json(&path).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
@@ -553,6 +564,27 @@ mod tests {
                 .unwrap()
                 .count(),
             1
+        );
+    }
+    #[test]
+    fn cpu_diagnostic_retains_exact_detail_without_changing_control_approval() {
+        let mut fixture = Fixture::new();
+        let store = &mut fixture.0;
+        let p = profile();
+        store.save(&p).unwrap();
+        let original = transaction(&p);
+        store.begin(&original).unwrap();
+        finish(store, Completion::Applied);
+        store.enable_startup(&p.id).unwrap();
+        let selection = serde_json::to_value(store.startup().unwrap()).unwrap();
+        assert!(store.cpu_error().unwrap().is_none());
+        let detail = serde_json::json!({"schema":1,"detail":"exact technical cause","user_message":"German recovery"});
+        store.save_cpu_error(&detail).unwrap();
+        assert_eq!(store.cpu_error().unwrap(), Some(detail));
+        assert_eq!(store.last_transaction::<Value>().unwrap(), original);
+        assert_eq!(
+            serde_json::to_value(store.startup().unwrap()).unwrap(),
+            selection
         );
     }
     #[test]

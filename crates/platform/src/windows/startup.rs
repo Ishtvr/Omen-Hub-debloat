@@ -119,7 +119,7 @@ fn authorization_path(installation: &StartupInstallation) -> Result<PathBuf, Str
         .executable
         .parent()
         .ok_or("Installation directory missing")?
-        .join(format!("startup-authorized-{}.json", user_sid()?)))
+        .join(format!("startup-authorized-{}.json", current_user_sid()?)))
 }
 
 /// Called only after applied-journal eligibility and live target readback. The
@@ -131,7 +131,7 @@ pub fn authorize_startup_profile(
     let installation = verify_startup_installation()?;
     let record = StartupAuthorization {
         schema: 1,
-        user_sid: user_sid()?,
+        user_sid: current_user_sid()?,
         profile_id: profile.id.clone(),
         profile_digest: crate::profile_store::profile_digest(profile)?,
         binding: profile.binding.clone(),
@@ -156,7 +156,7 @@ pub fn verify_startup_profile(
     }
     let record: StartupAuthorization = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
     if record.schema != 1
-        || record.user_sid != user_sid()?
+        || record.user_sid != current_user_sid()?
         || record.profile_id != profile.id
         || record.profile_digest != crate::profile_store::profile_digest(profile)?
         || record.binding != profile.binding
@@ -169,7 +169,7 @@ pub fn verify_startup_profile(
     Ok(())
 }
 
-fn user_sid() -> Result<String, String> {
+pub fn current_user_sid() -> Result<String, String> {
     let mut token = ptr::null_mut();
     // SAFETY: Token output is initialized; query-only access to this process.
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
@@ -270,7 +270,7 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
     let receipt: StartupInstallation =
         serde_json::from_slice(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
             .map_err(|e| e.to_string())?;
-    let sid = user_sid()?;
+    let sid = current_user_sid()?;
     let sam = sam_name()?;
     if receipt.schema != 1
         || receipt.user_sid != sid

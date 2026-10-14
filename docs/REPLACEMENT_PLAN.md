@@ -9,7 +9,7 @@ Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen v
 | Systeminventar / Netzteil / Akku | Windows-WMI und Power-API | Implementiert |
 | GPU-Watt / Temperatur / Takt | Öffentliche NVML / NVAPI | Implementiert; regulärer NVIDIA-Treiber erforderlich |
 | CPU-Auslastung / Windows-MHz | Windows-Zeitdifferenzen / Power-API | Implementiert; kein Watt-/Boost-Ersatzwert |
-| CPU-Paketwatt / Temperatur | Optionaler, exakt passender Sensoradapter | AMD-SDK-Kandidat identifiziert; tatsächlicher Sensor-Readback offen |
+| CPU-Paketwatt / Temperatur | Eigener fester PawnIO-Leseadapter, öffentliche AMD-Energiezähler und Tctl | Auf HP8E35/F.13/8940HX mit bereits laufendem PawnIO2.2.0 und signiertem Modul0.2.11 gemessen; expliziter UAC-Leseprozess, frische Baseline nach Pause; andere Geräte/Versionen offen |
 | Tastaturfarbe / Anzeigemodus | Eigener BIOS-WMI-Transport | Vier-Zonen-Farben und eigene Farben/Firmware-Voreinstellung auf 8E35/F.13 manuell freigegeben; vollständiger Readback/Restore sowie persistierte Recovery in getrennten Prozessen; allgemeine Helligkeit und Lifecycle offen |
 | Tastatureffekte / RGB pro Taste | Fähigkeitsabhängig WMI oder eigener HID-Adapter | Get-/Set-/Persistenzunterschiede gefunden; kein vollständiger Restore-Vertrag für alle Varianten |
 | HP-Leistungsprofile / GPU-Leistungsrahmen | Modellbezogene BIOS-WMI-Engine | Statische Befunde und begrenzter Statusreader; keine Write-Freigabe |

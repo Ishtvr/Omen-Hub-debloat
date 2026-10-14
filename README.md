@@ -2,7 +2,9 @@
 
 Eine native, leichtgewichtige Open-Source-Alternative zum OMEN Gaming Hub in Rust. Ziel sind HP-Systemkontrolle und die relevanten Tuning-Möglichkeiten von UXTU in einer einzigen Anwendung: ohne Werbung, Overlay, Telemetrie, Konto oder Hintergrund-Updater.
 
-**Status: native Diagnose, GPU-/VRAM-Taktsteuerung, vollständige GPU-V/F-Kurven, vier Tastaturzonen und eigene gespeicherte Profile; noch kein vollständiger Gaming-Hub-Ersatz.** Die NVIDIA-Steuerpfade sind auf dem Referenzgerät mit Readback und Restore validiert. Der GPU-Profil-Editor speichert globale Offsets oder vollständige Frequenzkurven über alle 127 vorhandenen Spannungsanker. Der gemeinsame Kurveneditor bietet dafür Punkt-/Bereichsbearbeitung, Shift/Alt/Strg-Gesten, Plateau und Verlauf. V/F-Kurven ermöglichen Tuning für Undervolting; ein hartes Spannungslimit und der physische Effekt unter Last sind damit nicht bewiesen. Unleashed, direkte mV-Offsets und VRAM-Spannungssteuerung bleiben gesperrt. Die vier HP-Systemprofile im Dashboard sind weiterhin ausdrücklich Vorschauen.
+**Status: native Diagnose mit qualifizierten CPU-Hardwaresensoren, GPU-/VRAM-Taktsteuerung, vollständige GPU-V/F-Kurven, vier Tastaturzonen und eigene gespeicherte Profile; noch kein vollständiger Gaming-Hub-Ersatz.** Die NVIDIA-Steuerpfade sind auf dem Referenzgerät mit Readback und Restore validiert. Der GPU-Profil-Editor speichert globale Offsets oder vollständige Frequenzkurven über alle 127 vorhandenen Spannungsanker. Der gemeinsame Kurveneditor bietet dafür Punkt-/Bereichsbearbeitung, Shift/Alt/Strg-Gesten, Plateau und Verlauf. V/F-Kurven ermöglichen Tuning für Undervolting; ein hartes Spannungslimit und der physische Effekt unter Last sind damit nicht bewiesen. Unleashed, direkte mV-Offsets und VRAM-Spannungssteuerung bleiben gesperrt. Die vier HP-Systemprofile im Dashboard sind weiterhin ausdrücklich Vorschauen.
+
+Auf **HP 8E35 / BIOS F.13 / Ryzen 9 8940HX** liest der eigene CPU-Adapter Paketenergie und die ausdrücklich als **Tctl** bezeichnete Steuertemperatur. **CPU-Sensoren …** fordert gezielt Windows-UAC für einen getrennten Leseprozess an; die Freigabe gilt nur für die laufende App-Sitzung. Voraussetzung sind der bereits installierte, laufende und exakt geprüfte **PawnIO 2.2.0**-Treiber sowie das beim Build eingebettete signierte **AMDFamily17 0.2.11**-Modul. Die Anwendung installiert oder startet keinen Treiber und lädt keine proprietäre AMD-SDK-DLL. Die Wattzahl ist ein Energie-Mittelwert über das angezeigte Messintervall; die erste Baseline enthält noch keinen Wattwert. Quelle, geprüfte Hashes, Buildvorbereitung und Grenzen: [CPU-Sensoren](docs/CPU_SENSORS.md).
 
 Der neue Beleuchtungseditor speichert vier RGB-Farben und die Auswahl zwischen eigenen statischen Farben und Firmware-Voreinstellung. Auf 8E35/F.13 sind der direkte BIOS-Schreibpfad, vollständiger Readback und Restore in kurzen Proben sowie getrennten Apply-/Recovery-Prozessen validiert. Speichern verändert keine Hardware; **Firmware prüfen …**, **Gesamtes Profil anwenden …** und **Original wiederherstellen …** sind getrennte Aktionen mit Windows-UAC. Helligkeitsprozente, Animationen, automatische Wiederanwendung und Betrieb ohne die noch laufenden HP-Controller bleiben offen.
 
@@ -21,6 +23,7 @@ cargo run -p omen-hub-plus-plus -- gpu-capabilities
 cargo run -p omen-hub-plus-plus -- profile-list
 cargo run -p omen-hub-plus-plus -- hp-read
 cargo run -p omen-hub-plus-plus -- keyboard-read
+cargo run -p omen-hub-plus-plus -- cpu-sensor-status
 cargo run -p omen-hub-plus-plus -- plan unleashed
 ```
 
@@ -33,7 +36,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps
 
 Der Release-Build liegt danach in `dist/Omen Hub++.exe`. Er verwendet Windows und die vorhandenen NVIDIA-Treiberbibliotheken; keine separate Rust-Laufzeit und kein OMEN-Dienst werden für die implementierten Diagnosefunktionen benötigt. Fehlende Treiberabfragen ergeben „Nicht verfügbar“, keine erfundenen Messwerte. Das erste Inventar wird über Windows-WMI abgefragt.
 
-Das Fenster zeigt GPU- und CPU-Leistung vor den Systemdetails und aktualisiert die Sensoren alle drei Sekunden. Schließen oder Minimieren versteckt es im Tray. Im Tray werden keine Sensoren periodisch abgefragt und NVIDIA-Sitzungen freigegeben; beim Öffnen beginnt die CPU-Auslastungsmessung mit einer frischen Zeitbasis. Rechtsklick auf das Tray-Symbol bietet Öffnen und Beenden. `--tray` startet direkt verborgen. **GPU-Profile …** öffnet den nativen GPU-Editor, **Beleuchtung …** den Vier-Zonen-Editor. Der optionale, feste Windows-Anmeldungseintrag wird getrennt eingerichtet und führt nur ausdrücklich bestätigte, für den Start freigegebene Profilversionen aus; Beleuchtungssettings sind noch nicht dafür freigegeben: [GPU und Profile](docs/GPU_PROFILES.md), [Beleuchtungseditor](docs/KEYBOARD_UI.md).
+Die optionale CPU-Modulvorbereitung erfolgt **vor** dem Cargo-/Release-Build. Dieses Skript lädt ausschließlich das feste öffentliche Modulrelease samt entsprechenden Quellen und Lizenz nach ignorierter `.tools/pawnio/`; es greift nicht auf Hardware oder Treiberdienste zu:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-cpu-module.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
+```
+
+Ohne vorbereitetes Modul bleibt CPU-Paketleistung/Tctl nicht verfügbar. Mit Modul gehören `dist/third-party/PawnIO.Modules/AMDFamily17.p`, das vollständige Quellarchiv und `COPYING` zum ausgelieferten Paket. Der LGPL-2.1-or-later-Modulanteil ist getrennt vom eigenen MIT-Rust-Code lizenziert; ein Treiber wird nicht mitgeliefert. Die Runtime benötigt keine Downloads.
+
+Das Fenster zeigt zuerst GPU-Watt und Temperatur, direkt danach CPU-Leistung und Temperatur, vor Systemdetails und Profilkontrollen. Sichtbare Sensoren werden alle drei Sekunden aktualisiert. Schließen oder Minimieren versteckt es im Tray. Im Tray und bei Suspend werden keine Sensoren periodisch abgefragt; NVIDIA-Sitzungen sowie CPU-Treiber-/Modulsitzung und Energie-Baseline werden freigegeben. Der UI-Worker und ein bereits freigegebener CPU-Leseprozess warten dann blockierend. Öffnen, Resume, Refresh und AC-Wechsel beginnen mit einer frischen CPU-Messbasis. Rechtsklick auf das Tray-Symbol bietet Öffnen und Beenden. `--tray` startet direkt verborgen. **CPU-Sensoren …** im Footer aktiviert den Reader, **CPU-Sensoren aus** beendet die Sitzung. **GPU-Profile …** öffnet den nativen GPU-Editor, **Beleuchtung …** den Vier-Zonen-Editor. Der optionale, feste Windows-Anmeldungseintrag wird getrennt eingerichtet und führt nur ausdrücklich bestätigte, für den Start freigegebene Profilversionen aus; Beleuchtungssettings sind noch nicht dafür freigegeben: [GPU und Profile](docs/GPU_PROFILES.md), [Beleuchtungseditor](docs/KEYBOARD_UI.md).
 
 ## Funktionsstand
 
@@ -51,7 +63,7 @@ Das Fenster zeigt GPU- und CPU-Leistung vor den Systemdetails und aktualisiert d
 | Neustart-Wiederherstellung | Fester, geschützter Einstieg nach Windows-Benutzeranmeldung; überprüfter Task-Aufruf, kein echter Neustarttest |
 | CPU-Auslastung | Windows-CPU-Zeitdifferenzen, implementiert; derzeit 1–64 logische Prozessoren in einer Prozessorgruppe |
 | CPU-Takt (Windows) | Durchschnitt der von Windows gemeldeten MHz, implementiert; kein gemessener Boost-/Effektivtakt |
-| CPU-Paketleistung und Prozessortemperatur | Noch nicht verfügbar; AMD-SDK-Sensorpfad identifiziert, aber auf dem Gerät noch nicht validiert |
+| CPU-Paketleistung und Tctl | Feste PawnIO-/AMD-RAPL-Leseoperationen auf 8E35/F.13/8940HX mit exakt geprüftem Treiber/Modul; nach expliziter UAC-Freigabe, Energie-Mittelwert samt Intervall, erste Baseline ohne Wattwert |
 | Native Oberfläche, Tray, AC-/Standby-Ereignisse | Implementiert; Suspend/Resume auf Hardware noch zu prüfen |
 | Quiet/Balanced/Performance/Unleashed | Vorschau; nicht anwendbar |
 | Lüfterkurven | Getestete Interpolation/Failsafe-Policy, noch kein EC-/WMI-Adapter |
@@ -61,11 +73,19 @@ Das Fenster zeigt GPU- und CPU-Leistung vor den Systemdetails und aktualisiert d
 | Tastaturtyp / RGB- und Helligkeitszustand | Native feste GETs auf 8E35/F.13 validiert: vier Zonen mit Nummernblock, vollständige 128-Byte-Bilder; Helligkeit bleibt ein Rohbyte |
 | Vier-Zonen-Beleuchtungsprofile | Nativer Hex-/Farbauswahl-Editor, Save/Check/Apply/Restore; RGB und eigene statische Farben versus Firmware-Voreinstellung direkt über BIOS auf 8E35/F.13 validiert, nur exakte Moduszustände 0x64/0xE4 |
 | Helligkeitsprozente, Aus-/Animationsmodi und Einzeltasten-RGB | Keine freigegebenen Schreibadapter; automatische Beleuchtungs-Wiederanwendung ebenfalls nicht freigegeben |
-| Privilegierter Hardware-Dienst | Nicht implementiert; feste kurzlebige UAC-Prozesse für Steueraktionen |
+| Privilegierter Hardware-Dienst | Nicht implementiert; feste kurzlebige UAC-Prozesse für Steueraktionen und ein gesonderter, sitzungsgebundener CPU-Leseprozess |
 
 Sensoren beziehen sich derzeit auf die erste von NVIDIA enumerierte GPU. Bei unterschiedlichen NVAPI-/NVML-Namen werden die Messungen nicht zusammengeführt. Mehrere gleichnamige NVIDIA-GPUs benötigen später eine Zuordnung über PCI-Identität.
 
-CPU-Auslastung misst aktive Prozessorzeit und ist kein Wattwert. Der Windows-Takt kann vom tatsächlichen Boost-Takt abweichen. CPU-Paketleistung und Prozessortemperatur bleiben ausdrücklich „Nicht verfügbar“, bis ein geprüfter Hardwareadapter existiert. Ein CPU-Leistungslimit oder eine ACPI-Thermalzone wird nicht als Ersatzmesswert angezeigt.
+CPU-Auslastung misst aktive Prozessorzeit und ist kein Wattwert. Der Windows-Takt bleibt ein OS-Wert und kein gemessener Boost-/Effektivtakt. CPU-Paketleistung/Tctl bleiben ohne qualifizierte Komponenten und gezielte Freigabe „Nicht verfügbar“. Ein CPU-Leistungslimit oder eine ACPI-Thermalzone wird nicht als Ersatzmesswert angezeigt. Fehler verwerfen alte Messwerte; deutsche Hinweise unterscheiden Support, Windows-Freigabe, Verbindung und Messung samt passender Wiederherstellung. Die exakte Ursache wird separat als `last-cpu-error.json` gespeichert und mit `cpu-sensor-status` ausgegeben; dieser letzte Fehler ist kein Live-Sitzungsstatus.
+
+Für eine separate feste CPU-Leseprobe im bereits erhöhten Terminal:
+
+```powershell
+& '.\dist\Omen Hub++.exe' cpu-hardware-read | Out-String
+```
+
+Der normale UI-Prozess startet für die gezielte UAC-Anfrage zunächst einen vorübergehenden Launch-Prozess; dieser meldet die genehmigte Leseprozess-ID zurück und endet. Der lokale CPU-Kanal erlaubt ausschließlich `Sample`, `Pause` und `Stop`, mit Benutzer-/SYSTEM-Zugriff, beiden Prozess-IDs, Sitzungs-Token, Schema, Sequenz und begrenzten Antworten. Er bietet keine Tuner, frei wählbaren Register oder Treiberinstallation.
 
 `hp-read` und `keyboard-read` sind separate, feste lesende BIOS-Abfragen, die nicht im Dashboard und nicht als Heartbeat laufen. Sie sind auf das untersuchte Board 8E35 mit BIOS F.13 begrenzt. Der Provider verweigert den Zugriff im nicht erhöhten Prozess (`0x80041003`). In einem als Administrator gestarteten Terminal:
 
@@ -102,9 +122,9 @@ Ziel sind weniger als 50 MB RAM im Tray-Leerlauf (vom Benutzer am 13. Oktober 20
 
 ## Projektaufbau und Fahrplan
 
-* `crates/core`: Hardware-unabhängige Profile, Diagnosedaten, Lüfter- und Heartbeat-Policies.
-* `crates/platform`: Windows-WMI, Power-API, NVAPI/NVML, validierter GPU-Controller, Profil-/Transaktionsspeicher und geschützter Anmeldestart.
-* `crates/app`: Standalone-Anwendung mit nativer Oberfläche, Tray und Diagnose-CLI.
+* `crates/core`: Hardware-unabhängige Profile, Diagnosedaten, CPU-Energie-/Tctl-Umrechnung, Lüfter- und Heartbeat-Policies.
+* `crates/platform`: Windows-WMI, Power-API, NVAPI/NVML, qualifizierter fester CPU-Reader, validierter GPU-Controller, Profil-/Transaktionsspeicher und geschützter Anmeldestart.
+* `crates/app`: Standalone-Anwendung mit nativer Oberfläche, Tray, sitzungsgebundener CPU-Lesebrücke und Diagnose-CLI.
 * `docs`: Architektur, Fahrplan, Modellbefunde und Reverse-Engineering-Protokoll.
 * `scripts`: Reproduzierbare Release- und lokale Analysewerkzeuge.
 
@@ -114,6 +134,6 @@ Die lokale Analyse von HP-Dateien liegt ausschließlich in `.local/`; Werkzeuge 
 
 ## Referenzen
 
-Die [OmenMon-Dokumentation](https://omenmon.github.io/cli) und [OmenHwCtl](https://github.com/GeographicCone/OmenHwCtl) dokumentieren vorhandene HP-Schnittstellen. Daraus folgt keine bestätigte Unterstützung dieses Modells. Für NVIDIA verwenden wir die [öffentlichen NVAPI-Header](https://github.com/NVIDIA/nvapi) und [NVML-Geräteabfragen](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html). Die spätere Ryzen-Anbindung orientiert sich am [libryzenadj-Header](https://github.com/FlyGoat/RyzenAdj/blob/master/lib/ryzenadj.h).
+Die [OmenMon-Dokumentation](https://omenmon.github.io/cli) und [OmenHwCtl](https://github.com/GeographicCone/OmenHwCtl) dokumentieren vorhandene HP-Schnittstellen. Daraus folgt keine bestätigte Unterstützung dieses Modells. Für NVIDIA verwenden wir die [öffentlichen NVAPI-Header](https://github.com/NVIDIA/nvapi) und [NVML-Geräteabfragen](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html). Der CPU-Reader folgt dem öffentlichen [PawnIO-Protokoll](https://github.com/namazso/PawnIO/blob/9d52965895588b0ffa3703b72eec75ba19f4ccc0/PawnIO/include/pawnio_um.h) und dem signierten [PawnIO.Modules-Release 0.2.11](https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11). Die spätere CPU-Tuning-Anbindung orientiert sich am [libryzenadj-Header](https://github.com/FlyGoat/RyzenAdj/blob/master/lib/ryzenadj.h).
 
 Eigener Code: MIT. Abhängigkeiten und ihre Lizenzen: [THIRD_PARTY.md](THIRD_PARTY.md). Nicht mit HP oder NVIDIA verbunden oder von ihnen unterstützt.

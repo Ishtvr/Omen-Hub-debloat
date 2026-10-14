@@ -1,6 +1,6 @@
 # Third-party references and dependencies
 
-Omen Hub++ contains original Rust code. OmenMon/OmenHwCtl are references; their implementations have not been copied or linked.
+Omen Hub++ contains original Rust code licensed under MIT. An optional embedded CPU sensor module is a separately licensed LGPL-2.1-or-later component. OmenMon/OmenHwCtl are references; their implementations have not been copied or linked.
 
 Direct Rust dependencies are `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. The exact dependency graph is locked in `Cargo.lock`; review each dependency's license and redistribution requirements before distributing release packages. This list is not a complete set of notices for every transitive dependency.
 
@@ -9,5 +9,13 @@ Direct Rust dependencies are `serde`, `serde_json`, `wmi`, `windows`, `windows-s
 The NVIDIA FFI uses public ABI definitions and function identifiers from [NVIDIA/nvapi](https://github.com/NVIDIA/nvapi) and the [NVML documentation](https://docs.nvidia.com/deploy/nvml-api/latest/index.html). NVIDIA's SDK header repository uses MIT; driver DLLs are loaded from the installed Windows driver and are not bundled here.
 
 NVAPI header attribution: Copyright (c) 2019–2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: MIT. The MIT permission and warranty text is provided in `LICENSE`.
+
+The optional CPU reader uses the public [PawnIO device protocol](https://github.com/namazso/PawnIO/blob/9d52965895588b0ffa3703b72eec75ba19f4ccc0/PawnIO/include/pawnio_um.h). Its fixed read packets, lifetimes and original Rust energy/Tctl conversions are implemented in this repository. The runtime requires an already installed and running **PawnIO 2.2.0** driver with SHA-256 `FCA6E7D58B0CF38DBB913A2B9E532F48629145D395F454B16A9F58E97B8D3940`. No PawnIO driver binary or installer is bundled; Omen Hub++ does not install, start or stop it.
+
+When staged at build time, the binary embeds the unmodified signed **AMDFamily17.bin**, 10652 bytes, from [PawnIO.Modules 0.2.11](https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11), SHA-256 `DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91`. Module attribution: Copyright (C) 2025 namazso. SPDX-License-Identifier: **LGPL-2.1-or-later**. The corresponding source is [commit 52a7e536dff3e53c96917a28caac5e0fa6510696](https://github.com/namazso/PawnIO.Modules/tree/52a7e536dff3e53c96917a28caac5e0fa6510696); its `AMDFamily17.p` header and `COPYING` supply the license. This module retains its own license alongside the MIT application.
+
+`scripts/prepare-cpu-module.ps1` downloads the pinned signed release and corresponding source/license only during explicit build preparation into ignored `.tools/pawnio/`. `crates/platform/build.rs` checks module size and SHA-256 before embedding. `scripts/build-release.ps1` includes `AMDFamily17.p`, the complete `source-0.2.11.zip`, `COPYING` and CPU integration notes under `dist/third-party/PawnIO.Modules/`. Distribute these files with builds containing the module. The published Rust source includes the integration/build logic so it can be modified and rebuilt; the installed driver independently enforces module signatures. Builds without the staged module leave CPU hardware values unavailable. See [CPU_SENSORS.md](docs/CPU_SENSORS.md) for the exact runtime contract and qualification boundary.
+
+The installed AMD Ryzen Master SDK, proprietary HP modules and diagnostic driver probes are local research sources only. None is loaded or copied into the CPU runtime. Linux [RAPL](https://github.com/torvalds/linux/blob/master/arch/x86/events/rapl.c) and [k10temp](https://github.com/torvalds/linux/blob/master/drivers/hwmon/k10temp.c) are public register/units references; the Rust calculation code is original.
 
 [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) is a planned optional native dependency, not included in this build. Its LGPL-3.0 terms, driver requirements and CPU-family support must be reviewed before integration or redistribution. No HP assemblies, HP drivers, WinRing0 binaries or decompiled code are distributed.

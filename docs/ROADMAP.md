@@ -9,7 +9,7 @@ Omen Hub++ soll alle praktisch nutzbaren OMEN-Hardwarefunktionen in einer native
 - [x] GPU-Status-/Power-Payload und Heartbeat-Einstieg statisch finden.
 - [x] Eigenständige, lesende NVIDIA-Telemetrie und JSON-Diagnose erstellen.
 - [x] CPU-Auslastung und qualifizierten Windows-Takt ohne zusätzlichen Treiber anbinden.
-- [x] Statische CPU-Sensorpfade für 8940HX untersuchen: AMD Ryzen Master SDK als Kandidat für Package-Watt und Temperatur identifizieren.
+- [x] Statische CPU-Sensorpfade für 8940HX untersuchen; AMD-SDK-Init-/UnInit-Seiteneffekte und Installationsfallback erkennen und diese Runtime-Route ausschließen.
 - [x] Tastaturmodellroute für 8E35, Beleuchtungs-GET-/SET-Verträge und Hintergrundaufgaben im installierten Hub untersuchen.
 - [x] Native BIOS-WMI-Abbildung und virtuellen Lampentreiber mit Ghidra/PyGhidra-MCP statisch nachvollziehen.
 - [x] Feste lesende Tastaturerfassung vorbereiten; unelevierter Fehler vor BIOS-Methodenaufruf nachgewiesen.
@@ -17,7 +17,8 @@ Omen Hub++ soll alle praktisch nutzbaren OMEN-Hardwarefunktionen in einer native
 - [x] Direkte Vier-Zonen-RGB- und statisch/Firmware-Modus-Setter auf 8E35/F.13 mit vollständigem Readback/Restore validieren; dauerhaftes Apply und Recovery in getrennten Prozessen prüfen.
 - [ ] Tastatur-Lifecycle bei Reboot, Suspend/Resume und Hotkeys sowie Betrieb ohne ursprüngliche HP-Controller messen; Helligkeit/Aus/Animationen und andere Tastaturtypen separat qualifizieren.
 - [ ] Notwendige Hersteller-Lifecycle-Funktionen in der eigenen Engine übernehmen und vollständigen Ersatz ohne originale HP-Omen-Controller nachweisen.
-- [ ] CPU-Sensoradapter mit echtem Watt-/Temperatur-Readback und geprüftem SDK-Lifecycle auf 8E35/F.13 validieren.
+- [x] Eigene feste PawnIO-/AMD-RAPL-Leseoperationen auf 8E35/F.13/8940HX validieren: Paketenergie-Mittelwert mit Intervall, erste Baseline ohne Watt, ausdrücklich bezeichnetes Tctl, unveränderte HWCR-/GPU-Steuerbilder und vorhandene Treiberzustände.
+- [ ] CPU-Reader bei tatsächlichem Standby/Resume, AC-Wechsel und längerem Sensorbetrieb prüfen; weitere CPU-/Board-/BIOS-/Treiberkombinationen jeweils separat qualifizieren.
 - [x] Feste GPU-Status-/SystemDesignData-GETs auf 8E35/F.13 messen; D-State 0 bleibt ohne erfundene Bedeutung erhalten, Original-Hub laut Benutzer Unleashed.
 - [ ] Bedeutung der tatsächlichen GPU-Status-Antwort auf 8E35/F.13 und Zuordnung zum Originalprofil klären.
 - [ ] HSA/CAP-RPC bis zum tatsächlichen WMI-/EC-/Treiberaufruf vollständig verfolgen.
@@ -33,6 +34,7 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [x] Hardware-unabhängige Modelle und transparente Profilvorschau.
 - [x] Lüfterinterpolation mit Behandlung fehlender/ungültiger Sensoren.
 - [x] Heartbeat-Lifecycle mit Entschärfung bei AC-Wechsel, Suspend, Resume und Fehler.
+- [x] Optionaler lesender CPU-Adapter mit exakter Identitäts-/Hashprüfung des bereits laufenden PawnIO 2.2.0 und signiertem AMDFamily17 0.2.11; query-only SCM, kein Installations-/Treiberstart- oder Tuningpfad.
 - [ ] Ein einzelner privilegierter Controller mit exklusivem Gerätezugriff; keine konkurrierenden HP-/Drittanbieter-Schleifen.
 - [x] Typisierter lesender HP-WMI-Transport mit festen GETs, Begrenzung auf 8E35/F.13 sowie strengen Datentyp-/Längen-/Rückgabecode-Prüfungen; Größe-0-Eingabe am Gerät validiert.
 - [x] Typisierter direkter HP-BIOS-Tastaturadapter für Capability `[1,0,0,0]`: vollständige RGB-Bilder, exakte Modusbytes 0x64/0xE4, dauerhafte Originale, Readback und Recovery; übrige Steuerbytes erhalten.
@@ -57,8 +59,11 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Native Windows-Oberfläche mit Tray, Profilvorschau und Sensoren.
 - [x] Sensortimer im Tray aussetzen; native Power-Events empfangen.
 - [x] Funktionstest für Inventar, Profilvorschau, Close-to-Tray und Beenden auf dem Referenzgerät.
-- [x] CPU-Auslastung und Windows-Takt zusammen mit GPU-Sensoren anzeigen; noch nicht validierte Messgrößen ausdrücklich kennzeichnen.
-- [ ] CPU-Temperatur, Package Power und gemessene Boost-/Effektivtakte anbinden.
+- [x] GPU-Watt und Temperatur zuerst, CPU-Auslastung, qualifizierten Windows-Takt und CPU-Hardwarewerte direkt danach vor Inventar/Profilkontrollen anzeigen.
+- [x] CPU-Paketleistung mit Energie-Mittelwert/Intervall und Tctl über einen expliziten, sitzungsgebundenen UAC-Leseprozess anzeigen; Standardzustand bleibt nicht verfügbar, Pause verwirft Reader/Baseline, Rückkehr beginnt frisch.
+- [x] Feste lokale CPU-IPC mit Benutzer-/SYSTEM-DACL, beiden Prozess-IDs, Sitzungs-Token, Schema/Sequenz und `Sample`/`Pause`/`Stop`; vorübergehender UAC-Launch und isoliertes begrenztes Inventar.
+- [x] Deutsche Support-/Freigabe-/Verbindungs-/Messfehler und passende Wiederherstellung, getrennte letzte technische Ursache ohne Hardwarejournaländerung.
+- [ ] Gemessene CPU-Boost-/Effektivtakte und CCD-/Kerntemperaturen anbinden; Windows-MHz und Tctl nicht dafür umdeuten.
 - [ ] Ausgewählten UI-Entwurf nativ umsetzen; CPU und GPU gemeinsam im ersten Blickfeld, Profile danach.
 - [x] Native GPU-Profile speichern, aktuellen Offset-Zustand anzeigen, anwenden und wiederherstellen; die HP-Systemmodi bleiben Vorschau.
 - [x] Native V/F-Kurvenbearbeitung mit vorhandenem Spannungsanker, Plateau-Frequenzziel und Erhalt eigener vollständiger Kurven bei Name-/VRAM-Änderungen.
@@ -71,6 +76,9 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [ ] Dienst nur für privilegierte Hardwarefunktionen; UI bleibt im Benutzerkonto.
 - [ ] Release-Speicherbudget, CPU-Leerlauf, Startzeit und Binärgröße reproduzierbar messen.
 - [x] Erstes Speicher-/CPU-Protokoll für den Diagnose-Release erstellen; aktuelles Tray-Ziel: 50 MB Working Set.
+- [x] Optionale Buildvorbereitung aus signiertem öffentlichen PawnIO.Modules 0.2.11, Größen-/Hashprüfung und LGPL-Quellen/Lizenzbeilage; keine Downloads oder Treiberpakete in der Runtime.
 - [ ] Hardwarematrix, Installationspaket, Abhängigkeitslizenzen und Wiederherstellungsanleitung.
 
 Die fertiggestellte Anwendung soll keine Telemetrie, Hintergrund-Updates, Werbung, Overlays, Registrierung oder Netzwerkpflicht enthalten. Das Entfernen von HP-Komponenten ist eine spätere, getrennte Funktion mit Wiederherstellungsplan; der aktuelle Prototyp deinstalliert oder stoppt nichts.
+
+Die CPU-Erweiterung erweitert die bestehende native Oberfläche code-first; sie führt keinen globalen Neuentwurf ein. Der Finish-Reviewer hat die einzelne Korrektur der deutschen Fehler-/Recoverytexte als `resolved` bewertet, Disposition `ship`, bei gültigen eigenen Client-/Footer-Recaptures. Aktive Fehler-/Messdarstellung, weitere DPI-Konfigurationen, vollständige Barrierefreiheit und reale Power-Übergänge sind damit nicht abgenommen. Aktuelle Release-, Test- und Speicherevidenz: [VALIDATION.md](VALIDATION.md).

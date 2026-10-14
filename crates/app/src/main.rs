@@ -1,6 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod cpu_sensor_bridge;
+#[cfg(windows)]
 mod curve_ui;
 #[cfg(windows)]
 mod curve_widget;
@@ -57,6 +59,10 @@ fn run() -> Result<(), String> {
         return keyboard_ui::run(args.get(1).cloned());
     }
     #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "dashboard-preview") && args.len() == 2 {
+        return ui::preview(std::path::Path::new(&args[1]));
+    }
+    #[cfg(windows)]
     if args.first().is_some_and(|a| a == "keyboard-preview") && args.len() == 3 {
         return keyboard_ui::preview(args[1].clone(), std::path::Path::new(&args[2]));
     }
@@ -77,6 +83,25 @@ fn run() -> Result<(), String> {
         return profile_commands::run(&args);
     }
     match args.first().map(String::as_str) {
+        #[cfg(windows)]
+        Some("cpu-sensor-status") if args.len() == 1 => {
+            let record = omen_platform::profile_store::ProfileStore::user_data()?.cpu_error()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({"last_cpu_error":record}))
+                    .map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
+        Some("cpu-sensor-launch") if args.len() == 3 => {
+            let parent = args[2].parse::<u32>().map_err(|e| e.to_string())?;
+            return cpu_sensor_bridge::launch(&args[1], parent);
+        }
+        #[cfg(windows)]
+        Some("cpu-sensor-child") if args.len() == 3 => {
+            let parent = args[2].parse::<u32>().map_err(|e| e.to_string())?;
+            return cpu_sensor_bridge::child(&args[1], parent);
+        }
         Some("diagnose") if args.len() == 1 => {
             #[cfg(windows)]
             let mut cpu = omen_platform::Cpu::new();
@@ -131,6 +156,24 @@ fn run() -> Result<(), String> {
             );
         }
         #[cfg(windows)]
+        Some("cpu-hardware-read") if args.len() == 1 => {
+            let inventory = omen_platform::inventory();
+            let mut reader = omen_platform::CpuHardwareReader::new(&inventory)?;
+            let baseline = reader.sample()?;
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            let measured = reader.sample()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "board":inventory.board,"bios":inventory.bios,
+                    "driver_sha256":omen_platform::CPU_DRIVER_SHA256,
+                    "module_sha256":omen_platform::CPU_MODULE_SHA256,
+                    "baseline":baseline,"measured":measured,
+                }))
+                .map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
         Some("keyboard-read") if args.len() == 1 => {
             let inventory = omen_platform::inventory();
             let state = omen_platform::read_hp_keyboard_state(&inventory)?;
@@ -148,7 +191,7 @@ fn run() -> Result<(), String> {
             );
         }
         Some("--help" | "-h") => println!(
-            "Omen Hub++ 0.1.0\n\n  omen-hub-pp.exe           Native dashboard\n  omen-hub-pp.exe --tray    Start hidden in tray\n  omen-hub-pp.exe gpu-ui [id] Native GPU profile editor\n  omen-hub-pp.exe curve-ui [id] Native GPU V/F and CPU/GPU fan curve workbench\n  omen-hub-pp.exe keyboard-ui [id] Native four-zone RGB profile editor\n  omen-hub-pp.exe keyboard-preview <id> <bmp-path> Render our native lighting controls\n  omen-hub-pp.exe curve-preview gpu|cpu-fan|gpu-fan <bmp-path> Render only our widget\n  omen-hub-pp.exe diagnose  Read-only JSON diagnostics\n  omen-hub-pp.exe inventory Read-only system inventory\n  omen-hub-pp.exe hp-read   HP GPU-status GET (8E35/F.13 only)\n  omen-hub-pp.exe hp-performance-read  HP GPU status and system design GETs\n  omen-hub-pp.exe keyboard-read  Read-only keyboard state (8E35/F.13 only)\n  omen-hub-pp.exe keyboard-validate-colors Fixed one-byte RGB trial with complete restore\n  omen-hub-pp.exe keyboard-validate-lighting Fixed RGB/static-preset trial with complete restore\n  omen-hub-pp.exe gpu-capabilities [uuid] Read GPU offset limits and feature support\n  omen-hub-pp.exe gpu-curve-read  Read the complete Graphics V/F domain\n  omen-hub-pp.exe gpu-validate-memory-curve Fixed memory-after-curve preservation trial; full restore\n  omen-hub-pp.exe gpu-validate-curve Fixed -15 MHz Graphics frequency trial; full restore\n  omen-hub-pp.exe gpu-validate Two fixed +/-15 MHz GPU and +/-24 MHz VRAM trials; restore after each\n  omen-hub-pp.exe profile-catalog|profile-list\n  omen-hub-pp.exe profile-create <id> <name>\n  omen-hub-pp.exe profile-show|profile-plan|profile-apply <id>\n  omen-hub-pp.exe profile-restore  Recover original state from the latest journal\n  omen-hub-pp.exe profile-set <id> <feature> <value>\n  omen-hub-pp.exe profile-set-vf <id> <anchor-mV> <target-MHz> Save a full plateau curve; no write\n  omen-hub-pp.exe profile-storage|profile-migrate-legacy\n  omen-hub-pp.exe profile-import <json-file>\n  omen-hub-pp.exe profile-startup-enable <id>\n  omen-hub-pp.exe profile-startup-disable|profile-startup-apply|profile-startup-status\n  omen-hub-pp.exe plan quiet|balanced|performance|unleashed\n\nOnly validated adapters may write hardware. Built-in HP profiles remain previews."
+            "Omen Hub++ 0.1.0\n\n  omen-hub-pp.exe           Native dashboard\n  omen-hub-pp.exe --tray    Start hidden in tray\n  omen-hub-pp.exe gpu-ui [id] Native GPU profile editor\n  omen-hub-pp.exe curve-ui [id] Native GPU V/F and CPU/GPU fan curve workbench\n  omen-hub-pp.exe keyboard-ui [id] Native four-zone RGB profile editor\n  omen-hub-pp.exe keyboard-preview <id> <bmp-path> Render our native lighting controls\n  omen-hub-pp.exe curve-preview gpu|cpu-fan|gpu-fan <bmp-path> Render only our widget\n  omen-hub-pp.exe diagnose  Read-only JSON diagnostics\n  omen-hub-pp.exe inventory Read-only system inventory\n  omen-hub-pp.exe cpu-hardware-read  Fixed measured CPU energy/Tctl GETs; administrator required\n  omen-hub-pp.exe cpu-sensor-status  Last CPU error with technical detail\n  omen-hub-pp.exe dashboard-preview <bmp-path> Render our own native dashboard client\n  omen-hub-pp.exe hp-read   HP GPU-status GET (8E35/F.13 only)\n  omen-hub-pp.exe hp-performance-read  HP GPU status and system design GETs\n  omen-hub-pp.exe keyboard-read  Read-only keyboard state (8E35/F.13 only)\n  omen-hub-pp.exe keyboard-validate-colors Fixed one-byte RGB trial with complete restore\n  omen-hub-pp.exe keyboard-validate-lighting Fixed RGB/static-preset trial with complete restore\n  omen-hub-pp.exe gpu-capabilities [uuid] Read GPU offset limits and feature support\n  omen-hub-pp.exe gpu-curve-read  Read the complete Graphics V/F domain\n  omen-hub-pp.exe gpu-validate-memory-curve Fixed memory-after-curve preservation trial; full restore\n  omen-hub-pp.exe gpu-validate-curve Fixed -15 MHz Graphics frequency trial; full restore\n  omen-hub-pp.exe gpu-validate Two fixed +/-15 MHz GPU and +/-24 MHz VRAM trials; restore after each\n  omen-hub-pp.exe profile-catalog|profile-list\n  omen-hub-pp.exe profile-create <id> <name>\n  omen-hub-pp.exe profile-show|profile-plan|profile-apply <id>\n  omen-hub-pp.exe profile-restore  Recover original state from the latest journal\n  omen-hub-pp.exe profile-set <id> <feature> <value>\n  omen-hub-pp.exe profile-set-vf <id> <anchor-mV> <target-MHz> Save a full plateau curve; no write\n  omen-hub-pp.exe profile-storage|profile-migrate-legacy\n  omen-hub-pp.exe profile-import <json-file>\n  omen-hub-pp.exe profile-startup-enable <id>\n  omen-hub-pp.exe profile-startup-disable|profile-startup-apply|profile-startup-status\n  omen-hub-pp.exe plan quiet|balanced|performance|unleashed\n\nOnly validated adapters may write hardware. Built-in HP profiles remain previews."
         ),
         _ => return Err("Use --help for supported commands".into()),
     }

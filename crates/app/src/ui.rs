@@ -1,5 +1,5 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
-use omen_core::{APP_NAME, Profile, Snapshot};
+use omen_core::{APP_NAME, CpuHardwareStatus, Profile, Snapshot};
 use std::{
     cell::Cell,
     ptr,
@@ -16,21 +16,24 @@ use windows_sys::Win32::{
 
 const UPDATE: u32 = WM_APP + 1;
 const TRAY: u32 = WM_APP + 2;
+const CPU_READER_PID: u32 = WM_APP + 61;
 const REFRESH: usize = 101;
 const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
+const CPU_SENSORS: usize = 106;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum Request {
     Refresh,
     Visibility(bool),
     Suspend,
     Resume,
     Power,
+    CpuSensors,
     Stop,
 }
 
@@ -40,6 +43,7 @@ struct State {
     details: Cell<HWND>,
     profile: Cell<HWND>,
     preview: Cell<HWND>,
+    cpu_sensor: Cell<HWND>,
     font: Cell<HFONT>,
     tray: Cell<bool>,
     taskbar_message: u32,
@@ -95,12 +99,43 @@ fn snapshot_text(snapshot: &Snapshot) -> String {
         let watts = cpu
             .package_power_w
             .map(|v| format!("{v:.1} W"))
-            .unwrap_or_else(|| "Nicht verfügbar – Hardwareanbindung ausstehend".into());
+            .unwrap_or_else(|| {
+                if cpu.hardware.is_some() {
+                    "Wird gemessen".into()
+                } else {
+                    "Nicht verfügbar".into()
+                }
+            });
         let temperature = cpu
             .temperature_c
             .map(|v| format!("{v:.1} °C"))
-            .unwrap_or_else(|| "Nicht verfügbar – Hardwareanbindung ausstehend".into());
-        text.push_str(&format!("CPU LEISTUNG\r\nAuslastung: {usage}    Takt (Windows): {clock}\r\nCPU-Paketleistung: {watts}\r\nCPU-Temperatur: {temperature}\r\nDer Windows-Takt ist kein gemessener Boost- oder Effektivtakt.\r\n\r\n"));
+            .unwrap_or_else(|| "Nicht verfügbar".into());
+        let detail = cpu.hardware.as_ref().map_or_else(String::new, |h| {
+            let interval = h.power_interval_ms.map_or("Energie-Baseline".into(), |ms| {
+                format!("Mittelwert über {:.2} s", ms as f64 / 1000.0)
+            });
+            format!(" · {interval}")
+        });
+        let kind = if cpu.hardware.is_some() {
+            " (Tctl)"
+        } else {
+            ""
+        };
+        text.push_str(&format!("CPU LEISTUNG\r\nAuslastung: {usage}    Takt (Windows): {clock}\r\nCPU-Paketleistung: {watts}{detail}\r\nCPU-Temperatur{kind}: {temperature}\r\nDer Windows-Takt ist kein gemessener Boost- oder Effektivtakt.\r\n"));
+        let status: String = match &snapshot.cpu_hardware_status {
+            CpuHardwareStatus::Off => {
+                "CPU-Hardwaresensoren: über CPU-Sensoren … aktivieren.".into()
+            }
+            CpuHardwareStatus::Starting => {
+                "CPU-Sensoren: Windows-Freigabe wird angefordert …".into()
+            }
+            CpuHardwareStatus::Active => "Quelle: CPU-Energiezähler und Tctl über PawnIO.".into(),
+            CpuHardwareStatus::Paused => {
+                "CPU-Hardwaresensoren pausiert; neue Messbasis beim Öffnen.".into()
+            }
+            CpuHardwareStatus::Error(e) => cpu_error_message(e).into(),
+        };
+        text.push_str(&format!("{status}\r\n\r\n"));
     } else {
         text.push_str("CPU LEISTUNG\r\nDerzeit nicht verfügbar.\r\n\r\n");
     }
@@ -118,7 +153,7 @@ fn snapshot_text(snapshot: &Snapshot) -> String {
     } else {
         "HP-Schnittstelle derzeit nicht verfügbar.\r\n"
     });
-    text.push_str("Lüfter, MUX und RGB: noch nicht angebunden.\r\n");
+    text.push_str("Lüfter und MUX: noch nicht angebunden. RGB: Beleuchtung …\r\n");
     let count = i.warnings.len()
         + snapshot.warnings.len()
         + snapshot.gpu.as_ref().map_or(0, |g| g.warnings.len());
@@ -129,6 +164,54 @@ fn snapshot_text(snapshot: &Snapshot) -> String {
         );
     }
     text
+}
+
+fn cpu_error_message(detail: &str) -> &'static str {
+    if detail.starts_with("This build has no staged signed CPU module") {
+        "Diese App-Version enthält keinen CPU-Sensoradapter. Vollständigen Build verwenden."
+    } else if detail.contains("qualified only")
+        || detail.contains("family/model/stepping/package")
+        || detail.contains("requires Windows x64")
+    {
+        "CPU-Sensoren sind für dieses Gerät/BIOS nicht freigegeben. Geräteunterstützung prüfen."
+    } else if detail.starts_with("PawnIO must already be installed and running") {
+        "PawnIO fehlt oder läuft nicht. Sensor-Voraussetzungen in der Anleitung prüfen."
+    } else if detail.contains("hash differs")
+        || detail.contains("version/response differs")
+        || detail.contains("Embedded CPU module differs")
+        || detail.contains("Signed CPU module load")
+        || detail.contains("driver path")
+    {
+        "Treiber-/Modulversion nicht freigegeben. Passende Version von Omen Hub++ verwenden."
+    } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:") && detail.contains("1223") {
+        "CPU-Sensorfreigabe abgebrochen. Zum Aktivieren erneut CPU-Sensoren … wählen."
+    } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:")
+        || detail.starts_with("CPU driver access requires")
+    {
+        "Windows hat den CPU-Zugriff verweigert. Berechtigungen und PawnIO-Installation prüfen."
+    } else if detail.contains("pipe peer")
+        || detail.contains("server PID")
+        || detail.contains("stale or unrelated")
+    {
+        "CPU-Leseprozess konnte nicht sicher zugeordnet werden. App neu öffnen."
+    } else if detail.contains("failed to connect")
+        || detail.contains("disconnected")
+        || detail.contains("timed out")
+        || detail.contains("request pipe closed")
+    {
+        "CPU-Verbindung unterbrochen. Sensoren erneut aktivieren."
+    } else {
+        "CPU-Messung unterbrochen; alte Werte verworfen. Sensoren erneut aktivieren."
+    }
+}
+fn cpu_failed(snapshot: &mut Snapshot, detail: String) {
+    let message = cpu_error_message(&detail);
+    if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
+        let _=store.save_cpu_error(&serde_json::json!({"schema":1,
+            "recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t|t.as_secs()).ok(),
+            "user_message":message,"detail":detail}));
+    }
+    snapshot.cpu_hardware_status = CpuHardwareStatus::Error(detail);
 }
 
 fn worker(
@@ -146,6 +229,7 @@ fn worker(
     let mut suspended = false;
     let mut nvidia = None;
     let mut cpu = None;
+    let mut hardware: Option<crate::cpu_sensor_bridge::CpuSensorBridge> = None;
     let mut reopen_at = Instant::now();
     let publish = |snapshot: &Snapshot| {
         *shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
@@ -157,6 +241,23 @@ fn worker(
     loop {
         if visible && !suspended {
             snapshot.cpu = Some(cpu.get_or_insert_with(omen_platform::Cpu::new).sample());
+            if let Some(reader) = hardware.as_mut() {
+                match reader.sample() {
+                    Ok(readout) => {
+                        if let Some(cpu) = snapshot.cpu.as_mut() {
+                            cpu.package_power_w = readout.package_power_w;
+                            cpu.temperature_c = readout.temperature_c;
+                            cpu.warnings.extend(readout.warnings.clone());
+                            cpu.hardware = Some(readout);
+                        }
+                        snapshot.cpu_hardware_status = CpuHardwareStatus::Active;
+                    }
+                    Err(error) => {
+                        hardware = None;
+                        cpu_failed(&mut snapshot, error);
+                    }
+                }
+            }
         } else {
             cpu = None;
             snapshot.cpu = None;
@@ -184,6 +285,7 @@ fn worker(
             nvidia = None;
         }
         snapshot.power = omen_platform::power_status();
+        snapshot.cpu_reader_pid = hardware.as_ref().map(|r| r.process_id());
         publish(&snapshot);
         let request = if visible && !suspended {
             match rx.recv_timeout(Duration::from_secs(3)) {
@@ -199,6 +301,20 @@ fn worker(
         };
         match request {
             Some(Request::Stop) => break,
+            Some(Request::CpuSensors) => {
+                if hardware.is_some() {
+                    hardware = None;
+                    snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
+                } else if visible && !suspended {
+                    snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
+                    publish(&snapshot);
+                    match crate::cpu_sensor_bridge::CpuSensorBridge::start() {
+                        Ok(reader) => hardware = Some(reader),
+                        Err(e) => cpu_failed(&mut snapshot, e),
+                    }
+                }
+                cpu = None;
+            }
             Some(Request::Visibility(value)) => {
                 visible = value;
                 if value {
@@ -225,6 +341,23 @@ fn worker(
             }
             None => (),
         }
+        if let Some(reader) = hardware.as_mut() {
+            if !visible
+                || suspended
+                || matches!(
+                    request,
+                    Some(Request::Resume | Request::Refresh | Request::Power)
+                )
+            {
+                match reader.pause() {
+                    Ok(()) => snapshot.cpu_hardware_status = CpuHardwareStatus::Paused,
+                    Err(e) => {
+                        hardware = None;
+                        cpu_failed(&mut snapshot, e);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -246,15 +379,34 @@ fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
 
 // SAFETY: Called only on the UI thread for the live, owned State bound to hwnd.
 unsafe fn redraw(state: &State) {
-    let text = state
+    let data = state
         .snapshot
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
-        .map(snapshot_text);
+        .map(|s| (snapshot_text(s), s.cpu_hardware_status.clone()));
     unsafe {
-        if let Some(text) = text {
+        if let Some((text, status)) = data {
             SetWindowTextW(state.details.get(), wide(&text).as_ptr());
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+            EnableWindow(
+                state.cpu_sensor.get(),
+                (!matches!(status, CpuHardwareStatus::Starting)) as i32,
+            );
+            SetWindowTextW(
+                state.cpu_sensor.get(),
+                wide(
+                    if matches!(
+                        status,
+                        CpuHardwareStatus::Active | CpuHardwareStatus::Paused
+                    ) {
+                        "CPU-Sensoren aus"
+                    } else {
+                        "CPU-Sensoren …"
+                    },
+                )
+                .as_ptr(),
+            );
         }
     }
 }
@@ -413,14 +565,24 @@ unsafe extern "system" fn window_proc(
                 );
                 control(
                     "STATIC",
-                    "Schließen: im Tray weiterlaufen. Tray-Rechtsklick: Beenden.",
+                    "Schließen: Tray. Tray-Menü: Beenden.",
                     0,
-                    20,
+                    250,
                     601,
-                    550,
+                    330,
                     28,
                     0,
                 );
+                state.cpu_sensor.set(control(
+                    "BUTTON",
+                    "CPU-Sensoren …",
+                    WS_TABSTOP,
+                    20,
+                    596,
+                    215,
+                    34,
+                    CPU_SENSORS,
+                ));
                 control(
                     "BUTTON",
                     "Beleuchtung …",
@@ -446,6 +608,9 @@ unsafe extern "system" fn window_proc(
                 let id = wparam & 0xffff;
                 if id == REFRESH {
                     let _ = state.tx.send(Request::Refresh);
+                }
+                if id == CPU_SENSORS {
+                    let _ = state.tx.send(Request::CpuSensors);
                 }
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
@@ -496,6 +661,13 @@ unsafe extern "system" fn window_proc(
                 redraw(state);
                 0
             }
+            CPU_READER_PID => state
+                .snapshot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .and_then(|s| s.cpu_reader_pid)
+                .unwrap_or(0) as isize,
             WM_POWERBROADCAST => {
                 match wparam as u32 {
                     PBT_APMSUSPEND => {
@@ -574,6 +746,12 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
+    run_window(start_in_tray, None)
+}
+pub fn preview(path: &std::path::Path) -> Result<(), String> {
+    run_window(false, Some(path))
+}
+fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let shared = Arc::new(Mutex::new(None));
     let mut state = Box::new(State {
@@ -582,6 +760,7 @@ pub fn run(start_in_tray: bool) -> Result<(), String> {
         details: Cell::new(ptr::null_mut()),
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
+        cpu_sensor: Cell::new(ptr::null_mut()),
         font: Cell::new(ptr::null_mut()),
         tray: Cell::new(false),
         taskbar_message: 0,
@@ -637,7 +816,7 @@ pub fn run(start_in_tray: bool) -> Result<(), String> {
             &GUID_ACDC_POWER_SOURCE,
             DEVICE_NOTIFY_WINDOW_HANDLE,
         );
-        if initially_visible {
+        if initially_visible && preview.is_none() {
             ShowWindow(hwnd, SW_SHOW);
         }
         let mut message: MSG = std::mem::zeroed();
@@ -654,6 +833,13 @@ pub fn run(start_in_tray: bool) -> Result<(), String> {
             if IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
+            }
+            if message.message == UPDATE {
+                if let Some(path) = preview {
+                    let render = crate::curve_widget::render_window(hwnd, path);
+                    DestroyWindow(hwnd);
+                    break render;
+                }
             }
         };
         let _ = state.tx.send(Request::Stop);
@@ -676,5 +862,68 @@ pub fn run(start_in_tray: bool) -> Result<(), String> {
         }
         UnregisterClassW(class_name.as_ptr(), instance);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cpu_failure_copy_separates_permanent_support_from_approval_and_read_recovery() {
+        let missing = cpu_error_message(
+            "This build has no staged signed CPU module; use scripts/prepare-cpu-module.ps1",
+        );
+        assert!(missing.contains("Vollständigen Build"));
+        assert!(!missing.contains("scripts/"));
+        let unsupported =
+            cpu_error_message("CPU sensors are qualified only for HP8E35/F.13/Ryzen9 8940HX");
+        assert!(unsupported.contains("Gerät/BIOS"));
+        assert!(!unsupported.contains("erneut"));
+        let driver =
+            cpu_error_message("PawnIO driver hash differs from the measured 2.2.0 contract");
+        assert!(driver.contains("Treiber-/Modulversion"));
+        assert!(!driver.contains("erneut"));
+        assert!(
+            cpu_error_message(
+                "CPU-Sensorfreigabe nicht erfolgt: operation cancelled (os error 1223)"
+            )
+            .contains("abgebrochen")
+        );
+        assert!(cpu_error_message("CPU reader disconnected").contains("erneut aktivieren"));
+    }
+    #[test]
+    fn cpu_report_names_tctl_and_energy_mean_without_relabelling_windows_mhz() {
+        let hardware = omen_core::CpuHardwareSample {
+            schema: 1,
+            source: omen_core::CpuHardwareSource::PawnioAmdRapl,
+            temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
+            package_power_w: Some(55.0),
+            temperature_c: Some(82.0),
+            power_interval_ms: Some(1100),
+            warnings: vec![],
+        };
+        let mut snapshot = Snapshot {
+            cpu: Some(omen_core::CpuSample {
+                windows_clock_mhz: Some(2400),
+                package_power_w: hardware.package_power_w,
+                temperature_c: hardware.temperature_c,
+                hardware: Some(hardware),
+                ..Default::default()
+            }),
+            cpu_hardware_status: CpuHardwareStatus::Active,
+            ..Default::default()
+        };
+        let report = snapshot_text(&snapshot);
+        assert!(report.contains("CPU-Paketleistung: 55.0 W · Mittelwert über 1.10 s"));
+        assert!(report.contains("CPU-Temperatur (Tctl): 82.0 °C"));
+        assert!(report.contains("Takt (Windows): 2400 MHz"));
+        assert!(report.contains("kein gemessener Boost- oder Effektivtakt"));
+        assert!(report.find("NVIDIA SENSOREN").unwrap() < report.find("CPU LEISTUNG").unwrap());
+        assert!(report.find("CPU LEISTUNG").unwrap() < report.find("SYSTEM").unwrap());
+        snapshot.cpu = Some(omen_core::CpuSample::default());
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
+        let missing = snapshot_text(&snapshot);
+        assert!(missing.contains("CPU-Paketleistung: Nicht verfügbar"));
+        assert!(missing.contains("CPU-Temperatur: Nicht verfügbar"));
     }
 }

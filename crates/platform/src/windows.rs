@@ -1,6 +1,7 @@
 mod control_lease;
 mod controller;
 mod cpu;
+mod cpu_hardware;
 mod gpu;
 mod hp;
 mod nvidia;
@@ -10,12 +11,13 @@ mod vf;
 pub use control_lease::ControlLease;
 pub use controller::{Controller, RestoreState};
 pub use cpu::Cpu;
+pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
 pub use hp::{read_hp_gpu_status, read_hp_keyboard_state, read_hp_system_design};
 pub use nvidia::Nvidia;
 use omen_core::{Inventory, PowerStatus};
 pub use startup::{
-    StartupInstallation, authorize_startup_profile, verify_startup_installation,
+    StartupInstallation, authorize_startup_profile, current_user_sid, verify_startup_installation,
     verify_startup_profile,
 };
 use std::collections::HashMap;
