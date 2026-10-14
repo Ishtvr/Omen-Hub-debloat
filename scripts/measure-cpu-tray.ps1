@@ -15,6 +15,7 @@ public static class OmenCpuTrayMeasure {
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint owner);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd,StringBuilder value,int length);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd,uint message,UIntPtr value,IntPtr other);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
  [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW",CharSet=CharSet.Unicode)] static extern IntPtr Read(IntPtr hwnd,uint msg,UIntPtr p,StringBuilder value,uint flags,uint timeout,out UIntPtr result);
  [DllImport("user32.dll",EntryPoint="SendMessageTimeoutW")] static extern IntPtr Query(IntPtr hwnd,uint msg,UIntPtr p,IntPtr other,uint flags,uint timeout,out UIntPtr result);
  public static uint ReaderPid(IntPtr hwnd){UIntPtr result;if(Query(hwnd,0x803D,UIntPtr.Zero,IntPtr.Zero,2,1000,out result)==IntPtr.Zero)throw new Exception("Owned diagnostic did not respond");return (uint)result.ToUInt64();}
@@ -28,9 +29,13 @@ try{
  $taskDeadline=(Get-Date).AddSeconds(12);$taskWindow=[IntPtr]::Zero
  do{$taskWindow=[OmenCpuTrayMeasure]::Find([uint32]$taskParent.Id);if($taskWindow-ne[IntPtr]::Zero-and[OmenCpuTrayMeasure]::AllText($taskWindow)-match'Board: 8E35'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskDeadline)
  if($taskWindow-eq[IntPtr]::Zero){throw 'No owned dashboard.'}
+ [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]201),[IntPtr]::Zero)
+ $taskShowDeadline=(Get-Date).AddSeconds(3)
+ do{if([OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)){break};Start-Sleep -Milliseconds 50}while((Get-Date)-lt$taskShowDeadline)
+ if(-not[OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)){throw 'Owned open-window phase is not visible.'}
  [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]106),[IntPtr]::Zero)
  $taskDeadline=(Get-Date).AddSeconds(45)
- do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
+ do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
  if($taskText-notmatch'Quelle: CPU-Energiezähler und Tctl über PawnIO'){throw ('CPU activation failed: '+$taskText)}
  $taskReaderPid=[OmenCpuTrayMeasure]::ReaderPid($taskWindow)
  if($taskReaderPid-eq0){throw 'Cannot identify approved helper; refuse parent-only measurement.'}
@@ -41,12 +46,15 @@ try{
   Start-Sleep -Milliseconds 500
   [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]201),[IntPtr]::Zero)
   $taskDeadline=(Get-Date).AddSeconds(12)
-  do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
-  if($taskText-notmatch'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert'){throw 'CPU resume did not produce a fresh interval.'}
+  do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
+  if($taskText-notmatch'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){throw ('CPU resume did not produce a fresh interval: '+$taskText)}
   if([OmenCpuTrayMeasure]::ReaderPid($taskWindow)-ne$taskReaderPid){throw 'Resume changed approved helper identity.'}
  }
+ $taskParent.Refresh();$taskReader.Refresh()
+ $taskOpenCombinedMB=[math]::Round(($taskParent.WorkingSet64+$taskReader.WorkingSet64)/1000000,2)
  [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
  Start-Sleep -Seconds 5
+ if([OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)){throw 'Owned dashboard is visible; refuse a tray label.'}
  $taskParent.Refresh();$taskReader.Refresh()
  if($taskParent.WorkingSet64-le0-or$taskReader.WorkingSet64-le0){throw 'Cannot query both working sets; refuse incomplete measurement.'}
  if($taskParent.HasExited-or$taskReader.HasExited){throw 'Expected both owned processes to be idle and alive.'}
@@ -58,6 +66,8 @@ try{
   MeasuredAt=(Get-Date).ToString('o');DurationSeconds=$DurationSeconds
   ExecutableBytes=(Get-Item -LiteralPath $taskExe).Length
   ExecutableSHA256=(Get-FileHash -LiteralPath $taskExe).Hash
+  OpenCombinedWorkingSetMB=$taskOpenCombinedMB
+  WindowHidden=-not[OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)
   ParentWorkingSetMiB=[math]::Round($taskParent.WorkingSet64/1MB,2)
   ReaderWorkingSetMiB=[math]::Round($taskReader.WorkingSet64/1MB,2)
   CombinedWorkingSetMiB=[math]::Round(($taskParent.WorkingSet64+$taskReader.WorkingSet64)/1MB,2)

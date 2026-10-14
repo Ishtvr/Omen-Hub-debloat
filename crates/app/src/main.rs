@@ -7,6 +7,8 @@ mod curve_ui;
 #[cfg(windows)]
 mod curve_widget;
 #[cfg(windows)]
+mod dashboard;
+#[cfg(windows)]
 mod elevation;
 #[cfg(windows)]
 mod gpu_ui;
@@ -16,6 +18,10 @@ mod inventory;
 mod keyboard_ui;
 #[cfg(windows)]
 mod profile_commands;
+#[cfg(windows)]
+mod telemetry_worker;
+#[cfg(windows)]
+mod theme;
 #[cfg(windows)]
 mod ui;
 
@@ -59,8 +65,26 @@ fn run() -> Result<(), String> {
         return keyboard_ui::run(args.get(1).cloned());
     }
     #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "gpu-preview") && args.len() == 2 {
+        return gpu_ui::preview(std::path::Path::new(&args[1]));
+    }
+    #[cfg(windows)]
     if args.first().is_some_and(|a| a == "dashboard-preview") && args.len() == 2 {
         return ui::preview(std::path::Path::new(&args[1]));
+    }
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a == "dashboard-preview") && args.len() == 4 {
+        return ui::preview_sized(
+            std::path::Path::new(&args[1]),
+            [
+                args[2]
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?,
+                args[3]
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| e.to_string())?,
+            ],
+        );
     }
     #[cfg(windows)]
     if args.first().is_some_and(|a| a == "keyboard-preview") && args.len() == 3 {

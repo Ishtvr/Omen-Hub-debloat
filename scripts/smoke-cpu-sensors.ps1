@@ -41,26 +41,31 @@ try{
  if($taskWindow-eq[IntPtr]::Zero){throw 'No owned dashboard.'}
  Wait-CpuText $taskWindow 'Board: 8E35'|Out-Null
  $taskInitial=[OmenCpuSensorSmoke]::AllText($taskWindow)
- if($taskInitial-notmatch'CPU-Paketleistung: Nicht verfügbar'-or$taskInitial-notmatch'CPU-Temperatur: Nicht verfügbar'){throw 'CPU hardware readings appeared before explicit approval.'}
+ if($taskInitial-notmatch'CPU-Paketleistung\s+Nicht verfügbar'-or$taskInitial-notmatch'CPU-Temperatur \(Tctl\)\s+Nicht verfügbar'){throw 'CPU hardware readings appeared before explicit approval.'}
+ foreach($taskNotification in @(5,6,7)){
+  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64](106+($taskNotification-shl16))),[OmenCpuSensorSmoke]::GetDlgItem($taskWindow,106))
+ }
+ Start-Sleep -Milliseconds 150
+ if([OmenCpuSensorSmoke]::Text([OmenCpuSensorSmoke]::GetDlgItem($taskWindow,106))-cne'CPU-Sensoren …'){throw 'A non-click notification started CPU authorization.'}
  Send-CpuCommand $taskWindow 106
- $taskLive=Wait-CpuText $taskWindow 'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert' 45
- if($taskLive-notmatch'CPU-Temperatur \(Tctl\): \d+[\.,]\d+ °C'-or$taskLive-notmatch'Quelle: CPU-Energiezähler und Tctl über PawnIO'){throw 'CPU provenance/temperature semantics are missing.'}
+ $taskLive=Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert' 45
+ if($taskLive-notmatch'CPU-Temperatur \(Tctl\)\s+\d+[\.,]\d+ °C'-or$taskLive-notmatch'Quelle: CPU-Energiezähler und Tctl über PawnIO'){throw 'CPU provenance/temperature semantics are missing.'}
  $taskLive|Set-Content -LiteralPath (Join-Path $taskRepo '.local\cpu-ui-live-text.txt') -Encoding UTF8
  # Closing to tray pauses the existing helper without another UAC prompt.
  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
  Start-Sleep -Milliseconds 500
  $taskProcess.Refresh();if($taskProcess.HasExited){throw 'Close exited instead of pausing in tray.'}
  Send-CpuCommand $taskWindow 201
- Wait-CpuText $taskWindow 'CPU-Paketleistung: Wird gemessen'|Out-Null
- Wait-CpuText $taskWindow 'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert'|Out-Null
+ Wait-CpuText $taskWindow 'CPU-Paketleistung\s+Wird gemessen'|Out-Null
+ Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'|Out-Null
  # Dispatch our own power-event handler; this does not suspend the computer.
  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0218,[UIntPtr]::new([uint64]4),[IntPtr]::Zero)
  Start-Sleep -Milliseconds 300
  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0218,[UIntPtr]::new([uint64]18),[IntPtr]::Zero)
- Wait-CpuText $taskWindow 'CPU-Paketleistung: Wird gemessen'|Out-Null
- Wait-CpuText $taskWindow 'CPU-Paketleistung: \d+[\.,]\d+ W.*Mittelwert'|Out-Null
+ Wait-CpuText $taskWindow 'CPU-Paketleistung\s+Wird gemessen'|Out-Null
+ Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'|Out-Null
  Send-CpuCommand $taskWindow 106
- Wait-CpuText $taskWindow 'CPU-Paketleistung: Nicht verfügbar'|Out-Null
+ Wait-CpuText $taskWindow 'CPU-Paketleistung\s+Nicht verfügbar'|Out-Null
  $taskAfter=& $taskExe gpu-curve-read|Out-String|ConvertFrom-Json
  $taskControlsBefore=@($taskBefore.nodes|ForEach-Object{@($_.index,$_.voltage_uv,$_.delta_khz)})|ConvertTo-Json -Depth 5 -Compress
  $taskControlsAfter=@($taskAfter.nodes|ForEach-Object{@($_.index,$_.voltage_uv,$_.delta_khz)})|ConvertTo-Json -Depth 5 -Compress

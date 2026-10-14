@@ -270,6 +270,7 @@ struct State {
     view: RefCell<Option<View>>,
     controls: Cell<Option<Controls>>,
     font: Cell<HFONT>,
+    theme: crate::theme::Theme,
     busy: Cell<bool>,
     rendering: Cell<bool>,
     dirty: Cell<bool>,
@@ -494,10 +495,10 @@ fn show(state: &State, view: View, status: &str) {
         let core_range = if view.core_ready {
             format!("GPU {} bis {}", view.ranges[0].0, view.ranges[0].1)
         } else {
-            "GPU: vollständige aktive V/F-Kurve verwenden; globaler Offset gesperrt".into()
+            "GPU: V/F-Kurve verwenden; globaler Offset gesperrt".into()
         };
         format!(
-            "Treiberspannen: {core_range} / VRAM {} bis {} MHz.\r\nDiese Grenzen bestätigen keine Stabilität. VRAM-Werte sind NVML-MHz.",
+            "{core_range} · VRAM {} bis {} NVML-MHz.\r\nDiese Treibergrenzen bestätigen keine Stabilität.",
             view.ranges[1].0, view.ranges[1].1
         )
     } else {
@@ -633,6 +634,7 @@ pub(crate) fn control(
             ptr::null(),
         );
         SendMessageW(handle, WM_SETFONT, font as usize, 1);
+        crate::theme::prepare(handle, class, style);
         handle
     }
 }
@@ -653,8 +655,12 @@ unsafe extern "system" fn procedure(
             return DefWindowProcW(hwnd, message, wparam, lparam);
         }
         let state = &*pointer;
+        if let Some(color) = state.theme.color(message, wparam, lparam) {
+            return color;
+        }
         match message {
             WM_CREATE => {
+                state.theme.frame(hwnd);
                 let mut font: LOGFONTW = std::mem::zeroed();
                 font.lfHeight = -18;
                 for (target, value) in font.lfFaceName.iter_mut().zip(wide("Segoe UI")) {
@@ -805,7 +811,7 @@ unsafe extern "system" fn procedure(
                 SendMessageW(frequency, EM_SETLIMITTEXT, 12, 0);
                 let curve_hint = control(
                     hwnd,
-                    f,
+                    state.theme.small,
                     0,
                     "STATIC",
                     "Kurve wird gelesen …",
@@ -814,7 +820,7 @@ unsafe extern "system" fn procedure(
                 );
                 control(
                     hwnd,
-                    f,
+                    state.theme.small,
                     0,
                     "STATIC",
                     "Unleashed: vollständiger Firmware-Readback und Restore fehlen.\r\nVRAM-Spannung: kein verifizierter Steuervertrag auf dieser Hardware.",
@@ -929,6 +935,25 @@ unsafe extern "system" fn procedure(
                 enabled(state);
                 0
             }
+            WM_ERASEBKGND => {
+                state.theme.fill(hwnd, wparam as HDC);
+                1
+            }
+            WM_PRINTCLIENT => {
+                state.theme.fill(hwnd, wparam as HDC);
+                0
+            }
+            WM_DRAWITEM => {
+                let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
+                if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
+                    state
+                        .theme
+                        .button(item, state.font.get(), item.CtlID == SAVE as u32);
+                    1
+                } else {
+                    0
+                }
+            }
             UPDATE => {
                 while let Ok(update) = state.rx.try_recv() {
                     match update {
@@ -947,6 +972,20 @@ unsafe extern "system" fn procedure(
             WM_COMMAND => {
                 let id = wparam & 0xffff;
                 let notification = (wparam >> 16) as u32;
+                if matches!(
+                    id,
+                    NEW | SAVE
+                        | APPLY
+                        | RESTORE
+                        | STARTUP
+                        | DISABLE
+                        | REFRESH
+                        | CURVE_EDITOR
+                        | CURVE
+                ) && notification != BN_CLICKED
+                {
+                    return 0;
+                }
                 if state.rendering.get() {
                     return 0;
                 }
@@ -1089,6 +1128,12 @@ unsafe extern "system" fn procedure(
 }
 
 pub fn run_selected(id: Option<String>) -> Result<(), String> {
+    run_window(id, None)
+}
+pub fn preview(path: &std::path::Path) -> Result<(), String> {
+    run_window(None, Some(path))
+}
+fn run_window(id: Option<String>, preview: Option<&std::path::Path>) -> Result<(), String> {
     if let Some(id) = &id {
         omen_core::profiles::validate_id(id)?;
     }
@@ -1100,6 +1145,7 @@ pub fn run_selected(id: Option<String>) -> Result<(), String> {
         view: RefCell::new(None),
         controls: Cell::new(None),
         font: Cell::new(ptr::null_mut()),
+        theme: crate::theme::Theme::new(),
         busy: Cell::new(false),
         rendering: Cell::new(false),
         dirty: Cell::new(false),
@@ -1114,7 +1160,7 @@ pub fn run_selected(id: Option<String>) -> Result<(), String> {
         registration.hInstance = instance;
         registration.lpszClassName = class.as_ptr();
         registration.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
-        registration.hbrBackground = (COLOR_BTNFACE + 1) as HBRUSH;
+        registration.hbrBackground = state.theme.background;
         if RegisterClassW(&registration) == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -1137,7 +1183,9 @@ pub fn run_selected(id: Option<String>) -> Result<(), String> {
         }
         let handle = hwnd as usize;
         let worker = thread::spawn(move || worker(handle, requests, updates));
-        ShowWindow(hwnd, SW_SHOW);
+        if preview.is_none() {
+            ShowWindow(hwnd, SW_SHOW);
+        }
         dispatch(&state, Request::Load(id), "GPU wird gelesen …");
         let mut message: MSG = std::mem::zeroed();
         let result = loop {
@@ -1148,6 +1196,14 @@ pub fn run_selected(id: Option<String>) -> Result<(), String> {
             if IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
+            }
+            if message.message == UPDATE && state.view.borrow().is_some() {
+                if let Some(path) = preview {
+                    let render = crate::curve_widget::render_window(hwnd, path);
+                    DestroyWindow(hwnd);
+                    render?;
+                    break 0;
+                }
             }
         };
         let _ = state.tx.send(Request::Stop);

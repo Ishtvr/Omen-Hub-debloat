@@ -212,6 +212,32 @@ Binary **1871872 Bytes**, SHA-256 **`D12F6D188CAF9CD397CCA28A191E082094E8F33FF2C
 
 Die Summe zählt geteilte Seiten konservativ doppelt; sie umfasst den freigegebenen CPU-Helfer. UAC-Start und Inventarabfrage laufen in bereits beendeten kurzlebigen Prozessen. Es wurde kein Working Set getrimmt. Der ursprüngliche Zwischenstand lag kombiniert bei 59,79 MB; das Kapseln der Windows-Shell- und WMI-Lebensdauer senkte den tatsächlichen Verbrauch. Das 50-MB-Tray-Ziel wird in der finalen Stichprobe auf diesem Gerät eingehalten. Andere DPI-/Treiberzustände und längere Dauerläufe sind damit nicht bestätigt. Die geschützte installierte Startup-Binary wird durch diesen lokalen Build weiterhin nicht automatisch ersetzt; CPU-Sensorfreigabe bleibt sitzungsbezogen.
 
+## Dunkle native Oberfläche — 14. Oktober, 12:09…12:10 CEST
+
+Der Benutzer erlaubt seit diesem UI-Schritt mehr als 50 MB bei geöffnetem Fenster; das **50-MB-Ziel bleibt für den gesamten Tray-Leerlauf einschließlich pausiertem CPU-Reader**. Die frühere 49,25-MB-Angabe war ebenfalls Tray-Verbrauch nach Sensoraktivierung, kein geöffnetes Dashboard.
+
+Aktuelle Binary: **1920512 Bytes**, SHA-256 **`7F34B30BD47FDA57C79BC4C7951F8DB4F719511DD0D0013555F63383B222E006`**. Formatprüfung, **77 Tests (57 Core / 16 Platform / 4 App)**, Clippy ohne Warnungen und optimierter Release bestehen. Die nativen Aktionen bleiben getrennt von Renderer und Theme; Hardware-Setter oder Firmware-Payloads wurden für die Gestaltung nicht erweitert.
+
+Die neue Win32-Darstellung verwendet dunkle Sensorflächen, GPU-Watt/Temperatur links und CPU direkt daneben, eine deutlich erkennbare Aktionszeile sowie gemeinsame Felder/Buttons in GPU-, Farb- und Kurvenfenstern. `theme.rs` besitzt die GDI-Ressourcen. Eigentümergezeichnete native Buttons verarbeiten ausschließlich `BN_CLICKED` als Aktion; Fokus-, Zeichen- und Doppelklick-Nachrichten lösen keine Freigabe, Speicherung oder Hardwareaktion aus. Der CPU-Funktionstest prüft diese Nicht-Klick-Nachrichten vor der expliziten Aktivierung.
+
+Im Tray werden Dashboard-Kindfenster freigegeben; das Tray-/Ereignisfenster, die Profilvorschauauswahl und die Worker-Freigabe bleiben erhalten. Die NVIDIA-Lesesitzung läuft auf einem eigenen sichtbarkeitsgebundenen Thread, mit FFI-Handles ausschließlich auf diesem Thread und begrenztem Warten auf Ergebnisse/Beendigung. Der bestehende NVIDIA-Störfall mit hängender Vendor-FFI ist damit nicht provoziert oder zertifiziert. Die identische CPU-Treiberidentität wird nun in begrenzten 8-KiB-Blöcken gehasht, ohne temporäres wachsendes Datei-Array.
+
+| Gemessener Zustand | Working Set | Private Memory | CPU-Zuwachs im Tray-Messfenster |
+| --- | --- | --- | --- |
+| Direkter `--tray`-Start, CPU-Sensoren aus; Fenster verborgen bestätigt | **14,29 MiB** | 2,16 MiB | 0 s |
+| Sichtbares Dashboard mit CPU-Reader nach zwei Tray-Rückkehrzyklen | **52,32 MB kombiniert** | Nicht separat aufgenommen | Aktiver Sensorbetrieb |
+| Dashboard anschließend wieder im Tray, Fenster verborgen bestätigt | 37,04 MiB | 22,46 MiB | 0 s |
+| Zugehöriger pausierter CPU-Reader | 10,05 MiB | 1,65 MiB | 0 s |
+| Summe der beiden Tray-Prozesse | **47,10 MiB / 49,39 MB** | etwa 24,11 MiB | 0 s |
+
+Beide Tray-Messungen liefen 30 Sekunden, mit fünf Sekunden Beruhigungszeit. Das Script zeigt für die offene Phase das eigene Fenster ausdrücklich an und bestätigt für die Tray-Phase dessen tatsächliche Unsichtbarkeit. Die Summe zählt geteilte Seiten konservativ doppelt; keine Working-Set-Trimmung wurde verwendet. Frühe UI-Zwischenstände lagen bei etwa 50,5…51,6 MB kombiniert, und eine parallel laufende Messung war wegen ausbleibender/abgebrochener Messwerte nicht verwertbar. Die finalen obigen Proben liefen separat und halten das Tray-Ziel auf diesem Gerät ein; sie ersetzen keinen längeren Dauerlauf.
+
+Der frische visuelle Reviewer prüfte echte eigene Clientbilder bei **1122×773**, **942×743**, **754×771**, **764×741** und **1364×901**. Die Produktion zeichnet zuerst das Elternfenster und dann echte native Controls; Vorschaufenster werden zum korrekten EDIT-Rendering ohne Tastaturaktivierung außerhalb des Desktops angezeigt. Der einzige benannte Finish-Fix **G1** — abgeschnittene zweizeilige GPU-Helfer-/Capabilitytexte — verwendet jetzt den gemeinsamen 14-Pixel-Stil bei unveränderten Fakten/Bounds. Verdict: **ship / G1 resolved**, begrenzt auf diese Korrektur im ursprünglichen abgebildeten Clientumfang. Aktive/Fehler-CPU-Darstellung, Titlebar, offene Dropdowns, andere DPI-/High-Contrast-/Accessibility-Zustände, reale Power-Übergänge und die spätere Telemetrie-Lebensdauer sind außerhalb des visuellen Verdicts.
+
+Die sRGB-Kontraste der implementierten Palette betragen unter anderem **7,77:1** für sekundären Text auf Sensorflächen, **12,70:1** für Text auf Feldern, **10,46:1** für dunklen Text auf dem primären Mint-Button und **3,13:1** für Feld-/Buttonränder. `DESIGN.md` und die Design-Sidecar dokumentieren die implementierten Tokens; ihre HTML/CSS-Vorschauen sind Entwicklungsdokumentation und keine Runtime-Abhängigkeit.
+
+Alle **fünf nativen Funktionstests** bestehen nach den letzten Lifetime-/Klick-Notification-Änderungen mit dem oben angegebenen SHA: Dashboard-Inventar, echte CPU/GPU-Werte, Vorschauwechsel, freigegebene und wieder aufgebaute Controls mit erhaltener Vorschauauswahl; GPU-Profilspeicherung/Validierung; vollständige Kurven-Gesten/History/Zoom und Lüfterentwürfe; Vier-Zonen-Farben-/Modusmetadaten; explizite CPU-Freigabe, Nicht-Klick-Sperre, Messintervalle/Tctl, Ausschalten, Tray-Rückkehr und simulierte Suspend-/Resume-Handler mit neuer Baseline. Kontrollierte GPU-Kurven bleiben dabei unverändert. Es wurden keine Hardware-Schreibversuche für die UI-Abnahme ausgeführt.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und der begrenzte eigene Farbmodus/Firmware-Voreinstellung sind auf 8E35/F.13 mit vollständigem Restore bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.

@@ -192,11 +192,21 @@ fn driver_identity() -> Result<(), String> {
         return Err("PawnIO driver path differs from the qualified installation".into());
     }
     let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut bytes = Vec::new();
-    file.take(1_048_577)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > 1_048_576 || format!("{:x}", Sha256::digest(&bytes)) != CPU_DRIVER_SHA256 {
+    // Stream the same bounded identity check. A temporary growing file Vec
+    // needlessly retains allocator pages in the long-lived read-only helper.
+    let mut file = file.take(1_048_577);
+    let mut buffer = [0u8; 8192];
+    let mut bytes = 0usize;
+    let mut digest = Sha256::new();
+    loop {
+        let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        bytes += count;
+        digest.update(&buffer[..count]);
+    }
+    if bytes > 1_048_576 || format!("{:x}", digest.finalize()) != CPU_DRIVER_SHA256 {
         return Err("PawnIO driver hash differs from the measured 2.2.0 contract".into());
     }
     Ok(())

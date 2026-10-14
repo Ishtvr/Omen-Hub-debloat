@@ -4,6 +4,8 @@ Product name: **Omen Hub++**. Technical Cargo names use `omen-hub-plus-plus` and
 
 The user raised the tray-idle working-set budget to **50 MB** on 13 October 2026. Prioritize GPU wattage and temperature before profile controls, with CPU performance alongside it in the first view. CPU package power and temperature must remain unavailable until a verified hardware reader exists; Windows-reported MHz is not a measured boost clock. The UI workflow is code-first; use the confirmed product record in PRODUCT.md.
 
+On 14 October 2026 the user clarified that the **open window may exceed 50 MB** when this improves the UI; the budget remains for total tray idle, including helpers after sensor activation. The requested appearance is **modern, clean and dark**, with clear fields and prominent actions.
+
 Omen Hub++ must eventually replace the original OMEN Hub and its hardware-controller processes completely. Original OMEN Hub modules are reverse-engineering sources, not mandatory runtime dependencies for the target engine. Prove the necessary lifecycle and independent transport before claiming replacement support.
 
 - Keep documentation truthful about implemented features versus plans. Never imply that a profile preview changed firmware.

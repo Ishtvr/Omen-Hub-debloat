@@ -914,6 +914,27 @@ pub fn render(path: &Path, curve: &Curve) -> Result<(), String> {
 /// This uses WM_PRINT, not screen capture, and never reads another application's pixels.
 pub fn render_window(hwnd: HWND, path: &Path) -> Result<(), String> {
     unsafe {
+        // Classic single-line EDIT printing depends on visible control state.
+        // Activate the owned preview off-screen without keyboard activation;
+        // capture production controls, then the preview caller destroys it.
+        if IsWindowVisible(hwnd) == 0 {
+            SetWindowPos(
+                hwnd,
+                ptr::null_mut(),
+                -30000,
+                -30000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            RedrawWindow(
+                hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN,
+            );
+        }
         let mut rect: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut rect);
         bitmap(path, rect.right, rect.bottom, |dc, _| {
@@ -921,6 +942,9 @@ pub fn render_window(hwnd: HWND, path: &Path) -> Result<(), String> {
             // visible child in client space; a top-level print adds a titlebar.
             let fill = GetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND) as HBRUSH;
             FillRect(dc, &rect, fill);
+            // Ask the production parent to paint its client surfaces before
+            // printing children; a class brush alone misses dashboard panels.
+            SendMessageW(hwnd, WM_PRINTCLIENT, dc as usize, PRF_CLIENT as isize);
             let mut child = GetWindow(hwnd, GW_CHILD);
             while !child.is_null() {
                 if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE != 0 {

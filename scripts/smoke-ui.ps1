@@ -56,9 +56,9 @@ try {
         Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $taskDeadline)
     if ($taskWindow -eq [IntPtr]::Zero -or $taskText -notmatch 'Board: 8E35') { throw "Native window or inventory did not become ready. Window text: $taskText" }
-    if ($taskText -notmatch 'NVIDIA SENSOREN') { throw 'GPU sensor section is missing.' }
-    if ($taskText -notmatch 'CPU LEISTUNG' -or $taskText -notmatch 'Takt \(Windows\): \d+ MHz') { throw 'CPU sensor section or qualified Windows clock is missing.' }
-    if ($taskText -notmatch 'CPU-Paketleistung: Nicht verfügbar' -or $taskText -notmatch 'CPU-Temperatur: Nicht verfügbar') { throw 'Unvalidated CPU hardware measurements must be shown as unavailable.' }
+    if ($taskText -notmatch 'GPU · NVIDIA') { throw 'GPU sensor section is missing.' }
+    if ($taskText -notmatch 'CPU-Temperatur \(Tctl\)' -or $taskText -notmatch 'Windows-Takt: \d+ MHz') { throw 'CPU sensor section or qualified Windows clock is missing.' }
+    if ($taskText -notmatch 'CPU-Paketleistung\s+Nicht verfügbar' -or $taskText -notmatch 'CPU-Temperatur \(Tctl\)\s+Nicht verfügbar') { throw 'Unvalidated CPU hardware measurements must be shown as unavailable.' }
     # The first reading establishes a baseline; the next polling interval must
     # provide real busy-time data rather than leave the CPU permanently loading.
     $taskCpuDeadline = (Get-Date).AddSeconds(5)
@@ -81,6 +81,13 @@ try {
     if ([OmenUiSmoke]::IsWindowVisible($taskWindow)) { throw 'Close did not hide the application in tray.' }
     $taskProcess.Refresh()
     if ($taskProcess.HasExited) { throw 'Close unexpectedly exited the tray application.' }
+    if ([OmenUiSmoke]::GetDlgItem($taskWindow,106)-ne[IntPtr]::Zero) { throw 'Hidden dashboard did not release its native controls.' }
+    [void][OmenUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]201),[IntPtr]::Zero)
+    $taskReturnDeadline=(Get-Date).AddSeconds(5)
+    do {$taskText=[OmenUiSmoke]::ChildrenText($taskWindow);if($taskText-match'Board: 8E35'-and$taskText-match'Unleashed: Vorschau'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskReturnDeadline)
+    $taskRestoredCombo=[OmenUiSmoke]::GetDlgItem($taskWindow,102)
+    if($taskText-notmatch'Unleashed: Vorschau'-or[OmenUiSmoke]::SendMessage($taskRestoredCombo,0x0147,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt64()-ne3){throw 'Rebuilt dashboard lost its preview selection.'}
+    if(-not[OmenUiSmoke]::IsWindowVisible($taskWindow)-or[OmenUiSmoke]::GetDlgItem($taskWindow,103)-eq[IntPtr]::Zero){throw 'Tray return did not rebuild operable controls.'}
     [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]202), [IntPtr]::Zero)
     if (-not $taskProcess.WaitForExit(3000)) { throw 'Application did not exit within 3 seconds.' }
     if ($taskProcess.ExitCode -ne 0) { throw "Application failed: $($taskProcess.ExitCode)" }

@@ -8,7 +8,7 @@ Die Paketleistung ist der Mittelwert aus zwei Energiezählerständen über das a
 
 Im Tray beziehungsweise bei Suspend wird der Leseprozess pausiert: Treiber-/Modulsitzung und Energie-Baseline werden freigegeben, beide Prozesse warten ohne periodische Sensorabfragen. Nach erneutem Öffnen, Resume, Refresh oder Versorgungswechsel ist eine neue Baseline erforderlich. Bei Fehlern werden alte Werte verworfen. Die Sensorfreigabe gilt für die laufende App-Sitzung, nicht als automatische Hardwarefreigabe nach Neustart.
 
-Der finale Release wurde nach Aktivierung und zwei Tray-Rückkehrzyklen 30 Sekunden mit **49,25 MB kombiniertem Working Set** gemessen, ohne Working-Set-Trimming; beide Prozesse verbrauchten im Leerlauf-Messfenster keine zusätzliche CPU-Zeit. Der direkte Tray-Start ohne Sensoraktivierung lag bei **12,89 MiB**. Das sind unterschiedliche Betriebszustände und kurze Messungen auf dem Referenzgerät; längere Dauerläufe stehen aus. Vollständige Zahlen und Binary-Identität stehen in [VALIDATION.md](VALIDATION.md).
+Der Release mit dunkler Oberfläche wurde nach Aktivierung und zwei Tray-Rückkehrzyklen 30 Sekunden mit **49,39 MB kombiniertem Working Set** gemessen, ohne Working-Set-Trimming; beide Prozesse verbrauchten im Leerlauf-Messfenster keine zusätzliche CPU-Zeit. Der direkte Tray-Start ohne Sensoraktivierung lag bei **14,29 MiB**. Die offene Phase lag mit Reader bei **52,32 MB** und ist vom Benutzer ausdrücklich außerhalb des Tray-Budgets erlaubt. Das sind unterschiedliche Betriebszustände und kurze Messungen auf dem Referenzgerät; längere Dauerläufe stehen aus. Vollständige Zahlen und Binary-Identität stehen in [VALIDATION.md](VALIDATION.md).
 
 ## Quellen, feste Verträge und Identität
 

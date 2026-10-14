@@ -25,7 +25,7 @@ use windows_sys::Win32::{
     UI::{
         Controls::{
             BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETREADONLY, EM_SETSEL,
-            ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, SetWindowTheme,
+            ODT_BUTTON, SetWindowTheme,
         },
         Input::KeyboardAndMouse::{EnableWindow, GetKeyState, SetFocus},
         WindowsAndMessaging::*,
@@ -291,6 +291,7 @@ struct State {
     graph_only: Cell<bool>,
     background: Cell<HBRUSH>,
     surface: Cell<HBRUSH>,
+    theme: crate::theme::Theme,
 }
 fn selected(s: &State) -> Option<String> {
     s.view
@@ -633,49 +634,8 @@ fn help(hwnd: HWND) {
 }
 unsafe fn draw_button(s: &State, item: &DRAWITEMSTRUCT) {
     unsafe {
-        let disabled = item.itemState & ODS_DISABLED != 0;
-        let pressed = item.itemState & ODS_SELECTED != 0;
-        let color = if pressed {
-            plot::BACKGROUND
-        } else {
-            plot::SURFACE
-        };
-        let fill = CreateSolidBrush(color);
-        FillRect(item.hDC, &item.rcItem, fill);
-        DeleteObject(fill);
-        SetBkMode(item.hDC, TRANSPARENT as i32);
-        SetTextColor(
-            item.hDC,
-            if disabled {
-                0x00918a82
-            } else {
-                plot::FOREGROUND
-            },
-        );
-        SelectObject(item.hDC, s.font.get());
-        let title = input(item.hwndItem).unwrap_or_default();
-        let title = wide(&title);
-        let mut r = item.rcItem;
-        DrawTextW(
-            item.hDC,
-            title.as_ptr(),
-            (title.len() - 1) as i32,
-            &mut r,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-        );
-        if item.CtlID == SAVE as u32 || item.itemState & ODS_FOCUS != 0 {
-            let pen = CreatePen(
-                PS_SOLID,
-                1,
-                if disabled { 0x00918a82 } else { plot::ACCENT },
-            );
-            let old = SelectObject(item.hDC, pen);
-            let fill = SelectObject(item.hDC, GetStockObject(HOLLOW_BRUSH));
-            Rectangle(item.hDC, r.left, r.top, r.right, r.bottom);
-            SelectObject(item.hDC, fill);
-            SelectObject(item.hDC, old);
-            DeleteObject(pen);
-        }
+        s.theme
+            .button(item, s.font.get(), item.CtlID == SAVE as u32);
     }
 }
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -690,6 +650,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             return DefWindowProcW(hwnd, message, w, l);
         }
         let s = &*p;
+        if let Some(color) = s.theme.color(message, w, l) {
+            return color;
+        }
         match message {
             WM_CREATE => {
                 let mut f: LOGFONTW = std::mem::zeroed();
@@ -777,7 +740,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             | ES_READONLY as u32
                             | ES_AUTOVSCROLL as u32,
                     ),
-                    open: child(OPEN, "BUTTON", "Anwenden & Startoptionen …", WS_TABSTOP),
+                    open: child(OPEN, "BUTTON", "&Profil öffnen …", WS_TABSTOP),
                     reload: child(RELOAD, "BUTTON", "Neu &laden", WS_TABSTOP),
                     undo: child(UNDO, "BUTTON", "Rückgängig", WS_TABSTOP),
                     redo: child(REDO, "BUTTON", "Wiederholen", WS_TABSTOP),
@@ -820,34 +783,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             WM_ERASEBKGND => {
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                FillRect(w as HDC, &r, s.background.get());
+                s.theme.fill(hwnd, w as HDC);
                 1
             }
             WM_PRINTCLIENT => {
                 let mut r: RECT = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
-                FillRect(w as HDC, &r, s.background.get());
+                s.theme.fill(hwnd, w as HDC);
                 0
-            }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
-                let dc = w as HDC;
-                SetTextColor(dc, plot::FOREGROUND);
-                let input = message == WM_CTLCOLOREDIT
-                    || message == WM_CTLCOLORLISTBOX
-                    || s.controls.get().is_some_and(|c| l == c.status as isize);
-                SetBkColor(
-                    dc,
-                    if input {
-                        plot::SURFACE
-                    } else {
-                        plot::BACKGROUND
-                    },
-                );
-                if input {
-                    s.surface.get() as isize
-                } else {
-                    s.background.get() as isize
-                }
             }
             WM_DRAWITEM => {
                 let item = &*(l as *const DRAWITEMSTRUCT);
@@ -906,6 +849,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             WM_COMMAND => {
                 let id = w & 0xffff;
                 let code = (w >> 16) as u32;
+                if !matches!(id, NAME | SELECT | POINT | X | Y) && code != BN_CLICKED {
+                    return 0;
+                }
                 if s.rendering.get() || s.busy.get() {
                     return 0;
                 }
@@ -1133,6 +1079,7 @@ fn run_window(id: Option<String>, preview: Option<Preview>) -> Result<(), String
     let (tx, requests) = mpsc::channel();
     let (updates, rx) = mpsc::channel();
     let state = Box::new(State {
+        theme: crate::theme::Theme::new(),
         tx,
         rx,
         view: RefCell::new(None),

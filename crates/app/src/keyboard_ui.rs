@@ -234,6 +234,7 @@ struct State {
     live: RefCell<Option<KeyboardState>>,
     controls: Cell<Option<Controls>>,
     font: Cell<HFONT>,
+    theme: crate::theme::Theme,
     busy: Cell<bool>,
     rendering: Cell<bool>,
     dirty: Cell<bool>,
@@ -486,8 +487,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             return DefWindowProcW(hwnd, message, w, l);
         }
         let s = &*pointer;
+        if let Some(color) = s.theme.color(message, w, l) {
+            return color;
+        }
         match message {
             WM_CREATE => {
+                s.theme.frame(hwnd);
                 let mut f: LOGFONTW = std::mem::zeroed();
                 f.lfHeight = -18;
                 for (a, b) in f.lfFaceName.iter_mut().zip(wide("Segoe UI")) {
@@ -685,9 +690,21 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     DeleteObject(fill);
                     FrameRect(item.hDC, &item.rcItem, GetSysColorBrush(COLOR_WINDOWTEXT));
                     1
+                } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
+                    s.theme
+                        .button(item, s.font.get(), item.CtlID == SAVE as u32);
+                    1
                 } else {
                     0
                 }
+            }
+            WM_ERASEBKGND => {
+                s.theme.fill(hwnd, w as HDC);
+                1
+            }
+            WM_PRINTCLIENT => {
+                s.theme.fill(hwnd, w as HDC);
+                0
             }
             UPDATE => {
                 while let Ok(update) = s.rx.try_recv() {
@@ -713,6 +730,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 let Some(c) = s.controls.get() else { return 0 };
                 let code = (w >> 16) as u32;
                 let action = w & 0xffff;
+                if (matches!(action, NEW | SAVE | READ | APPLY | RESTORE | COPY_CURRENT)
+                    || (PICK..PICK + 4).contains(&action))
+                    && code != BN_CLICKED
+                {
+                    return 0;
+                }
                 if (action == NAME || (HEX..HEX + 4).contains(&action)) && code == EN_CHANGE {
                     dirty(s);
                     return 0;
@@ -822,6 +845,7 @@ fn run_window(selected: Option<String>, preview: Option<std::path::PathBuf>) -> 
         live: RefCell::new(None),
         controls: Cell::new(None),
         font: Cell::new(ptr::null_mut()),
+        theme: crate::theme::Theme::new(),
         busy: Cell::new(false),
         rendering: Cell::new(false),
         dirty: Cell::new(false),
@@ -835,7 +859,7 @@ fn run_window(selected: Option<String>, preview: Option<std::path::PathBuf>) -> 
         reg.hInstance = instance;
         reg.lpszClassName = class.as_ptr();
         reg.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
-        reg.hbrBackground = (COLOR_BTNFACE + 1) as HBRUSH;
+        reg.hbrBackground = s.theme.background;
         if RegisterClassW(&reg) == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -926,6 +950,7 @@ mod tests {
             live: RefCell::new(None),
             controls: Cell::new(None),
             font: Cell::new(ptr::null_mut()),
+            theme: crate::theme::Theme::new(),
             busy: Cell::new(false),
             rendering: Cell::new(false),
             dirty: Cell::new(false),
@@ -963,7 +988,7 @@ mod tests {
             reg.lpfnWndProc = Some(procedure);
             reg.hInstance = instance;
             reg.lpszClassName = class.as_ptr();
-            reg.hbrBackground = (COLOR_BTNFACE + 1) as HBRUSH;
+            reg.hbrBackground = s.theme.background;
             assert_ne!(RegisterClassW(&reg), 0);
             let hwnd = CreateWindowExW(
                 0,

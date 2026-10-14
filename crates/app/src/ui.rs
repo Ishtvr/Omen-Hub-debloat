@@ -44,129 +44,16 @@ struct State {
     profile: Cell<HWND>,
     preview: Cell<HWND>,
     cpu_sensor: Cell<HWND>,
-    font: Cell<HFONT>,
     tray: Cell<bool>,
     taskbar_message: u32,
+    theme: crate::theme::Theme,
+    preview_index: Cell<usize>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
-fn snapshot_text(snapshot: &Snapshot) -> String {
-    let i = &snapshot.inventory;
-    let power = match snapshot.power.ac_connected {
-        Some(true) => "Netzbetrieb",
-        Some(false) => "Akkubetrieb",
-        None => "Unbekannt",
-    };
-    let battery = snapshot
-        .power
-        .battery_percent
-        .map(|p| format!("{p} %"))
-        .unwrap_or_else(|| "Nicht verfügbar".into());
-    // Both processors lead the report; inventory must not push CPU readings
-    // below the first viewport in the current diagnostic prototype.
-    let mut text = String::new();
-    if let Some(gpu) = &snapshot.gpu {
-        let temp = gpu
-            .temperature_c
-            .map(|v| format!("{v} °C"))
-            .unwrap_or_else(|| "Nicht verfügbar".into());
-        let clock = gpu
-            .clock_mhz
-            .map(|v| format!("{v} MHz"))
-            .unwrap_or_else(|| "Nicht verfügbar".into());
-        let watts = |v: Option<f64>| {
-            v.map(|v| format!("{v:.1} W"))
-                .unwrap_or_else(|| "Nicht verfügbar".into())
-        };
-        text.push_str(&format!(
-            "NVIDIA SENSOREN\r\n{}\r\nTemperatur: {temp}    Takt: {clock}\r\nLeistungsaufnahme: {}\r\nStandard-Power-Limit: {}    Obergrenze laut Treiber: {}\r\nDie Obergrenze ist keine Messung dauerhaft erreichbarer Leistung.\r\n\r\n",
-            gpu.name, watts(gpu.power_w), watts(gpu.default_limit_w), watts(gpu.maximum_limit_w)
-        ));
-    } else {
-        text.push_str("NVIDIA SENSOREN\r\nDerzeit nicht verfügbar.\r\n\r\n");
-    }
-    if let Some(cpu) = &snapshot.cpu {
-        let usage = cpu
-            .busy_percent
-            .map(|v| format!("{v:.1} %"))
-            .unwrap_or_else(|| "Wird gemessen / nicht verfügbar".into());
-        let clock = cpu
-            .windows_clock_mhz
-            .map(|v| format!("{v} MHz"))
-            .unwrap_or_else(|| "Nicht verfügbar".into());
-        let watts = cpu
-            .package_power_w
-            .map(|v| format!("{v:.1} W"))
-            .unwrap_or_else(|| {
-                if cpu.hardware.is_some() {
-                    "Wird gemessen".into()
-                } else {
-                    "Nicht verfügbar".into()
-                }
-            });
-        let temperature = cpu
-            .temperature_c
-            .map(|v| format!("{v:.1} °C"))
-            .unwrap_or_else(|| "Nicht verfügbar".into());
-        let detail = cpu.hardware.as_ref().map_or_else(String::new, |h| {
-            let interval = h.power_interval_ms.map_or("Energie-Baseline".into(), |ms| {
-                format!("Mittelwert über {:.2} s", ms as f64 / 1000.0)
-            });
-            format!(" · {interval}")
-        });
-        let kind = if cpu.hardware.is_some() {
-            " (Tctl)"
-        } else {
-            ""
-        };
-        text.push_str(&format!("CPU LEISTUNG\r\nAuslastung: {usage}    Takt (Windows): {clock}\r\nCPU-Paketleistung: {watts}{detail}\r\nCPU-Temperatur{kind}: {temperature}\r\nDer Windows-Takt ist kein gemessener Boost- oder Effektivtakt.\r\n"));
-        let status: String = match &snapshot.cpu_hardware_status {
-            CpuHardwareStatus::Off => {
-                "CPU-Hardwaresensoren: über CPU-Sensoren … aktivieren.".into()
-            }
-            CpuHardwareStatus::Starting => {
-                "CPU-Sensoren: Windows-Freigabe wird angefordert …".into()
-            }
-            CpuHardwareStatus::Active => "Quelle: CPU-Energiezähler und Tctl über PawnIO.".into(),
-            CpuHardwareStatus::Paused => {
-                "CPU-Hardwaresensoren pausiert; neue Messbasis beim Öffnen.".into()
-            }
-            CpuHardwareStatus::Error(e) => cpu_error_message(e).into(),
-        };
-        text.push_str(&format!("{status}\r\n\r\n"));
-    } else {
-        text.push_str("CPU LEISTUNG\r\nDerzeit nicht verfügbar.\r\n\r\n");
-    }
-    text.push_str(&format!(
-        "SYSTEM\r\n{} {}\r\nBoard: {}    BIOS: {}\r\nCPU: {}\r\nGrafik: {}\r\n\r\nVERSORGUNG\r\n{power}    Akku: {battery}\r\n\r\n",
-        i.manufacturer,
-        i.model,
-        i.board,
-        i.bios,
-        i.cpus.join(", "),
-        i.gpus.join(", ")
-    ));
-    text.push_str(if i.hp_bios_interface_present {
-        "HP-Schnittstelle erkannt. Modell-Unterstützung wird geprüft.\r\n"
-    } else {
-        "HP-Schnittstelle derzeit nicht verfügbar.\r\n"
-    });
-    text.push_str("Lüfter und MUX: noch nicht angebunden. RGB: Beleuchtung …\r\n");
-    let count = i.warnings.len()
-        + snapshot.warnings.len()
-        + snapshot.gpu.as_ref().map_or(0, |g| g.warnings.len());
-    let count = count + snapshot.cpu.as_ref().map_or(0, |cpu| cpu.warnings.len());
-    if count > 0 {
-        text.push_str(
-            "Einige Abfragen sind nicht verfügbar; der Diagnosebericht enthält Details.\r\n",
-        );
-    }
-    text
-}
-
-fn cpu_error_message(detail: &str) -> &'static str {
+pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
     if detail.starts_with("This build has no staged signed CPU module") {
         "Diese App-Version enthält keinen CPU-Sensoradapter. Vollständigen Build verwenden."
     } else if detail.contains("qualified only")
@@ -263,7 +150,7 @@ fn worker(
             snapshot.cpu = None;
         }
         if visible && !suspended && Instant::now() >= reopen_at {
-            let nvidia = nvidia.get_or_insert_with(omen_platform::Nvidia::new);
+            let nvidia = nvidia.get_or_insert_with(crate::telemetry_worker::GpuTelemetry::new);
             snapshot.gpu = nvidia.sample();
             snapshot.warnings = nvidia.warnings().to_vec();
             if nvidia.needs_reconnect() {
@@ -379,28 +266,33 @@ fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
 
 // SAFETY: Called only on the UI thread for the live, owned State bound to hwnd.
 unsafe fn redraw(state: &State) {
-    let data = state
+    if state.details.get().is_null() {
+        return;
+    }
+    let snapshot = state
         .snapshot
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .map(|s| (snapshot_text(s), s.cpu_hardware_status.clone()));
+        .clone();
     unsafe {
-        if let Some((text, status)) = data {
-            SetWindowTextW(state.details.get(), wide(&text).as_ptr());
+        if let Some(snapshot) = snapshot {
+            let hwnd = GetParent(state.details.get());
+            crate::dashboard::update(hwnd, &state.theme, &snapshot);
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
             EnableWindow(
                 state.cpu_sensor.get(),
-                (!matches!(status, CpuHardwareStatus::Starting)) as i32,
+                (!matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting)) as i32,
             );
             SetWindowTextW(
                 state.cpu_sensor.get(),
                 wide(
                     if matches!(
-                        status,
+                        snapshot.cpu_hardware_status,
                         CpuHardwareStatus::Active | CpuHardwareStatus::Paused
                     ) {
                         "CPU-Sensoren aus"
+                    } else if matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting) {
+                        "Windows-Freigabe …"
                     } else {
                         "CPU-Sensoren …"
                     },
@@ -408,6 +300,52 @@ unsafe fn redraw(state: &State) {
                 .as_ptr(),
             );
         }
+    }
+}
+
+// Retain the tray/event window, but release the native dashboard controls while
+// hidden. Hardware state and approval belong to the worker, not these views.
+unsafe fn show_dashboard(hwnd: HWND, state: &State) {
+    unsafe {
+        if state.details.get().is_null() {
+            crate::dashboard::create(hwnd, &state.theme);
+            state.details.set(GetDlgItem(hwnd, 180));
+            state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
+            state.preview.set(GetDlgItem(hwnd, 181));
+            state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
+            SendMessageW(
+                state.profile.get(),
+                CB_SETCURSEL,
+                state.preview_index.get(),
+                0,
+            );
+            SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                PROFILE | ((CBN_SELCHANGE as usize) << 16),
+                0,
+            );
+            redraw(state);
+        }
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        let _ = state.tx.send(Request::Visibility(true));
+    }
+}
+unsafe fn hide_dashboard(hwnd: HWND, state: &State) {
+    unsafe {
+        ShowWindow(hwnd, SW_HIDE);
+        let _ = state.tx.send(Request::Visibility(false));
+        let mut child = GetWindow(hwnd, GW_CHILD);
+        while !child.is_null() {
+            let next = GetWindow(child, GW_HWNDNEXT);
+            DestroyWindow(child);
+            child = next;
+        }
+        state.details.set(ptr::null_mut());
+        state.profile.set(ptr::null_mut());
+        state.preview.set(ptr::null_mut());
+        state.cpu_sensor.set(ptr::null_mut());
     }
 }
 
@@ -441,171 +379,71 @@ unsafe extern "system" fn window_proc(
             }
             return 0;
         }
+        if let Some(color) = state.theme.color(message, wparam, lparam) {
+            return color;
+        }
         match message {
             WM_CREATE => {
-                let instance = GetModuleHandleW(ptr::null());
-                let mut font_data: LOGFONTW = std::mem::zeroed();
-                font_data.lfHeight = -18;
-                for (target, value) in font_data.lfFaceName.iter_mut().zip(wide("Segoe UI")) {
-                    *target = value;
-                }
-                state.font.set(CreateFontIndirectW(&font_data));
-                let control =
-                    |class: &str, title: &str, style: u32, x, y, width, height, id: usize| {
-                        let handle = CreateWindowExW(
-                            0,
-                            wide(class).as_ptr(),
-                            wide(title).as_ptr(),
-                            WS_CHILD | WS_VISIBLE | style,
-                            x,
-                            y,
-                            width,
-                            height,
-                            hwnd,
-                            id as HMENU,
-                            instance,
-                            ptr::null(),
-                        );
-                        SendMessageW(handle, WM_SETFONT, state.font.get() as usize, 1);
-                        handle
-                    };
-                control(
-                    "STATIC",
-                    "Omen Hub++  |  Systemübersicht",
-                    0,
-                    20,
-                    18,
-                    740,
-                    28,
-                    0,
-                );
-                control(
-                    "STATIC",
-                    "Hardwareübersicht · GPU-Taktprofile verfügbar · HP-Modi noch in Validierung",
-                    0,
-                    20,
-                    49,
-                    740,
-                    25,
-                    0,
-                );
-                state.details.set(control(
-                    "EDIT",
-                    "Hardware wird erkannt …",
-                    WS_BORDER
-                        | WS_VSCROLL
-                        | ES_MULTILINE as u32
-                        | ES_READONLY as u32
-                        | ES_AUTOVSCROLL as u32,
-                    20,
-                    85,
-                    750,
-                    390,
-                    0,
-                ));
-                control(
-                    "BUTTON",
-                    "Aktualisieren",
-                    WS_TABSTOP,
-                    20,
-                    493,
-                    160,
-                    32,
-                    REFRESH,
-                );
-                control("STATIC", "Profil (Vorschau)", 0, 205, 497, 160, 25, 0);
-                state.profile.set(control(
-                    "COMBOBOX",
-                    "",
-                    WS_TABSTOP | CBS_DROPDOWNLIST as u32,
-                    370,
-                    493,
-                    210,
-                    200,
-                    PROFILE,
-                ));
-                for label in ["Quiet", "Balanced", "Performance", "Unleashed"] {
-                    SendMessageW(
-                        state.profile.get(),
-                        CB_ADDSTRING,
-                        0,
-                        wide(label).as_ptr() as isize,
-                    );
-                }
-                SendMessageW(state.profile.get(), CB_SETCURSEL, 1, 0);
-                state.preview.set(control(
-                    "STATIC",
-                    "Balanced: Vorschau. Noch keine Hardware-Einstellungen angewendet.",
-                    0,
-                    20,
-                    544,
-                    550,
-                    53,
-                    0,
-                ));
-                control(
-                    "BUTTON",
-                    "GPU-Profile …",
-                    WS_TABSTOP,
-                    596,
-                    493,
-                    174,
-                    32,
-                    GPU_PROFILES,
-                );
-                control(
-                    "BUTTON",
-                    "Lüfter & V/F …",
-                    WS_TABSTOP,
-                    596,
-                    544,
-                    174,
-                    34,
-                    CURVES,
-                );
-                control(
-                    "STATIC",
-                    "Schließen: Tray. Tray-Menü: Beenden.",
-                    0,
-                    250,
-                    601,
-                    330,
-                    28,
-                    0,
-                );
-                state.cpu_sensor.set(control(
-                    "BUTTON",
-                    "CPU-Sensoren …",
-                    WS_TABSTOP,
-                    20,
-                    596,
-                    215,
-                    34,
-                    CPU_SENSORS,
-                ));
-                control(
-                    "BUTTON",
-                    "Beleuchtung …",
-                    WS_TABSTOP,
-                    596,
-                    596,
-                    174,
-                    34,
-                    KEYBOARD,
-                );
-                if state.details.get().is_null()
-                    || state.profile.get().is_null()
-                    || state.preview.get().is_null()
+                crate::dashboard::create(hwnd, &state.theme);
+                state.details.set(GetDlgItem(hwnd, 180));
+                state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
+                state.preview.set(GetDlgItem(hwnd, 181));
+                state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
+                if [
+                    state.details.get(),
+                    state.profile.get(),
+                    state.preview.get(),
+                    state.cpu_sensor.get(),
+                ]
+                .iter()
+                .any(|h| h.is_null())
                 {
                     return -1;
                 }
+                state.theme.frame(hwnd);
                 state
                     .tray
                     .set(Shell_NotifyIconW(NIM_ADD, &tray_data(hwnd)) != 0);
                 0
             }
+            WM_ERASEBKGND => {
+                crate::dashboard::paint(hwnd, &state.theme, wparam as HDC);
+                1
+            }
+            WM_PRINTCLIENT => {
+                crate::dashboard::paint(hwnd, &state.theme, wparam as HDC);
+                0
+            }
+            WM_PAINT => {
+                let mut paint: PAINTSTRUCT = std::mem::zeroed();
+                let dc = BeginPaint(hwnd, &mut paint);
+                crate::dashboard::paint(hwnd, &state.theme, dc);
+                EndPaint(hwnd, &paint);
+                0
+            }
+            WM_DRAWITEM => {
+                let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
+                if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
+                    state
+                        .theme
+                        .button(item, state.theme.body, item.CtlID == GPU_PROFILES as u32);
+                    1
+                } else {
+                    DefWindowProcW(hwnd, message, wparam, lparam)
+                }
+            }
+            WM_GETMINMAXINFO => {
+                let info = &mut *(lparam as *mut MINMAXINFO);
+                info.ptMinTrackSize = POINT { x: 960, y: 790 };
+                0
+            }
             WM_COMMAND => {
                 let id = wparam & 0xffff;
+                // Owner-drawn buttons also send non-click notifications.
+                // Focus/paint/double-click notifications cannot trigger actions.
+                if id != PROFILE && (wparam >> 16) as u32 != BN_CLICKED {
+                    return 0;
+                }
                 if id == REFRESH {
                     let _ = state.tx.send(Request::Refresh);
                 }
@@ -636,6 +474,7 @@ unsafe extern "system" fn window_proc(
                 }
                 if id == PROFILE && (wparam >> 16) as u32 == CBN_SELCHANGE {
                     let index = SendMessageW(state.profile.get(), CB_GETCURSEL, 0, 0);
+                    state.preview_index.set(index.max(0) as usize);
                     let profile = match index {
                         0 => Profile::Quiet,
                         2 => Profile::Performance,
@@ -648,9 +487,7 @@ unsafe extern "system" fn window_proc(
                     SetWindowTextW(state.preview.get(), wide(&label).as_ptr());
                 }
                 if id == SHOW as usize {
-                    ShowWindow(hwnd, SW_RESTORE);
-                    SetForegroundWindow(hwnd);
-                    let _ = state.tx.send(Request::Visibility(true));
+                    show_dashboard(hwnd, state);
                 }
                 if id == EXIT as usize {
                     DestroyWindow(hwnd);
@@ -686,9 +523,7 @@ unsafe extern "system" fn window_proc(
             TRAY => {
                 match lparam as u32 {
                     WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
-                        ShowWindow(hwnd, SW_RESTORE);
-                        SetForegroundWindow(hwnd);
-                        let _ = state.tx.send(Request::Visibility(true));
+                        show_dashboard(hwnd, state);
                     }
                     WM_RBUTTONUP | WM_CONTEXTMENU => {
                         let menu = CreatePopupMenu();
@@ -719,14 +554,16 @@ unsafe extern "system" fn window_proc(
                 0
             }
             WM_SIZE if wparam == SIZE_MINIMIZED as usize && state.tray.get() => {
-                ShowWindow(hwnd, SW_HIDE);
-                let _ = state.tx.send(Request::Visibility(false));
+                hide_dashboard(hwnd, state);
+                0
+            }
+            WM_SIZE => {
+                crate::dashboard::layout(hwnd);
                 0
             }
             WM_CLOSE => {
                 if state.tray.get() {
-                    ShowWindow(hwnd, SW_HIDE);
-                    let _ = state.tx.send(Request::Visibility(false));
+                    hide_dashboard(hwnd, state);
                 } else {
                     DestroyWindow(hwnd);
                 }
@@ -746,12 +583,22 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None)
+    run_window(start_in_tray, None, [1140, 820])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path))
+    run_window(false, Some(path), [1140, 820])
 }
-fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<(), String> {
+pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
+    if size[0] < 960 || size[1] < 790 || size[0] > 2000 || size[1] > 1400 {
+        return Err("Preview size outside dashboard bounds".into());
+    }
+    run_window(false, Some(path), size)
+}
+fn run_window(
+    start_in_tray: bool,
+    preview: Option<&std::path::Path>,
+    size: [i32; 2],
+) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let shared = Arc::new(Mutex::new(None));
     let mut state = Box::new(State {
@@ -761,9 +608,10 @@ fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
         cpu_sensor: Cell::new(ptr::null_mut()),
-        font: Cell::new(ptr::null_mut()),
         tray: Cell::new(false),
         taskbar_message: 0,
+        theme: crate::theme::Theme::new(),
+        preview_index: Cell::new(1),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
@@ -776,7 +624,7 @@ fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<
             hInstance: instance,
             hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
             hIcon: LoadIconW(ptr::null_mut(), IDI_APPLICATION),
-            hbrBackground: (COLOR_WINDOW + 1) as HBRUSH,
+            hbrBackground: state.theme.background,
             lpszClassName: class_name.as_ptr(),
             ..std::mem::zeroed()
         };
@@ -788,20 +636,17 @@ fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<
             0,
             class_name.as_ptr(),
             wide(APP_NAME).as_ptr(),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            808,
-            680,
+            size[0],
+            size[1],
             ptr::null_mut(),
             ptr::null_mut(),
             instance,
             (&mut *state as *mut State).cast(),
         );
         if hwnd.is_null() {
-            if !state.font.get().is_null() {
-                DeleteObject(state.font.get());
-            }
             UnregisterClassW(class_name.as_ptr(), instance);
             return Err(format!(
                 "Window creation: {}",
@@ -857,9 +702,6 @@ fn run_window(start_in_tray: bool, preview: Option<&std::path::Path>) -> Result<
         if power_registration != 0 {
             UnregisterPowerSettingNotification(power_registration);
         }
-        if !state.font.get().is_null() {
-            DeleteObject(state.font.get());
-        }
         UnregisterClassW(class_name.as_ptr(), instance);
         result
     }
@@ -892,7 +734,7 @@ mod tests {
         assert!(cpu_error_message("CPU reader disconnected").contains("erneut aktivieren"));
     }
     #[test]
-    fn cpu_report_names_tctl_and_energy_mean_without_relabelling_windows_mhz() {
+    fn cpu_status_distinguishes_energy_baseline_and_mean_with_tctl_provenance() {
         let hardware = omen_core::CpuHardwareSample {
             schema: 1,
             source: omen_core::CpuHardwareSource::PawnioAmdRapl,
@@ -913,17 +755,23 @@ mod tests {
             cpu_hardware_status: CpuHardwareStatus::Active,
             ..Default::default()
         };
-        let report = snapshot_text(&snapshot);
-        assert!(report.contains("CPU-Paketleistung: 55.0 W · Mittelwert über 1.10 s"));
-        assert!(report.contains("CPU-Temperatur (Tctl): 82.0 °C"));
-        assert!(report.contains("Takt (Windows): 2400 MHz"));
-        assert!(report.contains("kein gemessener Boost- oder Effektivtakt"));
-        assert!(report.find("NVIDIA SENSOREN").unwrap() < report.find("CPU LEISTUNG").unwrap());
-        assert!(report.find("CPU LEISTUNG").unwrap() < report.find("SYSTEM").unwrap());
+        let report = crate::dashboard::cpu_detail(&snapshot);
+        assert!(report.contains("Mittelwert über 1.10 s"));
+        assert!(report.contains("Temperatur: Tctl"));
+        assert!(report.contains("Quelle: CPU-Energiezähler und Tctl über PawnIO"));
+        snapshot
+            .cpu
+            .as_mut()
+            .unwrap()
+            .hardware
+            .as_mut()
+            .unwrap()
+            .power_interval_ms = None;
+        let baseline = crate::dashboard::cpu_detail(&snapshot);
+        assert!(baseline.contains("Energie-Baseline"));
+        assert!(!baseline.contains("Mittelwert über"));
         snapshot.cpu = Some(omen_core::CpuSample::default());
         snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-        let missing = snapshot_text(&snapshot);
-        assert!(missing.contains("CPU-Paketleistung: Nicht verfügbar"));
-        assert!(missing.contains("CPU-Temperatur: Nicht verfügbar"));
+        assert!(crate::dashboard::cpu_detail(&snapshot).contains("nicht aktiviert"));
     }
 }
