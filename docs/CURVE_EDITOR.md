@@ -1,6 +1,6 @@
 # Native GPU- und Lüfterkurven
 
-Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet einen eigenen Chart auf dem aktuellen Preset-Entwurf, auch ohne Namen oder vorheriges Save. Übernehmen gibt die Kurve an das Preset zurück; Abbrechen verwirft diese Bearbeitung. Beide schreiben weder Profil-Datei noch Hardware. Der eigenständige gespeicherte GPU-Editor (`gpu-curve-ui [profil-id]`) und der kombinierte CLI-Einstieg (`curve-ui [profil-id]`) bleiben kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
+Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet einen eigenen Chart auf dem aktuellen Preset-Entwurf, auch ohne Namen oder vorheriges Save. Übernehmen gibt die Kurve an das Preset zurück; Abbrechen verwirft diese Bearbeitung. Beide schreiben weder Profil-Datei noch Hardware. Dieser Preset-Chart zeigt nur **Abbrechen**, **Übernehmen**, **Rückgängig** und **Tastenkürzel**; Wiederholen, Zoom und die ganze Kurve bleiben über Tastatur und Mausrad erreichbar, Enter öffnet weiterhin die Zahlenfelder. Der eigenständige gespeicherte GPU-Editor (`gpu-curve-ui [profil-id]`) und der kombinierte CLI-Einstieg (`curve-ui [profil-id]`) bleiben kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
 
 Standardmäßig öffnet sich die dunkle **Diagrammansicht** mit großer Kurve, Kurvenauswahl, Speichern, Rückgängig/Wiederholen, Hilfe und Zoom. **Profil / Werte …** öffnet Profilauswahl, Namen, Punktauswahl und Zahlenfelder; **Diagrammansicht** wechselt zurück. Enter im Diagramm öffnet diese Ansicht und fokussiert den Y-Wert des ausgewählten Punkts.
 
@@ -12,7 +12,7 @@ Die vom Benutzer vorgegebene MSI-Afterburner-Ansicht dient als visuelle Referenz
 
 Der ausgewählte Punkt ist als größeres blaues Quadrat mit horizontaler und vertikaler Hilfslinie markiert. **Ausgewählt** nennt Spannung und Frequenz beziehungsweise Temperatur und Lüfterwert. Diese Linien folgen der Punktauswahl; sie zeigen keinen aktuellen GPU-Betriebspunkt. Ein markierter GPU-Spannungsbereich erhält ein durchgehendes farbiges Band und eine Punktzahl.
 
-Die Achsen sind mit mV/MHz beziehungsweise °C/% beschriftet. Rasterabstände passen sich an Fenstergröße und Zoom an. **Ganze Kurve** berücksichtigt die geladenen und bearbeiteten Frequenzen. Zoomen oder Verschieben verändert nur den sichtbaren Ausschnitt; alle Kurvenpunkte bleiben im Entwurf und im gespeicherten Profil erhalten.
+Die Achsen sind mit mV/MHz beziehungsweise °C/% beschriftet. Rasterabstände passen sich an Fenstergröße und Zoom an. GPU-Kurven öffnen zwei Zoomstufen um den vorausgewählten Punkt nahe 950 mV; im Standardfenster ergibt das 25-mV-Beschriftungen. Lüfterkurven öffnen vollständig. **Ganze Kurve** beziehungsweise Strg + 0 berücksichtigt die geladenen und bearbeiteten Frequenzen. Zoomen oder Verschieben verändert nur den sichtbaren Ausschnitt; alle Kurvenpunkte bleiben im Entwurf und im gespeicherten Profil erhalten.
 
 ## Bedienung
 

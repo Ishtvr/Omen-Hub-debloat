@@ -564,9 +564,22 @@ fn layout(hwnd: HWND, s: &State) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    // The GPU draft chart keeps only Abbrechen, Übernehmen, Rückgängig and
+    // Tastenkürzel; redo, zoom and the whole curve remain keyboard/wheel actions.
+    let minimal = s.draft && s.graph_only.get();
     unsafe {
         for (i, handle) in c.modes.iter().enumerate() {
-            ShowWindow(*handle, if s.allowed[i] { SW_SHOW } else { SW_HIDE });
+            ShowWindow(
+                *handle,
+                if s.allowed[i] && !minimal {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
+        for handle in [c.redo, c.focus, c.zoom[0], c.zoom[1], c.zoom[2]] {
+            ShowWindow(handle, if minimal { SW_HIDE } else { SW_SHOW });
         }
     }
     let mut r: RECT = unsafe { std::mem::zeroed() };
@@ -583,6 +596,22 @@ fn layout(hwnd: HWND, s: &State) {
         for handle in regular {
             ShowWindow(handle, if s.graph_only.get() { SW_HIDE } else { SW_SHOW });
         }
+    }
+    if minimal {
+        unsafe {
+            ShowWindow(c.open, SW_SHOW);
+            for (handle, b) in [
+                (c.open, [20, 14, 140, 30]),
+                (c.save, [172, 14, 140, 30]),
+                (c.undo, [324, 14, 140, 30]),
+                (c.help, [w - 155, 14, 135, 30]),
+                (c.canvas, [8, 54, w - 16, h - 108]),
+                (c.status, [20, h - 42, w - 40, 32]),
+            ] {
+                MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
+            }
+        }
+        return;
     }
     if s.graph_only.get() {
         let narrow = w < 1130;
