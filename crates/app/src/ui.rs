@@ -1,5 +1,5 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
-use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot};
+use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot, hp_mode::HpMode};
 use std::{
     cell::{Cell, RefCell},
     ptr,
@@ -25,6 +25,21 @@ const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
+/// Built-in modes ahead of saved presets. Only Balanced and Unleashed have a
+/// native HP adapter; the others stay listed but unavailable.
+const DEFAULT_MODES: [(&str, Option<HpMode>); 4] = [
+    ("Quiet", None),
+    ("Balanced", Some(HpMode::Balanced)),
+    ("Performance", None),
+    ("Unleashed", Some(HpMode::Unleashed)),
+];
+const IDLE_MODE_STATUS: &str = "BIOS-Modus nicht lesbar; Auswahl wendet ihn an.";
+fn unavailable(index: usize) -> String {
+    format!(
+        "{} (Default): noch nicht verfügbar.",
+        DEFAULT_MODES[index].0
+    )
+}
 
 #[derive(Debug, Clone)]
 enum Request {
@@ -34,6 +49,7 @@ enum Request {
     Resume,
     Power,
     ApplyPreset(String),
+    ApplyMode(HpMode),
     Stop,
 }
 
@@ -229,6 +245,21 @@ fn worker(
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
                 }
             }
+            Some(Request::ApplyMode(mode)) => {
+                let result =
+                    crate::elevation::run(None, crate::elevation::Action::Mode(mode), || false);
+                let label = match mode {
+                    HpMode::Balanced => "Balanced",
+                    HpMode::Unleashed => "Unleashed",
+                };
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) => format!("{label} (Default) aktiv."),
+                    Err(error) => format!("{label} nicht angewendet: {error}"),
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
             Some(Request::Visibility(value)) => {
                 visible = value;
                 if value {
@@ -282,19 +313,15 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                 .map(|p| (p.id, p.name))
                 .collect::<Vec<_>>();
             SendMessageW(state.profile.get(), CB_RESETCONTENT, 0, 0);
-            for label in [
-                "Quiet (Default)",
-                "Balanced (Default)",
-                "Performance (Default)",
-            ] {
+            for (label, _) in DEFAULT_MODES {
                 SendMessageW(
                     state.profile.get(),
                     CB_ADDSTRING,
                     0,
-                    wide(label).as_ptr() as isize,
+                    wide(&format!("{label} (Default)")).as_ptr() as isize,
                 );
             }
-            let mut selected = state.preview_index.get().min(2);
+            let mut selected = state.preview_index.get().min(DEFAULT_MODES.len() - 1);
             for (i, (id, name)) in entries.iter().enumerate() {
                 SendMessageW(
                     state.profile.get(),
@@ -303,19 +330,16 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                     wide(name).as_ptr() as isize,
                 );
                 if state.selected_custom.borrow().as_ref() == Some(id) {
-                    selected = i + 3;
+                    selected = i + DEFAULT_MODES.len();
                 }
             }
-            if selected < 3 {
+            if selected < DEFAULT_MODES.len() {
                 *state.selected_custom.borrow_mut() = None;
             }
             *state.custom_profiles.borrow_mut() = entries;
             SendMessageW(state.profile.get(), CB_SETCURSEL, selected, 0);
-            if selected < 3 {
-                *state.mode_status.borrow_mut() = format!(
-                    "{} (Default): noch nicht verfügbar.",
-                    ["Quiet", "Balanced", "Performance"][selected]
-                );
+            if selected < DEFAULT_MODES.len() && DEFAULT_MODES[selected].1.is_none() {
+                *state.mode_status.borrow_mut() = unavailable(selected);
             }
             SetWindowTextW(
                 state.preview.get(),
@@ -524,36 +548,38 @@ unsafe extern "system" fn window_proc(
                     && !state.applying_preset.get()
                 {
                     let index = SendMessageW(state.profile.get(), CB_GETCURSEL, 0, 0);
-                    if index >= 3 {
+                    let begin = |request: Request| {
+                        state.applying_preset.set(true);
+                        windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                            state.profile.get(),
+                            0,
+                        );
+                        SetWindowTextW(state.preview.get(), wide("Windows-Freigabe …").as_ptr());
+                        *state.mode_status.borrow_mut() = "Windows-Freigabe …".into();
+                        let _ = state.tx.send(request);
+                    };
+                    if index >= DEFAULT_MODES.len() as isize {
                         let selected = state
                             .custom_profiles
                             .borrow()
-                            .get(index as usize - 3)
+                            .get(index as usize - DEFAULT_MODES.len())
                             .cloned();
                         if let Some((id, _)) = selected {
-                            state.applying_preset.set(true);
-                            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                                state.profile.get(),
-                                0,
-                            );
                             *state.selected_custom.borrow_mut() = Some(id.clone());
-                            SetWindowTextW(
-                                state.preview.get(),
-                                wide("Windows-Freigabe …").as_ptr(),
-                            );
-                            *state.mode_status.borrow_mut() = "Windows-Freigabe …".into();
-                            let _ = state.tx.send(Request::ApplyPreset(id));
+                            begin(Request::ApplyPreset(id));
                         }
                     } else if index >= 0 {
                         state.preview_index.set(index as usize);
                         *state.selected_custom.borrow_mut() = None;
-                        let label = ["Quiet", "Balanced", "Performance"][index as usize];
-                        *state.mode_status.borrow_mut() =
-                            format!("{label} (Default): noch nicht verfügbar.");
-                        SetWindowTextW(
-                            state.preview.get(),
-                            wide(&format!("{label} (Default): noch nicht verfügbar.")).as_ptr(),
-                        );
+                        if let Some(mode) = DEFAULT_MODES[index as usize].1 {
+                            begin(Request::ApplyMode(mode));
+                        } else {
+                            *state.mode_status.borrow_mut() = unavailable(index as usize);
+                            SetWindowTextW(
+                                state.preview.get(),
+                                wide(&unavailable(index as usize)).as_ptr(),
+                            );
+                        }
                     }
                 }
                 if id == SHOW as usize {
@@ -712,7 +738,7 @@ fn run_window(
         selected_custom: RefCell::new(None),
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
-        mode_status: RefCell::new("Balanced (Default): noch nicht verfügbar.".into()),
+        mode_status: RefCell::new(IDLE_MODE_STATUS.into()),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.

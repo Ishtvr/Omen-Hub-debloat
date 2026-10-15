@@ -7,6 +7,7 @@ pub mod curve_view;
 pub mod fan;
 pub mod features;
 pub mod hp;
+pub mod hp_mode;
 pub mod keyboard;
 pub mod preset;
 pub mod profiles;

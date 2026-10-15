@@ -146,6 +146,24 @@ impl HpBios {
         };
         self.invoke(&contract, &[raw, 0, 0, 0]).map(|_| ())
     }
+    /// The three fixed 4-byte performance-mode SETs used by the Hub (0x1A,
+    /// 0x22, 0x29). The caller passes only a type from `omen_core::hp_mode`.
+    fn set_mode_payload(&self, command_type: u32, bytes: [u8; 4]) -> WMIResult<()> {
+        use omen_core::hp_mode::{GPU_POWER_TYPE, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
+        if ![THERMAL_MODE_TYPE, GPU_POWER_TYPE, POWER_LIMITS_TYPE].contains(&command_type) {
+            return Err(WMIError::ConvertVariantError(
+                "Only the fixed HP performance-mode SETs can be written".into(),
+            ));
+        }
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &bytes).map(|_| ())
+    }
     fn invoke(&self, contract: &ReadContract, bytes: &[u8]) -> WMIResult<(u32, Vec<u8>)> {
         let data = self.connection.get_object("hpqBDataIn")?.spawn_instance()?;
         data.put_property("Command", contract.command)?;
@@ -373,6 +391,79 @@ pub fn read_hp_system_design(inventory: &Inventory) -> Result<SystemDesignData, 
         decode_system_design(code, &bytes).map_err(WMIError::ConvertVariantError)
     };
     query().map_err(|error| query_error("system-design", error))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HpModeReport {
+    pub plan: omen_core::hp_mode::ModePlan,
+    pub gpu_before: GpuPowerStatus,
+    pub gpu_after: GpuPowerStatus,
+}
+
+/// Switches the notebook to the Hub's Balanced or Unleashed mode. The thermal
+/// mode cannot be read back; the GPU cTGP/PPAB flags are verified afterwards.
+/// A failed Unleashed write falls back to Balanced.
+pub fn apply_hp_mode(
+    inventory: &Inventory,
+    mode: omen_core::hp_mode::HpMode,
+) -> Result<HpModeReport, String> {
+    use omen_core::hp_mode::{self, GPU_POWER_TYPE, HpMode, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
+    if mode == HpMode::Unleashed && super::power_status().ac_connected != Some(true) {
+        return Err("Unleashed braucht Netzbetrieb.".into());
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
+    let read_gpu = |bios: &HpBios| -> Result<GpuPowerStatus, String> {
+        let (code, bytes) = bios
+            .get(Read::GpuStatus)
+            .map_err(|e| query_error("GPU-status", e))?;
+        decode_gpu_status(code, &bytes)
+    };
+    let (code, design) = bios
+        .get(Read::SystemDesign)
+        .map_err(|e| query_error("system-design", e))?;
+    let design = decode_system_design(code, &design)?;
+    if !design.extreme_supported {
+        return Err("Die Firmware meldet keinen Unleashed-/Extreme-Modus.".into());
+    }
+    let gpu_before = read_gpu(&bios)?;
+    let send = |plan: &hp_mode::ModePlan| -> Result<GpuPowerStatus, String> {
+        // Same order as the Hub: mode, then GPU flags, then the shared budget.
+        for (command_type, bytes) in [
+            (THERMAL_MODE_TYPE, plan.thermal),
+            (GPU_POWER_TYPE, plan.gpu_power),
+            (POWER_LIMITS_TYPE, plan.shared_budget),
+        ] {
+            bios.set_mode_payload(command_type, bytes)
+                .map_err(|e| query_error(&format!("mode SET {command_type:#x}"), e))?;
+        }
+        let after = read_gpu(&bios)?;
+        if after.custom_tgp_enabled != plan.expect_custom_tgp
+            || after.ppab_enabled != plan.expect_ppab
+        {
+            return Err(format!(
+                "GPU-Readback passt nicht: cTGP {} / Dynamic Boost {}",
+                after.custom_tgp_enabled, after.ppab_enabled
+            ));
+        }
+        Ok(after)
+    };
+    let plan = hp_mode::plan(mode, design.default_shared_budget_raw)?;
+    match send(&plan) {
+        Ok(gpu_after) => Ok(HpModeReport {
+            plan,
+            gpu_before,
+            gpu_after,
+        }),
+        Err(error) if mode == HpMode::Unleashed => {
+            let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw)
+                .and_then(|balanced| send(&balanced));
+            Err(match fallback {
+                Ok(_) => format!("{error}; Balanced wiederhergestellt"),
+                Err(again) => format!("{error}; Balanced-Rückfall fehlgeschlagen: {again}"),
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn read_hp_keyboard_state(inventory: &Inventory) -> Result<KeyboardState, String> {

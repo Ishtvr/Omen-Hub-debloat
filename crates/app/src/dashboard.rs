@@ -99,7 +99,7 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             (161, "Leistungsmodus", t.body, false, false),
             (
                 181,
-                "Balanced (Default): noch nicht verfügbar.",
+                "BIOS-Modus nicht lesbar; Auswahl wendet ihn an.",
                 t.small,
                 false,
                 true,
@@ -156,6 +156,7 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             "Quiet (Default)",
             "Balanced (Default)",
             "Performance (Default)",
+            "Unleashed (Default)",
         ] {
             SendMessageW(combo, CB_ADDSTRING, 0, wide(value).as_ptr() as isize);
         }

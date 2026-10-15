@@ -62,6 +62,7 @@ pub fn handles(command: &str) -> bool {
             | "profile-apply"
             | "profile-restore"
             | "profile-ui-apply"
+            | "mode-ui-apply"
             | "profile-ui-restore"
             | "profile-ui-startup-enable"
             | "profile-startup-enable"
@@ -83,6 +84,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 Some(("keyboard_read", args[1].as_str()))
             }
             Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
+            Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -106,6 +108,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 fn run_inner(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("mode-ui-apply") if args.len() == 3 => {
+            validate_nonce(Some(&args[2]))?;
+            let mode = omen_core::hp_mode::HpMode::parse(&args[1])?;
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":args[2],"result":{"Ok":report}}))?;
+            return print(&report);
+        }
         Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
             validate_nonce(Some(&args[1]))?;
             let store = ProfileStore::user_data()?;

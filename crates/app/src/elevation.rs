@@ -13,6 +13,7 @@ pub enum Action {
     Apply,
     Restore,
     Startup,
+    Mode(omen_core::hp_mode::HpMode),
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -20,6 +21,7 @@ impl Action {
             Self::Apply => "apply",
             Self::Restore => "restore",
             Self::Startup => "startup",
+            Self::Mode(_) => "mode",
         }
     }
 }
@@ -45,6 +47,7 @@ pub fn run(
             "profile-ui-startup-enable {} {nonce}",
             id.ok_or("Zuerst ein Profil speichern.")?
         ),
+        Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
     };
     let file = wide(
         &std::env::current_exe()

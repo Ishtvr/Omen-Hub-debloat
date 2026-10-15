@@ -305,7 +305,7 @@ Der finale Release hat **2044928 Bytes**, SHA-256 **`505B721BE79887D550C2C71126F
 | --- | --- |
 | `smoke-presets-ui.ps1` | Neu/Name/optional VRAM speichern; vollständige 127-Punkt-Kurve und parallel geänderte versteckte Beleuchtungswerte erhalten; 45,125 W exakt als 45125 mW speichern; unsupported Apply/Startup gesperrt; Löschen archiviert exakte Daten; GPU-Steuerbild und Hauptjournal/Startup gleich |
 | Derselbe Preset-Test, Reviewer-Regression | Dirty Preset A → B wählen → Verwerfen mit Nein beantworten: Selector und Entwurf bleiben A; Save ändert A, die exakte Datei von B bleibt hashgleich |
-| `smoke-controls-navigation.ps1` | Leistungsmodus listet die drei Defaults und das temporäre eigene Preset; getrennte GPU-/Fan-Einstiege zeigen nur erlaubte Arten; Scrollseiten/Anfang/Ende und dunkler Thumb-Drag bewegen die Settings; keine Profilanwendung |
+| `smoke-controls-navigation.ps1` | Leistungsmodus listet die vier Defaults und das temporäre eigene Preset; getrennte GPU-/Fan-Einstiege zeigen nur erlaubte Arten; Scrollseiten/Anfang/Ende und dunkler Thumb-Drag bewegen die Settings; keine Profilanwendung |
 | `smoke-ui.ps1` | Dashboard, NVIDIA-Telemetrie aus Child, CPU-unavailable/Windows-MHz/Auslastung, Default-Auswahlstatus, freigegebene Controls im Tray und Rückkehr mit erhaltener Auswahl, sauberer Exit |
 | `smoke-curves-ui.ps1` | Vorhandene vollständige GPU-/Lüfterbearbeitung, feste Anker, Gesten/Verlauf/Zoom, getrennte Metadaten und unveränderte Hardware |
 | `smoke-cpu-sensors.ps1` | Explizite UAC-Freigabe des Lese-Helpers, Paketenergie-Mittelwert/Tctl, Ausschalten, Pause/Rückkehr und simulierte Suspend-/Resume-Handler mit frischer Baseline, sauberer Exit; kein echter Standby |

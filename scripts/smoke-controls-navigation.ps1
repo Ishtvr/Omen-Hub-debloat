@@ -60,7 +60,7 @@ try{
  $taskUntil=(Get-Date).AddSeconds(12)
  do{$taskCombo=[OmenNavigationSmoke]::GetDlgItem($taskWindow,102);$taskCount=if($taskCombo-ne[IntPtr]::Zero){[OmenNavigationSmoke]::Message($taskCombo,0x0146)}else{0};if($taskCount-ge4){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskUntil)
  $taskItems=@(for($taskI=0;$taskI-lt$taskCount;$taskI++){[OmenNavigationSmoke]::Item($taskCombo,$taskI)})
- if(($taskItems[0..2]-join',')-cne'Quiet (Default),Balanced (Default),Performance (Default)'-or$taskItems-notcontains$taskName-or$taskItems-contains'Unleashed'){throw 'Leistungsmodus defaults/custom entries are wrong.'}
+ if(($taskItems[0..3]-join',')-cne'Quiet (Default),Balanced (Default),Performance (Default),Unleashed (Default)'-or$taskItems-notcontains$taskName){throw 'Leistungsmodus defaults/custom entries are wrong.'}
  Close-Navigation $taskWindow 202
  foreach($taskMode in @('fan-ui','gpu-curve-ui')){
   $taskWindow=Open-Navigation $taskMode 'OmenHubPPCurveEditor'
