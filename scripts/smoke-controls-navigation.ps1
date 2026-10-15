@@ -37,6 +37,7 @@ public static class OmenNavigationSmoke {
  public static IntPtr Control(IntPtr hwnd,int id){var found=GetDlgItem(hwnd,id);if(found!=IntPtr.Zero)return found;EnumChildWindows(hwnd,(h,a)=>{if(GetDlgCtrlID(h)==id){found=h;return false;}return true;},IntPtr.Zero);return found;}
  public static int Top(IntPtr hwnd){Rect r;GetWindowRect(hwnd,out r);return r.top;}
  public static int Width(IntPtr hwnd){Rect r;GetClientRect(hwnd,out r);return r.right;}
+ public static int Height(IntPtr hwnd){Rect r;GetClientRect(hwnd,out r);return r.bottom;}
 }
 '@
 }
@@ -76,8 +77,12 @@ try{
  $taskUntil=(Get-Date).AddSeconds(12)
  do{$taskStatus=[OmenNavigationSmoke]::Text([OmenNavigationSmoke]::GetDlgItem($taskWindow,711));if($taskStatus-match'Preset benennen'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskUntil)
  $taskPane=[OmenNavigationSmoke]::GetDlgItem($taskWindow,710);$taskHeader=[OmenNavigationSmoke]::Control($taskWindow,1200);$taskTop=[OmenNavigationSmoke]::Top($taskHeader)
+ $taskCpuHeading=[OmenNavigationSmoke]::Control($taskWindow,721);$taskWindowsHeading=[OmenNavigationSmoke]::Control($taskWindow,722)
+ if([OmenNavigationSmoke]::Text($taskCpuHeading)-cne'CPU'-or[OmenNavigationSmoke]::Text($taskWindowsHeading)-cne'Windows'-or[OmenNavigationSmoke]::Top($taskWindowsHeading)-le[OmenNavigationSmoke]::Top($taskCpuHeading)){throw 'Windows is not a separate section after CPU.'}
  [void][OmenNavigationSmoke]::Message($taskPane,0x0115,7)
  if([OmenNavigationSmoke]::Top($taskHeader)-ge$taskTop){throw 'Settings did not page to bottom.'}
+ $taskWindowsTop=[OmenNavigationSmoke]::Top($taskWindowsHeading);$taskPaneTop=[OmenNavigationSmoke]::Top($taskPane)
+ if($taskWindowsTop-lt$taskPaneTop-or$taskWindowsTop+32-gt$taskPaneTop+[OmenNavigationSmoke]::Height($taskPane)){throw 'Windows section heading is obscured at the bottom of the settings pane.'}
  [void][OmenNavigationSmoke]::Message($taskPane,0x0115,6)
  if([OmenNavigationSmoke]::Top($taskHeader)-ne$taskTop){throw 'Settings did not return to top.'}
  $taskX=[OmenNavigationSmoke]::Width($taskPane)-8

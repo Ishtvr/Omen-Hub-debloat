@@ -3,7 +3,7 @@
 use crate::{
     elevation::{self, Action},
     native_ui::{self as ui, text, wide},
-    preset_fields::{self, Field, GROUPS},
+    preset_fields::{self, Field, GROUPS, SECTIONS},
     theme,
 };
 use omen_core::{
@@ -58,7 +58,7 @@ struct View {
     binding: DeviceBinding,
     capabilities: BTreeMap<Feature, bool>,
     curve: Result<omen_core::vf::VfState, String>,
-    removed_gpu_options: usize,
+    removed_options: usize,
     core_curve_conflict: bool,
     pending: bool,
     applicable: bool,
@@ -87,10 +87,10 @@ fn load(id: Option<&str>) -> Result<View, String> {
             .first()
             .is_some_and(|first| curve.nodes.iter().any(|p| p.delta_khz != first.delta_khz))
     });
-    let removed_gpu_options = selected.as_ref().map_or(0, |p| {
+    let removed_options = selected.as_ref().map_or(0, |p| {
         p.settings
             .iter()
-            .filter(|s| preset_fields::REMOVED_GPU_OPTIONS.contains(&s.feature))
+            .filter(|s| preset_fields::retired(s.feature))
             .count()
     });
     let plan = selected
@@ -116,7 +116,7 @@ fn load(id: Option<&str>) -> Result<View, String> {
         binding: controller.context()?.binding,
         capabilities,
         curve,
-        removed_gpu_options,
+        removed_options,
         core_curve_conflict,
         pending: store.pending()?,
         applicable: plan.as_ref().is_some_and(|p| p.applicable),
@@ -266,8 +266,8 @@ struct State {
     rx: mpsc::Receiver<Update>,
     view: RefCell<Option<View>>,
     rows: RefCell<Vec<Row>>,
-    groups: Cell<[HWND; 11]>,
-    expanded: RefCell<[bool; 11]>,
+    groups: Cell<[HWND; GROUPS.len()]>,
+    expanded: RefCell<[bool; GROUPS.len()]>,
     pane: Cell<HWND>,
     scroll: Cell<i32>,
     extent: Cell<i32>,
@@ -278,6 +278,7 @@ struct State {
     closing: Cell<bool>,
     curve: RefCell<Option<Value>>,
     preview: Option<PathBuf>,
+    preview_group: Option<usize>,
 }
 fn checked(handle: HWND) -> bool {
     unsafe { SendMessageW(handle, BM_GETCHECK, 0, 0) == BST_CHECKED as isize }
@@ -613,10 +614,10 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
     }
     let summary = if view.pending {
         "Unvollständige Änderung: Originalzustand wiederherstellen.".into()
-    } else if view.removed_gpu_options > 0 {
+    } else if view.removed_options > 0 {
         format!(
-            "{} entfernte GPU-Optionen. Speichern bereinigt dieses Preset.",
-            view.removed_gpu_options
+            "{} entfernte Optionen. Speichern bereinigt dieses Preset.",
+            view.removed_options
         )
     } else if view.startup_enabled && !view.startup_valid {
         "Windows-Start ist ungültig: deaktivieren, Preset anwenden und erneut aktivieren.".into()
@@ -733,7 +734,7 @@ fn collect(state: &State) -> Result<SaveData, String> {
             profile
                 .settings
                 .iter()
-                .filter(|s| preset_fields::REMOVED_GPU_OPTIONS.contains(&s.feature))
+                .filter(|s| preset_fields::retired(s.feature))
                 .map(|s| (s.feature, None)),
         );
     }
@@ -758,8 +759,8 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
         let mut y = 0;
         let scroll = state.scroll.get();
         for group in 0..GROUPS.len() {
-            if group == 0 || group == 1 {
-                let heading = GetDlgItem(hwnd, if group == 0 { 720 } else { 721 });
+            if let Some(section) = SECTIONS.iter().position(|(start, _)| *start == group) {
+                let heading = GetDlgItem(hwnd, 720 + section as i32);
                 ui::place(heading, 4, y - scroll, w - 20, 32);
                 y += 40;
             }
@@ -1059,7 +1060,7 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
             }
             WM_DRAWITEM => {
                 let item = &*(l as *const DRAWITEMSTRUCT);
-                if (GROUP_BASE..GROUP_BASE + 11).contains(&(item.CtlID as usize)) {
+                if (GROUP_BASE..GROUP_BASE + GROUPS.len()).contains(&(item.CtlID as usize)) {
                     group_draw(state, item);
                 } else {
                     state.theme.button(item, state.theme.body, false);
@@ -1261,15 +1262,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     raw as *const core::ffi::c_void,
                 );
                 state.pane.set(pane);
-                ui::control(pane, state.theme.heading, 720, "STATIC", "GPU", 0);
-                ui::control(
-                    pane,
-                    state.theme.heading,
-                    721,
-                    "STATIC",
-                    "CPU und System",
-                    0,
-                );
+                for (section, (_, label)) in SECTIONS.iter().enumerate() {
+                    ui::control(pane, state.theme.heading, 720 + section, "STATIC", label, 0);
+                }
                 state.groups.set(std::array::from_fn(|i| {
                     ui::control(
                         pane,
@@ -1340,7 +1335,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 if state.rendering.get() || state.busy.get() {
                     return 0;
                 }
-                if (GROUP_BASE..GROUP_BASE + 11).contains(&id)
+                if (GROUP_BASE..GROUP_BASE + GROUPS.len()).contains(&id)
                     && notification == BN_CLICKED as usize
                 {
                     let group = id - GROUP_BASE;
@@ -1484,6 +1479,20 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     }
                 }
                 if let Some(path) = &state.preview {
+                    if let Some(group) = state
+                        .preview_group
+                        .filter(|group| *group > 0 && *group < GROUPS.len())
+                    {
+                        let mut rect: RECT = std::mem::zeroed();
+                        GetWindowRect(state.groups.get()[group], &mut rect);
+                        MapWindowPoints(
+                            ptr::null_mut(),
+                            state.pane.get(),
+                            (&mut rect as *mut RECT).cast(),
+                            2,
+                        );
+                        scroll(state.pane.get(), state, rect.top - 48);
+                    }
                     if !state.busy.get() {
                         let result = crate::curve_widget::render_window(hwnd, path);
                         if let Err(error) = result {
@@ -1536,8 +1545,8 @@ fn run_window(
     }
     let (tx, requests) = mpsc::channel();
     let (updates, rx) = mpsc::channel();
-    let mut expanded = [false; 11];
-    if let Some(group) = preview_group.filter(|g| *g < 11) {
+    let mut expanded = [false; GROUPS.len()];
+    if let Some(group) = preview_group.filter(|g| *g < GROUPS.len()) {
         expanded[group] = true;
     }
     let state = Box::new(State {
@@ -1546,7 +1555,7 @@ fn run_window(
         rx,
         view: RefCell::new(None),
         rows: RefCell::new(vec![]),
-        groups: Cell::new([ptr::null_mut(); 11]),
+        groups: Cell::new([ptr::null_mut(); GROUPS.len()]),
         expanded: RefCell::new(expanded),
         pane: Cell::new(ptr::null_mut()),
         scroll: Cell::new(0),
@@ -1558,6 +1567,7 @@ fn run_window(
         closing: Cell::new(false),
         curve: RefCell::new(None),
         preview,
+        preview_group,
     });
     unsafe {
         ui::register(CLASS, Some(procedure))?;
