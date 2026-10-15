@@ -27,7 +27,9 @@ pub use hp::{
 pub use lighting::DirectLighting;
 pub use nvidia::Nvidia;
 use omen_core::{Inventory, PowerStatus};
-pub use smu::{SmuProbe, probe as smu_probe};
+pub use smu::{
+    LimitCalibration, SmuProbe, calibrate_limits as smu_calibrate_limits, probe as smu_probe,
+};
 pub use startup::{
     StartupInstallation, authorize_startup_profile, current_user_sid, verify_startup_installation,
     verify_startup_profile,

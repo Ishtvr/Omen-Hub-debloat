@@ -643,11 +643,7 @@ impl Backend for Controller {
                     feature,
                     access: Access::ReadWrite,
                     reason: "AMD SMU message with exact per-core/scalar readback".into(),
-                    integer_range: Some(if feature == Feature::CpuPboScalar {
-                        super::cpu_tuning::PBO_RANGE
-                    } else {
-                        super::cpu_tuning::MARGIN_RANGE
-                    }),
+                    integer_range: Some(super::cpu_tuning::range(feature)),
                     requires_ac: false,
                     startup_safe: false,
                 },

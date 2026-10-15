@@ -1,5 +1,6 @@
-//! Curve Optimizer and PBO scalar through fixed SMU messages. Both have exact
-//! SMU GETs, so the complete per-core image is captured and restored.
+//! Curve Optimizer, PBO scalar and the PPT/TDC/EDC/Tctl limits through fixed SMU
+//! messages. Margins and scalar have SMU GETs; each limit is read back from the
+//! PM-table cell measured on 16 October 2026 (cpu-smu-calibrate-limits).
 use super::smu::{Message, Smu, core_mask, margin_arg, margin_value};
 use omen_core::{
     Inventory,
@@ -14,13 +15,62 @@ const CORES: u8 = 16;
 pub const MARGIN_RANGE: (i64, i64) = (-50, 30);
 pub const PBO_RANGE: (i64, i64) = (1, 10);
 
+/// Limit, its setter, measured PM-table cell (version 0x540108), the factor from
+/// the table unit to the profile unit and the allowed profile range. Upper
+/// bounds are the fused PPT/TDC, the observed EDC and a 95 °C Tctl ceiling.
+type LimitSpec = (Feature, Message, usize, f32, (i64, i64));
+const LIMITS: [LimitSpec; 4] = [
+    (
+        Feature::CpuPptLimitMw,
+        Message::SetPptLimit,
+        2,
+        1000.0,
+        (15_000, 160_000),
+    ),
+    (
+        Feature::CpuTdcMa,
+        Message::SetTdcLimit,
+        8,
+        1000.0,
+        (30_000, 108_000),
+    ),
+    (
+        Feature::CpuEdcMa,
+        Message::SetEdcLimit,
+        62,
+        1000.0,
+        (30_000, 160_000),
+    ),
+    (
+        Feature::CpuTemperatureLimitC,
+        Message::SetTctlMax,
+        10,
+        1.0,
+        (60, 95),
+    ),
+];
+const PM_TABLE_VERSION: u32 = 0x540108;
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+fn limit(feature: Feature) -> Option<(Message, usize, f32, (i64, i64))> {
+    LIMITS
+        .iter()
+        .find(|l| l.0 == feature)
+        .map(|l| (l.1, l.2, l.3, l.4))
+}
+pub fn range(feature: Feature) -> (i64, i64) {
+    match feature {
+        Feature::CpuPboScalar => PBO_RANGE,
+        f => limit(f).map_or(MARGIN_RANGE, |l| l.3),
+    }
+}
+
 pub fn handles(feature: Feature) -> bool {
     matches!(
         feature,
         Feature::CpuCurveOptimizerAllCore
             | Feature::CpuCurveOptimizerPerCore
             | Feature::CpuPboScalar
-    )
+    ) || limit(feature).is_some()
 }
 
 /// Board/CPU qualification without opening the driver (needs elevation).
@@ -46,6 +96,8 @@ pub enum SmuImage {
     Margins { margins: Vec<i32> },
     /// The SMU's f32 PBO scalar as raw bits.
     PboScalar { bits: u32 },
+    /// A limit in profile units (mW, mA or °C) as read from its PM-table cell.
+    Limit { value: i64 },
 }
 
 fn margins(smu: &Smu) -> Result<Vec<i32>, String> {
@@ -58,6 +110,21 @@ fn margins(smu: &Smu) -> Result<Vec<i32>, String> {
 }
 
 pub fn capture(smu: &Smu, feature: Feature) -> Result<SmuImage, String> {
+    if let Some((_, cell, factor, _)) = limit(feature) {
+        let (version, table) = smu.pm_table(64)?;
+        if version != PM_TABLE_VERSION {
+            return Err(format!(
+                "PM table {version:#x} differs from the measured layout"
+            ));
+        }
+        let raw = *table.get(cell).ok_or("PM table is too short")?;
+        if !raw.is_finite() || raw <= 0.0 {
+            return Err("PM-table limit is not plausible".into());
+        }
+        return Ok(SmuImage::Limit {
+            value: (raw * factor).round() as i64,
+        });
+    }
     match feature {
         Feature::CpuCurveOptimizerAllCore | Feature::CpuCurveOptimizerPerCore => {
             Ok(SmuImage::Margins {
@@ -91,6 +158,7 @@ pub fn value(feature: Feature, image: &SmuImage) -> Result<Value, String> {
         (Feature::CpuPboScalar, SmuImage::PboScalar { bits }) => {
             Value::Integer(f32::from_bits(*bits).round() as i64)
         }
+        (f, SmuImage::Limit { value }) if limit(f).is_some() => Value::Integer(*value),
         _ => return Err("SMU image does not belong to this feature".into()),
     })
 }
@@ -117,6 +185,14 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
         (Feature::CpuPboScalar, Value::Integer(v)) if (PBO_RANGE.0..=PBO_RANGE.1).contains(v) => {
             Ok(())
         }
+        (f, Value::Integer(v)) if limit(f).is_some() => {
+            let (lo, hi) = range(f);
+            if (lo..=hi).contains(v) {
+                Ok(())
+            } else {
+                Err(format!("Wert {v} liegt außerhalb {lo}…{hi}"))
+            }
+        }
         _ => Err("Wert außerhalb des erlaubten Bereichs".into()),
     }
 }
@@ -137,6 +213,12 @@ pub fn write(smu: &Smu, feature: Feature, value: &Value) -> Result<(), String> {
         }
         (Feature::CpuPboScalar, Value::Integer(v)) => {
             smu.send(Message::SetPboScalar, (*v as u32) * 100)?;
+        }
+        (f, Value::Integer(v)) if limit(f).is_some() => {
+            let (message, ..) = limit(f).ok_or("No limit")?;
+            smu.send(message, u32::try_from(*v).map_err(|e| e.to_string())?)?;
+            // The PM table reflects a new limit after a short refresh interval.
+            std::thread::sleep(SETTLE);
         }
         _ => return Err("Wrong SMU value".into()),
     }
@@ -176,6 +258,11 @@ pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), S
                 Message::SetPboScalar,
                 (f32::from_bits(*bits) * 100.0).round() as u32,
             )?;
+        }
+        SmuImage::Limit { value } => {
+            let (message, ..) = limit(feature).ok_or("No limit")?;
+            smu.send(message, u32::try_from(*value).map_err(|e| e.to_string())?)?;
+            std::thread::sleep(SETTLE);
         }
     }
     if capture(smu, feature)? != *original {

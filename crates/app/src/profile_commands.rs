@@ -64,6 +64,7 @@ pub fn handles(command: &str) -> bool {
             | "profile-ui-apply"
             | "mode-ui-apply"
             | "cpu-smu-probe"
+            | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
             | "profile-ui-startup-enable"
             | "profile-startup-enable"
@@ -109,6 +110,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 fn run_inner(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("cpu-smu-calibrate-limits") if args.len() == 1 => {
+            // Fixed approved qualification: lower each limit once, find its
+            // PM-table cell, write the previous value back.
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::smu_calibrate_limits(&omen_platform::inventory())?;
+            let store = ProfileStore::user_data()?;
+            std::fs::write(
+                store.root().join("smu-limit-calibration.json"),
+                serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            return print(&report);
+        }
         Some("cpu-smu-probe") if args.len() == 1 => {
             // Read-only: SMU version, PM table head, PBO scalar and CO margins.
             let report = omen_platform::smu_probe(&omen_platform::inventory())?;

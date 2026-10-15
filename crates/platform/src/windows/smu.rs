@@ -24,8 +24,6 @@ const MODULE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/smu-module.bin")
 const MODULE: &[u8] = &[];
 
 /// Raphael / Dragon Range RSMU messages (ZenStates-Core Zen4Settings).
-// Setters stay unused until the read-only probe has qualified readback.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Message {
     SetPptLimit,
@@ -208,6 +206,63 @@ impl Smu {
     pub fn smu_version(&self) -> Result<u32, String> {
         Ok(self.call("ioctl_get_smu_version", &[], 1)?[0] as u32)
     }
+}
+
+/// One limit of the fixed calibration: which PM-table cells took the
+/// requested value and whether the previous value came back.
+#[derive(Debug, Serialize)]
+pub struct LimitCalibration {
+    pub limit: &'static str,
+    pub requested: f32,
+    pub changed: Vec<(usize, f32, f32)>,
+    pub restored: Result<bool, String>,
+}
+/// Fixed, user-approved qualification (16 October 2026): each limit is lowered
+/// once below every candidate cell, the matching cell is found and its
+/// previous value written back. Lowering only reduces power/thermal headroom.
+pub fn calibrate_limits(inventory: &Inventory) -> Result<Vec<LimitCalibration>, String> {
+    let smu = Smu::new(inventory)?;
+    let settle = || std::thread::sleep(std::time::Duration::from_millis(400));
+    let mut results = vec![];
+    for (limit, message, requested, scale) in [
+        ("ppt_w", Message::SetPptLimit, 50.0f32, 1000.0f32),
+        ("tdc_a", Message::SetTdcLimit, 70.0, 1000.0),
+        ("edc_a", Message::SetEdcLimit, 70.0, 1000.0),
+        ("tctl_c", Message::SetTctlMax, 80.0, 1.0),
+    ] {
+        let (_, before) = smu.pm_table(64)?;
+        smu.send(message, (requested * scale) as u32)?;
+        settle();
+        let (_, after) = smu.pm_table(64)?;
+        let changed: Vec<_> = before
+            .iter()
+            .zip(&after)
+            .enumerate()
+            .filter(|(_, (b, a))| (**a - requested).abs() < 0.05 && (**b - **a).abs() >= 0.05)
+            .map(|(i, (b, a))| (i, *b, *a))
+            .collect();
+        // Restore the matched cell's previous value. Without a match the
+        // original is unknown: never guess upward, leave the lower value.
+        let restored = match changed.first() {
+            Some((_, original, _)) => smu
+                .send(message, (*original * scale).round() as u32)
+                .and_then(|_| {
+                    settle();
+                    let (_, again) = smu.pm_table(64)?;
+                    Ok(changed
+                        .iter()
+                        .all(|(i, b, _)| (again[*i] - *b).abs() < 0.05))
+                }),
+            None => Err("No PM-table cell took the value; it stays lowered until reboot".into()),
+        };
+        results.push(LimitCalibration {
+            limit,
+            requested,
+            changed,
+            restored,
+        });
+    }
+    Ok(results)
 }
 
 /// Read-only diagnostic used to qualify readback before any SMU write.
