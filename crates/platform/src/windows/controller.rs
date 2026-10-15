@@ -60,6 +60,11 @@ pub enum RestoreState {
     Windows {
         image: super::windows_settings::WindowsImage,
     },
+    /// HP cTGP/PPAB flags (0x21 GET, 0x22 SET); PPAB is Dynamic Boost.
+    HpGpuPower {
+        custom_tgp: bool,
+        ppab: bool,
+    },
 }
 
 pub struct Controller {
@@ -88,6 +93,9 @@ fn uses_nvidia(feature: Feature) -> bool {
         feature.descriptor().category,
         omen_core::features::Category::Gpu
     )
+}
+fn uses_hp_gpu_power(feature: Feature) -> bool {
+    matches!(feature, Feature::GpuUnleashed | Feature::GpuDynamicBoost)
 }
 fn uses_keyboard(feature: Feature) -> bool {
     matches!(feature, Feature::KeyboardColors | Feature::KeyboardEffect)
@@ -617,6 +625,25 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if uses_hp_gpu_power(feature) {
+            // Board-qualified only; the live flags need elevation and are read at capture.
+            return if self.inventory.manufacturer == "HP"
+                && self.inventory.board == "8E35"
+                && self.inventory.bios == "F.13"
+            {
+                Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "HP Dynamic Boost (PPAB) flag with readback; cTGP stays as found"
+                        .into(),
+                    integer_range: None,
+                    requires_ac: false,
+                    startup_safe: false,
+                }
+            } else {
+                Capability::unsupported(feature, "Dynamic Boost is qualified only on HP8E35/F.13")
+            };
+        }
         if super::windows_settings::handles(feature) {
             // Documented Windows GETs give exact readback and restore; the
             // settings are harmless at logon, so startup may apply them.
@@ -785,6 +812,11 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if uses_hp_gpu_power(feature) {
+            return Ok(Value::Boolean(
+                super::read_hp_gpu_status(&self.inventory)?.ppab_enabled,
+            ));
+        }
         if super::windows_settings::handles(feature) {
             return super::windows_settings::read(feature);
         }
@@ -803,6 +835,19 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if uses_hp_gpu_power(feature) {
+            let status = super::read_hp_gpu_status(&self.inventory)?;
+            let saved = Captured {
+                feature,
+                value: Value::Boolean(status.ppab_enabled),
+                restore: RestoreState::HpGpuPower {
+                    custom_tgp: status.custom_tgp_enabled,
+                    ppab: status.ppab_enabled,
+                },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if super::windows_settings::handles(feature) {
             let image = super::windows_settings::capture(feature)?;
             let saved = Captured {
@@ -893,6 +938,10 @@ impl Backend for Controller {
         }
         if let RestoreState::Windows { image } = &saved.restore {
             return super::windows_settings::restore(saved.feature, image);
+        }
+        if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+            super::write_hp_gpu_power(&self.inventory, *custom_tgp, *ppab)?;
+            return Ok(());
         }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
@@ -1005,6 +1054,15 @@ impl Backend for Controller {
             }
             return Ok(());
         }
+        if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+            let live = super::read_hp_gpu_status(&self.inventory)?;
+            let owned = self.windows_targets.get(&saved.feature)
+                == Some(&Value::Boolean(live.ppab_enabled));
+            if live.custom_tgp_enabled != *custom_tgp || (live.ppab_enabled != *ppab && !owned) {
+                return Err("HP GPU-power flags differ from original and target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
                 || saved.value != Value::Boolean(state.state.enabled)
@@ -1041,7 +1099,8 @@ impl Backend for Controller {
             } => (core_offset, Some(state), None),
             RestoreState::HpKeyboardColors { .. }
             | RestoreState::HpMaxFan { .. }
-            | RestoreState::Windows { .. } => unreachable!(),
+            | RestoreState::Windows { .. }
+            | RestoreState::HpGpuPower { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -1091,6 +1150,14 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if uses_hp_gpu_power(setting.feature) {
+            let actual = self.read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err("Dynamic Boost readback differs".into())
+            };
+        }
         if super::windows_settings::handles(setting.feature) {
             let actual = super::windows_settings::read(setting.feature)?;
             return if actual == setting.value {
@@ -1227,6 +1294,21 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+                let live = super::read_hp_gpu_status(&self.inventory)?;
+                if requested.feature != saved.feature
+                    || live.custom_tgp_enabled != *custom_tgp
+                    || (Value::Boolean(live.ppab_enabled) != requested.value
+                        && live.ppab_enabled != *ppab)
+                {
+                    return Err(
+                        "HP GPU-power flags differ from recorded original and target".into(),
+                    );
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
             if let RestoreState::Windows { image } = &saved.restore {
                 let live = super::windows_settings::capture(saved.feature)?;
                 let value = super::windows_settings::value(saved.feature, &live)?;
@@ -1495,6 +1577,16 @@ impl Backend for Controller {
             || (capability.requires_ac && context.ac_connected != Some(true))
         {
             return Err(capability.reason);
+        }
+        if uses_hp_gpu_power(setting.feature) {
+            let Value::Boolean(on) = setting.value else {
+                return Err("Dynamic Boost needs on/off".into());
+            };
+            let live = super::read_hp_gpu_status(&self.inventory)?;
+            super::write_hp_gpu_power(&self.inventory, live.custom_tgp_enabled, on)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
         }
         if super::windows_settings::handles(setting.feature) {
             let saved = self

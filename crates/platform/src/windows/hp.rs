@@ -393,6 +393,33 @@ pub fn read_hp_system_design(inventory: &Inventory) -> Result<SystemDesignData, 
     query().map_err(|error| query_error("system-design", error))
 }
 
+/// Sets the Hub's cTGP and PPAB (Dynamic Boost) flags with the Hub's fixed
+/// D-state 1 and 87 °C GPS byte, then reads both flags back.
+pub fn write_hp_gpu_power(
+    inventory: &Inventory,
+    custom_tgp: bool,
+    ppab: bool,
+) -> Result<GpuPowerStatus, String> {
+    use omen_core::hp_mode::GPU_POWER_TYPE;
+    let bios = HpBios::new(inventory).map_err(|e| query_error("GPU-power", e))?;
+    bios.set_mode_payload(
+        GPU_POWER_TYPE,
+        [u8::from(custom_tgp), u8::from(ppab), 1, 87],
+    )
+    .map_err(|e| query_error("GPU-power SET", e))?;
+    let (code, bytes) = bios
+        .get(Read::GpuStatus)
+        .map_err(|e| query_error("GPU-status", e))?;
+    let status = decode_gpu_status(code, &bytes)?;
+    if status.custom_tgp_enabled != custom_tgp || status.ppab_enabled != ppab {
+        return Err(format!(
+            "GPU-power readback differs: cTGP {} / PPAB {}",
+            status.custom_tgp_enabled, status.ppab_enabled
+        ));
+    }
+    Ok(status)
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct HpModeReport {
     pub plan: omen_core::hp_mode::ModePlan,
