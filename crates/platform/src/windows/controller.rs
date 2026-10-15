@@ -69,6 +69,10 @@ pub enum RestoreState {
     AmdSmu {
         image: super::cpu_tuning::SmuImage,
     },
+    /// BIOS graphics (MUX) mode byte; effective after a restart.
+    HpGraphicsMode {
+        mode: u8,
+    },
 }
 
 pub struct Controller {
@@ -98,6 +102,22 @@ fn uses_nvidia(feature: Feature) -> bool {
         feature.descriptor().category,
         omen_core::features::Category::Gpu
     )
+}
+fn mux_choice(mode: u8) -> Choice {
+    match mode {
+        0 => Choice::Hybrid,
+        1 => Choice::DiscreteOnly,
+        3 => Choice::IntegratedOnly,
+        _ => Choice::Manual,
+    }
+}
+fn mux_mode(choice: Choice) -> Result<u8, String> {
+    match choice {
+        Choice::Hybrid => Ok(0),
+        Choice::DiscreteOnly => Ok(1),
+        Choice::IntegratedOnly => Ok(3),
+        _ => Err("Unbekannter Grafikmodus".into()),
+    }
 }
 fn uses_hp_gpu_power(feature: Feature) -> bool {
     matches!(feature, Feature::GpuUnleashed | Feature::GpuDynamicBoost)
@@ -637,6 +657,23 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if feature == Feature::GraphicsMode {
+            return if self.inventory.manufacturer == "HP"
+                && self.inventory.board == "8E35"
+                && self.inventory.bios == "F.13"
+            {
+                Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "HP BIOS graphics mode; takes effect after a restart".into(),
+                    integer_range: None,
+                    requires_ac: false,
+                    startup_safe: false,
+                }
+            } else {
+                Capability::unsupported(feature, "Graphics mode is qualified only on HP8E35/F.13")
+            };
+        }
         if super::cpu_tuning::handles(feature) {
             return match super::cpu_tuning::qualified(&self.inventory) {
                 Ok(()) => Capability {
@@ -837,6 +874,11 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if feature == Feature::GraphicsMode {
+            return Ok(Value::Choice(mux_choice(super::read_hp_graphics_mode(
+                &self.inventory,
+            )?)));
+        }
         if super::cpu_tuning::handles(feature) {
             let image = super::cpu_tuning::capture(self.smu()?, feature)?;
             return super::cpu_tuning::value(feature, &image);
@@ -864,6 +906,16 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if feature == Feature::GraphicsMode {
+            let mode = super::read_hp_graphics_mode(&self.inventory)?;
+            let saved = Captured {
+                feature,
+                value: Value::Choice(mux_choice(mode)),
+                restore: RestoreState::HpGraphicsMode { mode },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if super::cpu_tuning::handles(feature) {
             let image = super::cpu_tuning::capture(self.smu()?, feature)?;
             let saved = Captured {
@@ -986,6 +1038,13 @@ impl Backend for Controller {
             let feature = saved.feature;
             return super::cpu_tuning::restore(self.smu()?, feature, image);
         }
+        if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+            super::write_hp_graphics_mode(&self.inventory, *mode)?;
+            if super::read_hp_graphics_mode(&self.inventory)? != *mode {
+                return Err("BIOS graphics mode did not return to its original".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
                 || saved.value != Value::Boolean(state.state.enabled)
@@ -1097,6 +1156,16 @@ impl Backend for Controller {
             }
             return Ok(());
         }
+        if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+            let live = super::read_hp_graphics_mode(&self.inventory)?;
+            if live != *mode
+                && self.windows_targets.get(&saved.feature)
+                    != Some(&Value::Choice(mux_choice(live)))
+            {
+                return Err("BIOS graphics mode differs from its original and target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::AmdSmu { image } = &saved.restore {
             let feature = saved.feature;
             let live = super::cpu_tuning::capture(self.smu()?, feature)?;
@@ -1156,7 +1225,8 @@ impl Backend for Controller {
             | RestoreState::HpMaxFan { .. }
             | RestoreState::Windows { .. }
             | RestoreState::HpGpuPower { .. }
-            | RestoreState::AmdSmu { .. } => unreachable!(),
+            | RestoreState::AmdSmu { .. }
+            | RestoreState::HpGraphicsMode { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -1206,6 +1276,14 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if setting.feature == Feature::GraphicsMode {
+            let actual = self.read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err("BIOS graphics mode readback differs".into())
+            };
+        }
         if super::cpu_tuning::handles(setting.feature) {
             return if super::cpu_tuning::matches(self.smu()?, setting.feature, &setting.value)? {
                 Ok(setting.value.clone())
@@ -1357,6 +1435,19 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+                let live = super::read_hp_graphics_mode(&self.inventory)?;
+                if requested.feature != saved.feature
+                    || (live != *mode && Value::Choice(mux_choice(live)) != requested.value)
+                {
+                    return Err(
+                        "BIOS graphics mode differs from recorded original and target".into(),
+                    );
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
             if let RestoreState::AmdSmu { image } = &saved.restore {
                 let feature = saved.feature;
                 let live = super::cpu_tuning::capture(self.smu()?, feature)?;
@@ -1654,6 +1745,18 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if setting.feature == Feature::GraphicsMode {
+            let Value::Choice(choice) = setting.value else {
+                return Err("Graphics mode needs a choice".into());
+            };
+            if !self.captured.contains_key(&setting.feature) {
+                return Err("No captured graphics mode".into());
+            }
+            super::write_hp_graphics_mode(&self.inventory, mux_mode(choice)?)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
         if super::cpu_tuning::handles(setting.feature) {
             if !self.captured.contains_key(&setting.feature) {
                 return Err("No captured SMU original".into());
@@ -1828,6 +1931,12 @@ impl Backend for Controller {
         }
         if super::cpu_tuning::handles(setting.feature) {
             return super::cpu_tuning::validate(setting.feature, &setting.value);
+        }
+        if setting.feature == Feature::GraphicsMode {
+            let Value::Choice(choice) = setting.value else {
+                return Err("Graphics mode needs a choice".into());
+            };
+            return mux_mode(choice).map(|_| ());
         }
         if setting.feature == Feature::KeyboardEffect {
             let Value::Choice(mode) = setting.value else {

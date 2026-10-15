@@ -25,6 +25,7 @@ pub(super) enum Read {
     FanTypes,
     FanTable,
     SurfaceSensor,
+    GraphicsMode,
 }
 
 struct ReadContract {
@@ -48,6 +49,8 @@ impl Read {
             Self::FanTypes => (0x20008, 0x2c, &[0; 4], 128, "hpqBIOSInt128"),
             Self::FanTable => (0x20008, 0x2f, &[0; 4], 128, "hpqBIOSInt128"),
             Self::SurfaceSensor => (0x20008, 0x23, &[0; 4], 4, "hpqBIOSInt4"),
+            // GraphicsSwitcherHelper: WMI_CMD_READ_BIOS_CONFIG (1), type 0x52.
+            Self::GraphicsMode => (1, 0x52, &[], 4, "hpqBIOSInt4"),
         };
         ReadContract {
             command,
@@ -391,6 +394,35 @@ pub fn read_hp_system_design(inventory: &Inventory) -> Result<SystemDesignData, 
         decode_system_design(code, &bytes).map_err(WMIError::ConvertVariantError)
     };
     query().map_err(|error| query_error("system-design", error))
+}
+
+/// BIOS graphics mode byte: 0 Hybrid, 1 Discrete, 2 Optimus, 3 UMA. A change
+/// takes effect after the next restart.
+pub fn read_hp_graphics_mode(inventory: &Inventory) -> Result<u8, String> {
+    let (_, bytes) = HpBios::new(inventory)
+        .and_then(|bios| bios.get(Read::GraphicsMode))
+        .map_err(|e| query_error("graphics-mode", e))?;
+    match bytes[0] {
+        mode @ 0..=3 => Ok(mode),
+        other => Err(format!("Unknown BIOS graphics mode {other}")),
+    }
+}
+pub fn write_hp_graphics_mode(inventory: &Inventory, mode: u8) -> Result<(), String> {
+    if mode > 3 {
+        return Err("Unknown BIOS graphics mode".into());
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("graphics-mode", e))?;
+    // GraphicsSwitcherHelper.SetGPUModeOnBIOS: WMI_CMD_WRITE_BIOS_CONFIG (2), 0x52.
+    let contract = ReadContract {
+        command: 2,
+        command_type: 0x52,
+        input: &[],
+        output_size: 4,
+        method: "hpqBIOSInt4",
+    };
+    bios.invoke(&contract, &[mode, 0, 0, 0])
+        .map(|_| ())
+        .map_err(|e| query_error("graphics-mode SET", e))
 }
 
 /// Sets the Hub's cTGP and PPAB (Dynamic Boost) flags with the Hub's fixed

@@ -21,8 +21,8 @@ pub use cpu::Cpu;
 pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
 pub use hp::{
-    HpModeReport, apply_hp_mode, read_hp_gpu_status, read_hp_keyboard_state, read_hp_system_design,
-    write_hp_gpu_power,
+    HpModeReport, apply_hp_mode, read_hp_gpu_status, read_hp_graphics_mode, read_hp_keyboard_state,
+    read_hp_system_design, write_hp_gpu_power, write_hp_graphics_mode,
 };
 pub use lighting::DirectLighting;
 pub use nvidia::Nvidia;
