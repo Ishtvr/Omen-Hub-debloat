@@ -11,6 +11,7 @@ mod startup;
 mod thermal;
 mod user_data;
 mod vf;
+mod windows_settings;
 pub use control_lease::ControlLease;
 pub use controller::{Controller, RestoreState};
 pub use cooling::{FanReport, MaxFanImage, read_hp_fans};

@@ -57,6 +57,9 @@ pub enum RestoreState {
         state: omen_core::vf::VfState,
         core_offset: OffsetState,
     },
+    Windows {
+        image: super::windows_settings::WindowsImage,
+    },
 }
 
 pub struct Controller {
@@ -76,6 +79,8 @@ pub struct Controller {
     fan_target: Option<omen_core::cooling::MaxFanState>,
     fan_calibration: bool,
     fan_observations: Vec<super::cooling::FanReport>,
+    /// Windows targets written in this transaction (accepted by later checks).
+    windows_targets: BTreeMap<Feature, Value>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -143,6 +148,7 @@ impl Controller {
             fan_target: None,
             fan_calibration: false,
             fan_observations: vec![],
+            windows_targets: BTreeMap::new(),
         })
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
@@ -611,6 +617,23 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if super::windows_settings::handles(feature) {
+            // Documented Windows GETs give exact readback and restore; the
+            // settings are harmless at logon, so startup may apply them.
+            return match super::windows_settings::range(feature)
+                .and_then(|range| super::windows_settings::read(feature).map(|_| range))
+            {
+                Ok(integer_range) => Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "Windows setting with exact readback and restore".into(),
+                    integer_range,
+                    requires_ac: false,
+                    startup_safe: true,
+                },
+                Err(reason) => Capability::unsupported(feature, reason),
+            };
+        }
         if feature == Feature::MaxFan {
             // Capabilities describe qualified board support. Permission, live
             // table/opaque state and durable originals are checked at capture,
@@ -762,6 +785,9 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if super::windows_settings::handles(feature) {
+            return super::windows_settings::read(feature);
+        }
         if feature == Feature::MaxFan {
             return Ok(Value::Boolean(self.fan()?.capture()?.state.enabled));
         }
@@ -777,6 +803,16 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if super::windows_settings::handles(feature) {
+            let image = super::windows_settings::capture(feature)?;
+            let saved = Captured {
+                feature,
+                value: super::windows_settings::value(feature, &image)?,
+                restore: RestoreState::Windows { image },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if feature == Feature::MaxFan {
             let state = self.fan()?.capture()?;
             let saved = Captured {
@@ -854,6 +890,9 @@ impl Backend for Controller {
     fn restore(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Restore state was not captured by this controller session".into());
+        }
+        if let RestoreState::Windows { image } = &saved.restore {
+            return super::windows_settings::restore(saved.feature, image);
         }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
@@ -958,6 +997,14 @@ impl Backend for Controller {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Control verification image is not owned by this session".into());
         }
+        if let RestoreState::Windows { image } = &saved.restore {
+            let live = super::windows_settings::capture(saved.feature)?;
+            let value = super::windows_settings::value(saved.feature, &live)?;
+            if live != *image && self.windows_targets.get(&saved.feature) != Some(&value) {
+                return Err("Windows setting differs from its original and target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
                 || saved.value != Value::Boolean(state.state.enabled)
@@ -992,7 +1039,9 @@ impl Backend for Controller {
             RestoreState::NvidiaVfCurve {
                 state, core_offset, ..
             } => (core_offset, Some(state), None),
-            RestoreState::HpKeyboardColors { .. } | RestoreState::HpMaxFan { .. } => unreachable!(),
+            RestoreState::HpKeyboardColors { .. }
+            | RestoreState::HpMaxFan { .. }
+            | RestoreState::Windows { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -1042,6 +1091,17 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if super::windows_settings::handles(setting.feature) {
+            let actual = super::windows_settings::read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err(format!(
+                    "Readback mismatch for {:?}: requested {:?}, obtained {:?}",
+                    setting.feature, setting.value, actual
+                ))
+            };
+        }
         if setting.feature == Feature::MaxFan {
             let Value::Boolean(enabled) = setting.value else {
                 return Err("Max-fan target is not boolean".into());
@@ -1167,6 +1227,18 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::Windows { image } = &saved.restore {
+                let live = super::windows_settings::capture(saved.feature)?;
+                let value = super::windows_settings::value(saved.feature, &live)?;
+                if requested.feature != saved.feature
+                    || (live != *image && value != requested.value)
+                {
+                    return Err("Windows setting differs from recorded original and target".into());
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
             if let RestoreState::HpMaxFan { state } = &saved.restore {
                 if saved.feature != Feature::MaxFan
                     || requested.feature != Feature::MaxFan
@@ -1424,6 +1496,20 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if super::windows_settings::handles(setting.feature) {
+            let saved = self
+                .captured
+                .get(&setting.feature)
+                .ok_or("No captured Windows original")?
+                .clone();
+            let RestoreState::Windows { image } = &saved.restore else {
+                return Err("Windows capture has another adapter".into());
+            };
+            super::windows_settings::write(setting.feature, image, &setting.value)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
         if setting.feature == Feature::MaxFan {
             let Value::Boolean(enabled) = setting.value else {
                 return Err("Max-fan target requires a boolean".into());
@@ -1560,6 +1646,9 @@ impl Backend for Controller {
     }
     fn validate_setting(&mut self, setting: &Setting) -> Result<(), String> {
         setting.validate()?;
+        if super::windows_settings::handles(setting.feature) {
+            return super::windows_settings::validate(setting.feature, &setting.value);
+        }
         if setting.feature == Feature::KeyboardEffect {
             let Value::Choice(mode) = setting.value else {
                 return Err("Typed keyboard mode missing".into());

@@ -66,17 +66,26 @@ fn preview_size(args: &[String], offset: usize) -> Result<Option<[i32; 2]>, Stri
     }
 }
 fn run() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     // GDI scaling renders text and shapes at the monitor resolution while the
     // fixed-pixel layouts stay in 96-DPI units. Without it, Windows stretches
-    // the bitmap and text looks blurred at 125 % and above.
+    // the bitmap and text looks blurred at 125 % and above. Windowless control
+    // commands are DPI aware so display APIs report physical modes.
     #[cfg(windows)]
-    // SAFETY: Called once before any window exists; failure keeps the default.
-    unsafe {
-        windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
-            windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED,
-        );
+    {
+        use windows_sys::Win32::UI::HiDpi::*;
+        let windowless = args
+            .first()
+            .is_some_and(|a| profile_commands::handles(a) || a.starts_with("mode-"));
+        // SAFETY: Called once before any window exists; failure keeps the default.
+        unsafe {
+            SetProcessDpiAwarenessContext(if windowless {
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            } else {
+                DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
+            });
+        }
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
     if args.is_empty() || args == ["--tray"] {
         return ui::run(!args.is_empty());
