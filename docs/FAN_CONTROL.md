@@ -36,6 +36,8 @@ Lesen: `omen-hub-pp fan-read` oder `scripts/read-fan-state.ps1` in einer erhöht
 
 Programmierbare NVIDIA-Steuerwerte, HP-GPU-Leistungsstatus sowie das produktive Benutzerjournal und die Startup-Auswahl blieben bei beiden Schreibproben unverändert. Die kurzen Proben belegen Schalterkontrolle und tatsächliches Hochlaufen, weder eine eingeschwungene maximale Nenndrehzahl noch Dauerstabilität. HP-Dienste liefen weiter. Keine Leistungs-/Spannungssetter, Treiberinstallation oder Dienststeuerung waren Teil der Proben.
 
+Der Benutzer bestätigte am **15. Oktober**, nach Abschluss dieser Proben, die aktuell im ursprünglichen OMEN Gaming Hub gewählte Lüftereinstellung **„Automatisch“**. Diese Angabe ist kein zeitgleicher Firmware-Readback zum GET um 08:58 oder zu den Schreibproben. Sie ergänzt den Benutzerkontext, belegt aber weder ein eigenes Automatik-Statusfeld noch die Gleichsetzung „Max-Fan Aus = Automatisch“. Für eine solche Zuordnung fehlen weiterhin vollständiger Modus-Readback und Restore; aufgrund dieser Antwort wurde keine Hardwareeinstellung verändert.
+
 ## Warum eigene Lüfterkurven noch nicht angewendet werden
 
 Der untersuchte Performance-/BIOS-Lüftermodus-SET **0x1A** koppelt Leistungsmodus und Lüfterzuständigkeit in einem gemeinsamen Payload. Das vollständige aktuelle Modusbild und seine unabhängige Rücklese-/Restore-Semantik sind noch nicht qualifiziert. Der Software-Level-SET **0x2E** wurde weder implementiert noch ausgeführt. Der als Lüfteranzahl benannte Aufruf **0x10** hat im Herstellerablauf Heartbeat-/Zustandswirkung und wurde ebenfalls nicht ausgeführt.
