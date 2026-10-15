@@ -63,12 +63,15 @@ pub fn core_mask(ccd: u8, core: u8) -> u32 {
     (u32::from(ccd) << 28) | ((u32::from(core) % 8) << 20)
 }
 /// Curve Optimizer margins travel as a 16-bit two's-complement field.
-#[allow(dead_code)]
 pub fn margin_arg(margin: i32) -> u32 {
     (margin as i16 as u16) as u32
 }
 pub fn margin_value(raw: u32) -> i32 {
     i32::from(raw as u16 as i16)
+}
+
+pub fn module_present() -> bool {
+    !MODULE.is_empty()
 }
 
 pub struct Smu {

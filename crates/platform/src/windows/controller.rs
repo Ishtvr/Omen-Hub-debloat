@@ -65,6 +65,10 @@ pub enum RestoreState {
         custom_tgp: bool,
         ppab: bool,
     },
+    /// Curve Optimizer margins or PBO scalar read through the SMU.
+    AmdSmu {
+        image: super::cpu_tuning::SmuImage,
+    },
 }
 
 pub struct Controller {
@@ -86,6 +90,7 @@ pub struct Controller {
     fan_observations: Vec<super::cooling::FanReport>,
     /// Windows targets written in this transaction (accepted by later checks).
     windows_targets: BTreeMap<Feature, Value>,
+    smu: Option<super::smu::Smu>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -157,6 +162,7 @@ impl Controller {
             fan_calibration: false,
             fan_observations: vec![],
             windows_targets: BTreeMap::new(),
+            smu: None,
         })
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
@@ -181,6 +187,12 @@ impl Controller {
     }
     pub fn keyboard_state(&mut self) -> Result<KeyboardState, String> {
         self.keyboard()?.read()
+    }
+    fn smu(&mut self) -> Result<&super::smu::Smu, String> {
+        if self.smu.is_none() {
+            self.smu = Some(super::smu::Smu::new(&self.inventory)?);
+        }
+        self.smu.as_ref().ok_or("Missing SMU connection".into())
     }
     fn fan(&mut self) -> Result<&super::cooling::FanControl, String> {
         if self.fan.is_none() {
@@ -625,6 +637,23 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if super::cpu_tuning::handles(feature) {
+            return match super::cpu_tuning::qualified(&self.inventory) {
+                Ok(()) => Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "AMD SMU message with exact per-core/scalar readback".into(),
+                    integer_range: Some(if feature == Feature::CpuPboScalar {
+                        super::cpu_tuning::PBO_RANGE
+                    } else {
+                        super::cpu_tuning::MARGIN_RANGE
+                    }),
+                    requires_ac: false,
+                    startup_safe: false,
+                },
+                Err(reason) => Capability::unsupported(feature, reason),
+            };
+        }
         if uses_hp_gpu_power(feature) {
             // Board-qualified only; the live flags need elevation and are read at capture.
             return if self.inventory.manufacturer == "HP"
@@ -812,6 +841,10 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if super::cpu_tuning::handles(feature) {
+            let image = super::cpu_tuning::capture(self.smu()?, feature)?;
+            return super::cpu_tuning::value(feature, &image);
+        }
         if uses_hp_gpu_power(feature) {
             return Ok(Value::Boolean(
                 super::read_hp_gpu_status(&self.inventory)?.ppab_enabled,
@@ -835,6 +868,16 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if super::cpu_tuning::handles(feature) {
+            let image = super::cpu_tuning::capture(self.smu()?, feature)?;
+            let saved = Captured {
+                feature,
+                value: super::cpu_tuning::value(feature, &image)?,
+                restore: RestoreState::AmdSmu { image },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if uses_hp_gpu_power(feature) {
             let status = super::read_hp_gpu_status(&self.inventory)?;
             let saved = Captured {
@@ -942,6 +985,10 @@ impl Backend for Controller {
         if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
             super::write_hp_gpu_power(&self.inventory, *custom_tgp, *ppab)?;
             return Ok(());
+        }
+        if let RestoreState::AmdSmu { image } = &saved.restore {
+            let feature = saved.feature;
+            return super::cpu_tuning::restore(self.smu()?, feature, image);
         }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
@@ -1054,6 +1101,18 @@ impl Backend for Controller {
             }
             return Ok(());
         }
+        if let RestoreState::AmdSmu { image } = &saved.restore {
+            let feature = saved.feature;
+            let live = super::cpu_tuning::capture(self.smu()?, feature)?;
+            let owned = match self.windows_targets.get(&feature).cloned() {
+                Some(target) => super::cpu_tuning::matches(self.smu()?, feature, &target)?,
+                None => false,
+            };
+            if live != *image && !owned {
+                return Err("SMU setting differs from its original and target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
             let live = super::read_hp_gpu_status(&self.inventory)?;
             let owned = self.windows_targets.get(&saved.feature)
@@ -1100,7 +1159,8 @@ impl Backend for Controller {
             RestoreState::HpKeyboardColors { .. }
             | RestoreState::HpMaxFan { .. }
             | RestoreState::Windows { .. }
-            | RestoreState::HpGpuPower { .. } => unreachable!(),
+            | RestoreState::HpGpuPower { .. }
+            | RestoreState::AmdSmu { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -1150,6 +1210,13 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if super::cpu_tuning::handles(setting.feature) {
+            return if super::cpu_tuning::matches(self.smu()?, setting.feature, &setting.value)? {
+                Ok(setting.value.clone())
+            } else {
+                Err(format!("SMU readback differs for {:?}", setting.feature))
+            };
+        }
         if uses_hp_gpu_power(setting.feature) {
             let actual = self.read(setting.feature)?;
             return if actual == setting.value {
@@ -1294,6 +1361,19 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::AmdSmu { image } = &saved.restore {
+                let feature = saved.feature;
+                let live = super::cpu_tuning::capture(self.smu()?, feature)?;
+                if requested.feature != feature
+                    || (live != *image
+                        && !super::cpu_tuning::matches(self.smu()?, feature, &requested.value)?)
+                {
+                    return Err("SMU setting differs from recorded original and target".into());
+                }
+                self.windows_targets
+                    .insert(feature, requested.value.clone());
+                continue;
+            }
             if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
                 let live = super::read_hp_gpu_status(&self.inventory)?;
                 if requested.feature != saved.feature
@@ -1578,6 +1658,15 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if super::cpu_tuning::handles(setting.feature) {
+            if !self.captured.contains_key(&setting.feature) {
+                return Err("No captured SMU original".into());
+            }
+            super::cpu_tuning::write(self.smu()?, setting.feature, &setting.value)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
         if uses_hp_gpu_power(setting.feature) {
             let Value::Boolean(on) = setting.value else {
                 return Err("Dynamic Boost needs on/off".into());
@@ -1740,6 +1829,9 @@ impl Backend for Controller {
         setting.validate()?;
         if super::windows_settings::handles(setting.feature) {
             return super::windows_settings::validate(setting.feature, &setting.value);
+        }
+        if super::cpu_tuning::handles(setting.feature) {
+            return super::cpu_tuning::validate(setting.feature, &setting.value);
         }
         if setting.feature == Feature::KeyboardEffect {
             let Value::Choice(mode) = setting.value else {

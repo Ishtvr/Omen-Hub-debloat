@@ -3,6 +3,7 @@ mod controller;
 mod cooling;
 mod cpu;
 mod cpu_hardware;
+mod cpu_tuning;
 mod gpu;
 mod hp;
 mod lighting;
