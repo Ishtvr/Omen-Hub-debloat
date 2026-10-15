@@ -371,28 +371,20 @@ unsafe extern "system" fn control_proc(
     unsafe {
         // Preserve native checkbox roles, automatic toggling and keyboard input;
         // replace only classic painting (including embossed disabled lettering).
-        if matches!(m, WM_PAINT | WM_PRINT | WM_PRINTCLIENT) {
-            let kind = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & BS_TYPEMASK as u32;
-            let mut class = [0u16; 32];
-            let n = GetClassNameW(hwnd, class.as_mut_ptr(), 32);
-            if matches!(kind,k if k==BS_AUTOCHECKBOX as u32||k==BS_CHECKBOX as u32)
-                && String::from_utf16_lossy(&class[..n.max(0) as usize])
-                    .eq_ignore_ascii_case("button")
-            {
-                let mut paint: PAINTSTRUCT = std::mem::zeroed();
-                let dc = if m == WM_PAINT {
-                    BeginPaint(hwnd, &mut paint)
-                } else {
-                    w as HDC
-                };
-                if !dc.is_null() {
-                    checkbox(hwnd, dc);
-                }
-                if m == WM_PAINT {
-                    EndPaint(hwnd, &paint);
-                }
-                return 0;
+        if matches!(m, WM_PAINT | WM_PRINT | WM_PRINTCLIENT) && is_checkbox(hwnd) {
+            let mut paint: PAINTSTRUCT = std::mem::zeroed();
+            let dc = if m == WM_PAINT {
+                BeginPaint(hwnd, &mut paint)
+            } else {
+                w as HDC
+            };
+            if !dc.is_null() {
+                checkbox(hwnd, dc);
             }
+            if m == WM_PAINT {
+                EndPaint(hwnd, &paint);
+            }
+            return 0;
         }
         if m == WM_MOUSEMOVE && GetPropW(hwnd, wide(HOVER).as_ptr()).is_null() {
             SetPropW(hwnd, wide(HOVER).as_ptr(), 1usize as HANDLE);
@@ -416,6 +408,34 @@ unsafe extern "system" fn control_proc(
             RemoveWindowSubclass(hwnd, Some(control_proc), id);
         }
         let result = DefSubclassProc(hwnd, m, w, l);
+        // The classic button paints its white box directly on click, check,
+        // focus and key state changes without WM_PAINT. Repaint over it at once.
+        if matches!(
+            m,
+            BM_SETCHECK
+                | BM_SETSTATE
+                | BM_CLICK
+                | WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_LBUTTONDBLCLK
+                | WM_MOUSEMOVE
+                | WM_CAPTURECHANGED
+                | WM_KEYDOWN
+                | WM_KEYUP
+                | WM_SETFOCUS
+                | WM_KILLFOCUS
+                | WM_ENABLE
+                | WM_UPDATEUISTATE
+                | WM_SETTEXT
+                | BM_SETSTYLE
+        ) && is_checkbox(hwnd)
+        {
+            let dc = GetDC(hwnd);
+            if !dc.is_null() {
+                checkbox(hwnd, dc);
+                ReleaseDC(hwnd, dc);
+            }
+        }
         if matches!(m, WM_SETFOCUS | WM_KILLFOCUS) {
             InvalidateRect(hwnd, ptr::null(), 0);
         }
@@ -499,6 +519,16 @@ unsafe extern "system" fn control_proc(
     }
 }
 
+unsafe fn is_checkbox(hwnd: HWND) -> bool {
+    unsafe {
+        let kind = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & BS_TYPEMASK as u32;
+        let mut class = [0u16; 32];
+        let n = GetClassNameW(hwnd, class.as_mut_ptr(), 32);
+        matches!(kind, k if k == BS_AUTOCHECKBOX as u32 || k == BS_CHECKBOX as u32)
+            && String::from_utf16_lossy(&class[..n.max(0) as usize]).eq_ignore_ascii_case("button")
+    }
+}
+// Keyboard focus shows as the accent box border, not a dotted rectangle.
 unsafe fn checkbox(hwnd: HWND, dc: HDC) {
     unsafe {
         let saved = SaveDC(dc);
@@ -603,11 +633,6 @@ unsafe fn checkbox(hwnd: HWND, dc: HDC) {
             &mut label_rect,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
         );
-        if GetFocus() == hwnd {
-            let mut focus = rect;
-            InflateRect(&mut focus, -1, -2);
-            DrawFocusRect(dc, &focus);
-        }
         RestoreDC(dc, saved);
     }
 }
