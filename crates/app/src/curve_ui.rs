@@ -231,8 +231,28 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
                     }
                     profile.binding = profile.binding.for_settings(&profile.settings);
                     store.save(&profile)?;
-                    let fans = rows.iter().skip(1).any(|r| r.enabled);
-                    Ok((load(Some(&profile.id))?,if fans{"Profil gespeichert. Keine Hardware verändert. Lüfterkurven bleiben Entwürfe; Anwenden ist noch gesperrt."}else{"Profil gespeichert. Keine Hardware verändert. Anwenden und Startoptionen befinden sich im GPU-Profilfenster."}.into()))
+                    // The saved shared fan curve is what the logon fan service follows.
+                    let active = match rows[1].curve.as_ref().filter(|_| rows[1].enabled) {
+                        Some(curve) => match curve.value()? {
+                            Value::FanCurve(points) => Some(points),
+                            _ => None,
+                        },
+                        None => None,
+                    };
+                    let status = if let Some(points) = active {
+                        store.save_active_fan_curve(&points)?;
+                        if !omen_platform::fan_service_installed() {
+                            crate::elevation::run(
+                                None,
+                                crate::elevation::Action::FanService,
+                                || false,
+                            )?;
+                        }
+                        "Gespeichert. Der Lüfterdienst folgt jetzt dieser Kurve."
+                    } else {
+                        "Profil gespeichert. Keine Hardware verändert. Anwenden und Startoptionen befinden sich im GPU-Profilfenster."
+                    };
+                    Ok((load(Some(&profile.id))?, status.into()))
                 }
                 Request::Stop => unreachable!(),
             }

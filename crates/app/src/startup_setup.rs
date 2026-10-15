@@ -8,6 +8,28 @@ pub fn ensure_current_installation() -> Result<(), String> {
     if omen_platform::verify_startup_installation().is_ok() {
         return Ok(());
     }
+    run_installer(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/install-startup.ps1"
+    )))?;
+    omen_platform::verify_startup_installation().map(|_| ())
+}
+/// Installs or updates the logon fan service from this exact executable.
+pub fn ensure_fan_service() -> Result<(), String> {
+    if omen_platform::fan_service_installed() {
+        return Ok(());
+    }
+    run_installer(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/install-fan-service.ps1"
+    )))?;
+    if omen_platform::fan_service_installed() {
+        Ok(())
+    } else {
+        Err("Lüfterdienst wurde nicht eingerichtet.".into())
+    }
+}
+fn run_installer(installer: &str) -> Result<(), String> {
     if unsafe { IsUserAnAdmin() } == 0 {
         return Err("Windows-Freigabe für den Anmeldestart erforderlich.".into());
     }
@@ -29,14 +51,7 @@ pub fn ensure_current_installation() -> Result<(), String> {
             std::iter::repeat_n(c, if quote { 2 } else { 1 })
         })
         .collect::<String>();
-    let script = format!(
-        "& {{\n{}\n}} -Mode Install -SourceBinary '{}'",
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../scripts/install-startup.ps1"
-        )),
-        quoted
-    );
+    let script = format!("& {{\n{installer}\n}} -Mode Install -SourceBinary '{quoted}'");
     let output = std::process::Command::new(shell)
         .args([
             "-NoProfile",
@@ -51,12 +66,12 @@ pub fn ensure_current_installation() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!(
-            "Windows-Start konnte nicht eingerichtet werden: {}",
+            "Einrichtung fehlgeschlagen: {}",
             String::from_utf8_lossy(&output.stderr)
                 .chars()
                 .take(1200)
                 .collect::<String>()
         ));
     }
-    omen_platform::verify_startup_installation().map(|_| ())
+    Ok(())
 }

@@ -14,6 +14,7 @@ pub enum Action {
     Restore,
     Startup,
     Mode(omen_core::hp_mode::HpMode),
+    FanService,
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -22,6 +23,7 @@ impl Action {
             Self::Restore => "restore",
             Self::Startup => "startup",
             Self::Mode(_) => "mode",
+            Self::FanService => "fan",
         }
     }
 }
@@ -48,6 +50,7 @@ pub fn run(
             id.ok_or("Zuerst ein Profil speichern.")?
         ),
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
+        Action::FanService => format!("fan-service-install {nonce}"),
     };
     let file = wide(
         &std::env::current_exe()

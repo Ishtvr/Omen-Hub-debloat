@@ -64,6 +64,8 @@ pub fn handles(command: &str) -> bool {
             | "profile-ui-apply"
             | "mode-ui-apply"
             | "cpu-smu-probe"
+            | "fan-service"
+            | "fan-service-install"
             | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
             | "profile-ui-startup-enable"
@@ -87,6 +89,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
             Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
             Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
+            Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -122,6 +125,24 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             )
             .map_err(|e| e.to_string())?;
             return print(&report);
+        }
+        Some("fan-service") if args.len() == 1 => {
+            // Runs for the whole logon session from the protected task copy.
+            let store = ProfileStore::user_data()?;
+            let status = ProfileStore::user_data()?;
+            return omen_platform::run_fan_service(
+                &omen_platform::inventory(),
+                || store.active_fan_curve(),
+                |s| {
+                    let _ = status.save_fan_status(s);
+                },
+            );
+        }
+        Some("fan-service-install") if args.len() == 2 => {
+            validate_nonce(Some(&args[1]))?;
+            crate::startup_setup::ensure_fan_service()?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"fan","nonce":args[1],"result":{"Ok":true}}))?;
+            return print(&serde_json::json!({"fan_service":"installed"}));
         }
         Some("cpu-smu-probe") if args.len() == 1 => {
             // Read-only: SMU version, PM table head, PBO scalar and CO margins.
