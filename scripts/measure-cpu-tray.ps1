@@ -62,11 +62,16 @@ try{
  $taskReaderStartCpu=$taskReader.TotalProcessorTime.TotalSeconds
  Start-Sleep -Seconds ($DurationSeconds-5)
  $taskParent.Refresh();$taskReader.Refresh()
+ $taskParentGpuLibraries=@($taskParent.Modules|Where-Object {$_.ModuleName-match'^(nvapi64(?:_impl)?|nvml)\.dll$'}|ForEach-Object {$_.ModuleName})
+ if($taskParentGpuLibraries.Count-ne0){throw 'Dashboard retained NVIDIA libraries after isolated telemetry; inspect module lifetime.'}
+ $taskRemainingReads=@(Get-CimInstance Win32_Process -Filter ('ParentProcessId = '+$taskParent.Id) -OperationTimeoutSec 5|Where-Object {$_.Name-eq'Omen Hub++.exe'})
+ if($taskRemainingReads.Count-ne0){throw 'An owned read child remained during the tray measurement.'}
  $taskRecord=[pscustomobject]@{
   MeasuredAt=(Get-Date).ToString('o');DurationSeconds=$DurationSeconds
   ExecutableBytes=(Get-Item -LiteralPath $taskExe).Length
   ExecutableSHA256=(Get-FileHash -LiteralPath $taskExe).Hash
-  OpenCombinedWorkingSetMB=$taskOpenCombinedMB
+  OpenAppAndCpuReaderWorkingSetMB=$taskOpenCombinedMB
+  OpenSampleExcludesTransientReadChildren=$true
   WindowHidden=-not[OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)
   ParentWorkingSetMiB=[math]::Round($taskParent.WorkingSet64/1MB,2)
   ReaderWorkingSetMiB=[math]::Round($taskReader.WorkingSet64/1MB,2)
@@ -76,6 +81,8 @@ try{
   ReaderPrivateMiB=[math]::Round($taskReader.PrivateMemorySize64/1MB,2)
   ParentCpuDelta=$taskParent.TotalProcessorTime.TotalSeconds-$taskParentStartCpu
   ReaderCpuDelta=$taskReader.TotalProcessorTime.TotalSeconds-$taskReaderStartCpu
+  ParentNvidiaLibraries=$taskParentGpuLibraries
+  RemainingReadChildren=$taskRemainingReads.Count
   PausedReader=$true;ResumeCycles=$ResumeCycles;WorkingSetTrimmed=$false;SharedPagesCountedTwice=$true
  }
  $taskRecord|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\cpu-tray-measurement.json') -Encoding UTF8

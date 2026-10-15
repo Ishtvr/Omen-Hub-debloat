@@ -1,15 +1,28 @@
-//! Own the NVIDIA session on a disposable read-only thread. Ending the visible
-//! session also releases driver thread-local resources when entering the tray.
+//! Serialize visible GPU reads on a worker; each read owns a bounded child.
+//! NVIDIA process-global allocations disappear with that child, even if the
+//! driver's DLL unload retains state. No driver handle enters the dashboard.
 use omen_core::GpuSample;
+use serde::{Deserialize, Serialize};
 use std::{sync::mpsc, thread, time::Duration};
 enum Request {
     Sample,
     Stop,
 }
-struct Readout {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Readout {
     sample: Option<GpuSample>,
     warnings: Vec<String>,
     lost: bool,
+}
+pub(crate) fn read_in_child() -> Readout {
+    let mut nvidia = omen_platform::Nvidia::new();
+    let sample = nvidia.sample();
+    Readout {
+        sample,
+        warnings: nvidia.warnings().to_vec(),
+        lost: nvidia.needs_reconnect(),
+    }
 }
 pub struct GpuTelemetry {
     tx: mpsc::Sender<Request>,
@@ -23,19 +36,15 @@ impl GpuTelemetry {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
-            // No FFI handle or Library crosses a thread. Only owned sensor
-            // values leave this session, through the existing public adapter.
-            let mut nvidia = omen_platform::Nvidia::new();
             while let Ok(Request::Sample) = requests.recv() {
-                let sample = nvidia.sample();
-                if results
-                    .send(Readout {
-                        sample,
-                        warnings: nvidia.warnings().to_vec(),
-                        lost: nvidia.needs_reconnect(),
-                    })
-                    .is_err()
-                {
+                let readout =
+                    crate::read_process::capture(crate::read_process::ReadCommand::GpuTelemetry)
+                        .unwrap_or_else(|error| Readout {
+                            sample: None,
+                            warnings: vec![format!("GPU-Leseprozess: {error}")],
+                            lost: true,
+                        });
+                if results.send(readout).is_err() {
                     break;
                 }
             }
@@ -54,7 +63,9 @@ impl GpuTelemetry {
             self.warnings = vec!["NVIDIA-Lesesitzung beendet; alte Werte verworfen.".into()];
             return None;
         }
-        match self.rx.recv_timeout(Duration::from_secs(5)) {
+        // The isolated child owns a five-second deadline; allow its result
+        // to arrive before the worker itself is considered unresponsive.
+        match self.rx.recv_timeout(Duration::from_secs(6)) {
             Ok(readout) => {
                 self.warnings = readout.warnings;
                 self.lost = readout.lost;
@@ -80,8 +91,8 @@ impl Drop for GpuTelemetry {
     fn drop(&mut self) {
         let _ = self.tx.send(Request::Stop);
         if let Some(thread) = self.thread.take() {
-            // Never wait indefinitely on a vendor call. A stopped, healthy
-            // session exits and runs its FFI cleanup on the original thread.
+            // No new reads after Stop. An in-flight read still has its own
+            // five-second child/job deadline, including if this handle detaches.
             for _ in 0..20 {
                 if thread.is_finished() {
                     break;

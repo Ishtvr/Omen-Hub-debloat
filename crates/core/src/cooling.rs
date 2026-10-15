@@ -1,6 +1,47 @@
 //! HP fan response decoding. RPM observations are never restore targets.
 use serde::{Deserialize, Serialize};
 
+/// The manufacturer's 25C1 notebook path names selector 0 an IR temperature
+/// in Celsius. This is firmware provenance, not a physical sensor calibration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FirmwareIrTemperature {
+    pub celsius: u8,
+    pub selector: u8,
+    pub raw: [u8; 4],
+}
+impl FirmwareIrTemperature {
+    pub fn decode(code: u32, bytes: &[u8]) -> Result<Self, String> {
+        let raw: [u8; 4] = bytes.try_into().map_err(|_| "IR GET requires four bytes")?;
+        // Conservatively reject zero/sentinels, unknown flags and implausible
+        // values. This range is an input guard, not an operating-temperature limit.
+        if code != 0 || !(1..=125).contains(&raw[0]) || raw[1..] != [0; 3] {
+            return Err(
+                "IR temperature is unavailable or has an unqualified response layout".into(),
+            );
+        }
+        Ok(Self {
+            celsius: raw[0],
+            selector: 0,
+            raw,
+        })
+    }
+}
+
+/// Both endpoints use the same monotonic clock for one acquisition. Using the
+/// start bounds the age of values read early during a slow multi-read query.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SampleWindow {
+    pub started_ms: u64,
+    pub completed_ms: u64,
+}
+impl SampleWindow {
+    pub fn is_fresh_at(self, now_ms: u64, maximum_age_ms: u64) -> bool {
+        self.started_ms <= self.completed_ms
+            && self.completed_ms <= now_ms
+            && now_ms - self.started_ms <= maximum_age_ms
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaxFanState {
@@ -165,6 +206,50 @@ pub fn decode_topology(code: u32, bytes: &[u8]) -> Result<FanTopology, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ir_temperature_retains_provenance_and_rejects_faults_without_zero_fallback() {
+        let value = FirmwareIrTemperature::decode(0, &[39, 0, 0, 0]).unwrap();
+        assert_eq!(
+            (value.celsius, value.selector, value.raw),
+            (39, 0, [39, 0, 0, 0])
+        );
+        for raw in [[0, 0, 0, 0], [126, 0, 0, 0], [255, 0, 0, 0], [39, 1, 0, 0]] {
+            assert!(FirmwareIrTemperature::decode(0, &raw).is_err());
+        }
+        assert!(FirmwareIrTemperature::decode(1, &[39, 0, 0, 0]).is_err());
+        assert!(FirmwareIrTemperature::decode(0, &[39, 0, 0]).is_err());
+    }
+    #[test]
+    fn freshness_rejects_slow_reads_old_data_future_and_reversed_windows() {
+        let w = SampleWindow {
+            started_ms: 100,
+            completed_ms: 200,
+        };
+        assert!(w.is_fresh_at(2100, 2000));
+        assert!(!w.is_fresh_at(2101, 2000));
+        assert!(!w.is_fresh_at(199, 2000));
+        assert!(
+            !SampleWindow {
+                started_ms: 100,
+                completed_ms: 2200
+            }
+            .is_fresh_at(2200, 2000)
+        );
+        assert!(
+            !SampleWindow {
+                started_ms: 200,
+                completed_ms: 100
+            }
+            .is_fresh_at(300, 2000)
+        );
+        assert!(
+            !SampleWindow {
+                started_ms: u64::MAX,
+                completed_ms: u64::MAX
+            }
+            .is_fresh_at(0, 2000)
+        );
+    }
     #[test]
     fn max_state_rejects_bad_status_lengths_boolean_and_forged_restore() {
         for b in [&[][..], &[0, 0, 0][..], &[0, 0, 0, 0, 0][..]] {

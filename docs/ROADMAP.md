@@ -24,6 +24,7 @@ Omen Hub++ soll alle praktisch nutzbaren OMEN-Hardwarefunktionen in einer native
 - [ ] HSA/CAP-RPC bis zum tatsächlichen WMI-/EC-/Treiberaufruf vollständig verfolgen.
 - [x] Zuordnete 8E35/Khalilah25C1-Ressource finden: PL1, TPP, Thermal-/IR-Parameter, 30000-ms-Heartbeat und Unleashed-Support; Laufzeitwirkung bleibt separat zu validieren.
 - [x] Feste Lüfter-GETs auf 8E35/F.13 lesen: vollständiger Max-Fan-Schalter, CPU-/GPU-Drehzahlen, Zuordnung, gekoppelte Tabelle und rohe Zusatzsensorantwort.
+- [x] IR-Selektor 0 auf 25C1 bis zur Celsius-Ausgabe verfolgen; gespeicherte Auto-Auswahl von Software-/BIOS-Zuständigkeit unterscheiden. Einmalige CPU-/GPU-/IR-/Lüfterdiagnose mit expliziten Alters-/Berechtigungsfehlern implementiert und gelesen.
 - [x] Max-Fan-Get/Set-Paar ohne OMEN-DLL implementieren und manuelles Ein-/Readback-/Original-Restore sowie persistierte Recovery in getrennten Prozessen messen; HP-Dienste liefen weiter.
 - [ ] Gekoppelte Leistungs-/BIOS-Lüfterzuständigkeit, zusätzliche thermische Sensoranforderung und vollständige Modus-Readback-/Restore-Semantik für eigene Kurven qualifizieren; Max-Fan ist kein Ersatzbeweis.
 - [ ] MUX: Get/Set-Paare, Rückgabecodes und Zustandsübergänge identifizieren.

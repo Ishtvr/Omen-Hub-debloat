@@ -733,6 +733,9 @@ impl Backend for Controller {
             };
         }
         let reason = match feature {
+            Feature::CpuFanCurve | Feature::GpuFanCurve => {
+                "Fan curves require verified performance-mode/fan-ownership readback and restore, coupled CPU/GPU/IR safety and lifecycle validation; saved Auto and Max-Fan OFF are not proof of BIOS ownership"
+            }
             Feature::GpuUnleashed
             | Feature::GpuCustomTgp
             | Feature::GpuDynamicBoost

@@ -7,6 +7,7 @@ mod gpu;
 mod hp;
 mod nvidia;
 mod startup;
+mod thermal;
 mod user_data;
 mod vf;
 pub use control_lease::ControlLease;
@@ -23,6 +24,7 @@ pub use startup::{
     verify_startup_profile,
 };
 use std::collections::HashMap;
+pub use thermal::{CoolingSnapshot, read_cooling_snapshot};
 pub(crate) use user_data::profile_directory;
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use wmi::{Variant, WMIConnection};

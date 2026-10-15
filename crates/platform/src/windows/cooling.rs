@@ -3,7 +3,7 @@
 use super::hp::{HpBios, Read};
 use omen_core::{
     Inventory,
-    cooling::{self, FanSpeeds, FanTable, FanTopology, MaxFanState},
+    cooling::{self, FanSpeeds, FanTable, FanTopology, FirmwareIrTemperature, MaxFanState},
     hp::SystemDesignData,
 };
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ pub struct FanReport {
     pub table_sha256: String,
     pub system_design: SystemDesignData,
     pub surface_sensor_raw: Vec<u8>,
+    pub ir_temperature: Result<FirmwareIrTemperature, String>,
     pub software_curve_write_supported: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +65,9 @@ impl FanControl {
         let table = cooling::decode_table(c, &b)?;
         let table_sha256 = format!("{:x}", Sha256::digest(&table.raw));
         let (_, surface_sensor_raw) = self.get(Read::SurfaceSensor)?;
+        // Exact board 8E35 is Khalilah25C1. The manufacturer's selector-1
+        // substitution is limited to 26C1+; selector 0 is its IR/Celsius path.
+        let ir_temperature = FirmwareIrTemperature::decode(0, &surface_sensor_raw);
         Ok(FanReport {
             board: self.board.clone(),
             bios: self.version.clone(),
@@ -74,6 +78,7 @@ impl FanControl {
             table_sha256,
             system_design,
             surface_sensor_raw,
+            ir_temperature,
             software_curve_write_supported: false,
         })
     }
