@@ -342,9 +342,14 @@ fn rollback<B: Backend>(
     }
     // Restoring a coupled setting can undo an earlier restore. Verify all final
     // values, including unchanged settings; never erase an incomplete journal.
-    for saved in original {
-        if let Err(reason) = backend.verify_captured(saved) {
-            rollback_errors.push(format!("{:?}: {reason}", saved.feature));
+    // Without any write attempt, a difference is external drift (already the
+    // failure reason): keeping the journal pending would block every later apply
+    // and let recovery overwrite a change this transaction never made.
+    if !attempted.is_empty() {
+        for saved in original {
+            if let Err(reason) = backend.verify_captured(saved) {
+                rollback_errors.push(format!("{:?}: {reason}", saved.feature));
+            }
         }
     }
     // An incomplete rollback keeps the original journal and disables startup retries.
@@ -538,6 +543,7 @@ mod tests {
         couple_last: bool,
         disconnect_after_two_writes: bool,
         reject_adapter_target: bool,
+        drift_after_capture: bool,
         order: Option<Vec<usize>>,
     }
     fn binding() -> DeviceBinding {
@@ -598,6 +604,10 @@ mod tests {
         }
         fn capture(&mut self, feature: Feature) -> Result<Captured<Value>, String> {
             let value = self.read(feature)?;
+            if self.drift_after_capture && feature == Feature::GpuMemoryOffsetMhz {
+                self.values
+                    .insert(Feature::GpuCoreOffsetMhz, Value::Integer(7));
+            }
             Ok(Captured {
                 feature,
                 restore: value.clone(),
@@ -696,6 +706,7 @@ mod tests {
             couple_last: false,
             disconnect_after_two_writes: false,
             reject_adapter_target: false,
+            drift_after_capture: false,
             order: None,
         };
         (profile, backend, FakeJournal::default())
@@ -788,6 +799,21 @@ mod tests {
         assert!(error.rollback_errors.len() >= 2);
         assert!(journal.pending);
         assert!(journal.completed.is_none());
+    }
+    #[test]
+    fn external_drift_before_any_write_closes_the_journal_without_restoring() {
+        let (profile, mut backend, mut journal) = fixture();
+        backend.drift_after_capture = true;
+        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
+        assert!(error.error.contains("differs from the captured original"));
+        assert!(error.rollback_errors.is_empty());
+        assert!(backend.writes.is_empty());
+        assert!(!journal.pending);
+        assert_eq!(journal.completed, Some(Completion::Restored));
+        assert_eq!(
+            backend.values[&Feature::GpuCoreOffsetMhz],
+            Value::Integer(7)
+        );
     }
     #[test]
     fn no_hardware_write_without_durable_original_snapshot() {
