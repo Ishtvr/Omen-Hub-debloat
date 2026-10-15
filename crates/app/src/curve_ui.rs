@@ -1,7 +1,7 @@
 //! Native, metadata-only workbench for V/F and independent CPU/GPU fan curves.
 use crate::{
     curve_widget as plot,
-    gpu_ui::{control, input, text, token, wide},
+    native_ui::{input, positioned_control as control, text, token, wide},
 };
 use omen_core::{
     curve_editor::{Curve, Kind, Point},
@@ -285,6 +285,7 @@ struct State {
     controls: Cell<Option<Controls>>,
     font: Cell<HFONT>,
     mode: Cell<usize>,
+    allowed: [bool; 3],
     busy: Cell<bool>,
     rendering: Cell<bool>,
     dirty: Cell<bool>,
@@ -395,6 +396,9 @@ fn enabled(s: &State) {
     }
 }
 fn mode(s: &State, index: usize, capture: bool) {
+    if !s.allowed.get(index).copied().unwrap_or(false) {
+        return;
+    }
     let Some(c) = s.controls.get() else {
         return;
     };
@@ -532,6 +536,11 @@ fn layout(hwnd: HWND, s: &State) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    unsafe {
+        for (i, handle) in c.modes.iter().enumerate() {
+            ShowWindow(*handle, if s.allowed[i] { SW_SHOW } else { SW_HIDE });
+        }
+    }
     let mut r: RECT = unsafe { std::mem::zeroed() };
     unsafe {
         GetClientRect(hwnd, &mut r);
@@ -563,8 +572,14 @@ fn layout(hwnd: HWND, s: &State) {
             (c.zoom[1], [w - 240, h - 44, 90, 30]),
             (c.zoom[2], [w - 140, h - 44, 120, 30]),
         ];
-        for (i, handle) in c.modes.iter().enumerate() {
-            boxes.push((*handle, [20 + i as i32 * 125, 14, 120, 28]));
+        for (slot, (_, handle)) in c
+            .modes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| s.allowed[*i])
+            .enumerate()
+        {
+            boxes.push((*handle, [20 + slot as i32 * 155, 14, 150, 28]));
         }
         unsafe {
             for (handle, b) in boxes {
@@ -606,8 +621,14 @@ fn layout(hwnd: HWND, s: &State) {
         (c.status, [20, h - 68, w - 255, 58]),
         (c.open, [w - 220, h - 68, 200, 58]),
     ];
-    for (i, handle) in c.modes.iter().enumerate() {
-        boxes.push((*handle, [20 + i as i32 * 185, 104, 175, 28]));
+    for (slot, (_, handle)) in c
+        .modes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| s.allowed[*i])
+        .enumerate()
+    {
+        boxes.push((*handle, [20 + slot as i32 * 185, 104, 175, 28]));
     }
     unsafe {
         for (handle, b) in boxes {
@@ -999,7 +1020,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         if let Some(id) = selected(s) {
                             if let Err(e) = std::env::current_exe().and_then(|exe| {
                                 std::process::Command::new(exe)
-                                    .args(["gpu-ui", &id])
+                                    .args(["presets-ui", &id])
                                     .spawn()
                             }) {
                                 text(
@@ -1044,6 +1065,7 @@ pub fn preview(kind: &str, path: &Path) -> Result<(), String> {
                 height,
                 example: kind == "gpu-example",
             }),
+            None,
         );
     }
     let view = load(None)?;
@@ -1070,9 +1092,19 @@ struct Preview {
     example: bool,
 }
 pub fn run(id: Option<String>) -> Result<(), String> {
-    run_window(id, None)
+    run_window(id, None, None)
 }
-fn run_window(id: Option<String>, preview: Option<Preview>) -> Result<(), String> {
+pub fn run_gpu(id: Option<String>) -> Result<(), String> {
+    run_window(id, None, Some(false))
+}
+pub fn run_fans(id: Option<String>) -> Result<(), String> {
+    run_window(id, None, Some(true))
+}
+fn run_window(
+    id: Option<String>,
+    preview: Option<Preview>,
+    fans: Option<bool>,
+) -> Result<(), String> {
     if let Some(id) = &id {
         omen_core::profiles::validate_id(id)?;
     }
@@ -1085,7 +1117,16 @@ fn run_window(id: Option<String>, preview: Option<Preview>) -> Result<(), String
         view: RefCell::new(None),
         controls: Cell::new(None),
         font: Cell::new(ptr::null_mut()),
-        mode: Cell::new(preview.as_ref().map_or(0, |p| p.mode)),
+        mode: Cell::new(
+            preview
+                .as_ref()
+                .map_or(if fans == Some(true) { 1 } else { 0 }, |p| p.mode),
+        ),
+        allowed: match fans {
+            Some(true) => [false, true, true],
+            Some(false) => [true, false, false],
+            None => [true; 3],
+        },
         busy: Cell::new(false),
         rendering: Cell::new(false),
         dirty: Cell::new(false),
@@ -1108,7 +1149,12 @@ fn run_window(id: Option<String>, preview: Option<Preview>) -> Result<(), String
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
-            wide("Omen Hub++ – GPU- und Lüfterkurven").as_ptr(),
+            wide(match fans {
+                Some(true) => "Omen Hub++ – Lüfterkurve",
+                Some(false) => "Omen Hub++ – GPU-Leistungskurve",
+                None => "Omen Hub++ – GPU- und Lüfterkurven",
+            })
+            .as_ptr(),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

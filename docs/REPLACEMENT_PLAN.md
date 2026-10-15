@@ -10,7 +10,7 @@ Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen v
 | GPU-Watt / Temperatur / Takt | Öffentliche NVML / NVAPI | Implementiert; regulärer NVIDIA-Treiber erforderlich |
 | CPU-Auslastung / Windows-MHz | Windows-Zeitdifferenzen / Power-API | Implementiert; kein Watt-/Boost-Ersatzwert |
 | CPU-Paketwatt / Temperatur | Eigener fester PawnIO-Leseadapter, öffentliche AMD-Energiezähler und Tctl | Auf HP8E35/F.13/8940HX mit bereits laufendem PawnIO2.2.0 und signiertem Modul0.2.11 gemessen; expliziter UAC-Leseprozess, frische Baseline nach Pause; andere Geräte/Versionen offen |
-| Tastaturfarbe / Anzeigemodus | Eigener BIOS-WMI-Transport | Vier-Zonen-Farben und eigene Farben/Firmware-Voreinstellung auf 8E35/F.13 manuell freigegeben; vollständiger Readback/Restore sowie persistierte Recovery in getrennten Prozessen; allgemeine Helligkeit und Lifecycle offen |
+| Tastaturfarbe / Anzeigemodus | Eigener BIOS-WMI-Transport | Vier Zonen und statisch ein/aus auf 8E35/F.13 qualifiziert; neue direkte Zonen-UI mit Readback/Restore, Ein/Aus vom Benutzer sichtbar bestätigt; Helligkeit/Animationen und unabhängiger Lifecycle offen |
 | Tastatureffekte / RGB pro Taste | Fähigkeitsabhängig WMI oder eigener HID-Adapter | Get-/Set-/Persistenzunterschiede gefunden; kein vollständiger Restore-Vertrag für alle Varianten |
 | HP-Leistungsprofile / GPU-Leistungsrahmen | Modellbezogene BIOS-WMI-Engine | Statische Befunde und begrenzter Statusreader; keine Write-Freigabe |
 | Keep-alive / AC / Standby | Ein eigener Controller mit geprüftem Lifecycle | Reine Policy und Windows-Ereignisse vorhanden; Firmware-Heartbeat noch nicht ausgeführt/validiert |

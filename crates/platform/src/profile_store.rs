@@ -193,6 +193,25 @@ impl ProfileStore {
     pub fn import(&self, path: &Path) -> Result<PathBuf, String> {
         self.save(&read_json::<PerformanceProfile>(path)?)
     }
+    /// Remove a preset from selection while retaining its exact file in a local
+    /// archive. Hardware originals remain available for independent recovery.
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        let profile = self.load(id)?;
+        if self.pending()? {
+            return Err("Complete hardware recovery before deleting a preset".into());
+        }
+        let selection = self.startup()?;
+        if selection.profile_id.as_deref() == Some(id) {
+            self.disable_startup()?;
+        }
+        let archive = self.root.join("deleted-profiles");
+        fs::create_dir_all(&archive).map_err(|e| e.to_string())?;
+        let bytes = read_bytes(&self.path(id)?)?;
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        // Flush the retained bytes before removing the selectable name.
+        atomic_bytes(&archive.join(format!("{}-{hash}.json", profile.id)), &bytes)?;
+        fs::remove_file(self.path(id)?).map_err(|e| e.to_string())
+    }
     pub fn list(&self) -> Result<Vec<PerformanceProfile>, String> {
         let mut result = vec![];
         for entry in fs::read_dir(self.root.join("profiles")).map_err(|e| e.to_string())? {
@@ -486,6 +505,7 @@ mod tests {
             let root = self.0.root();
             for directory in [
                 root.join("control-history"),
+                root.join("deleted-profiles"),
                 root.join("profiles"),
                 root.to_owned(),
             ] {
@@ -499,6 +519,7 @@ mod tests {
             }
             let _ = fs::remove_dir(root.join("profiles"));
             let _ = fs::remove_dir(root.join("control-history"));
+            let _ = fs::remove_dir(root.join("deleted-profiles"));
             let _ = fs::remove_dir(root);
         }
     }
@@ -582,6 +603,31 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn deleting_a_preset_retains_exact_file_and_recovery_but_revokes_startup() {
+        let mut fixture = Fixture::new();
+        let store = &mut fixture.0;
+        let p = profile();
+        store.save(&p).unwrap();
+        let bytes = fs::read(store.path(&p.id).unwrap()).unwrap();
+        store.begin(&transaction(&p)).unwrap();
+        assert!(store.delete(&p.id).is_err());
+        assert_eq!(store.load(&p.id).unwrap(), p);
+        finish(store, Completion::Applied);
+        store.enable_startup(&p.id).unwrap();
+        let original = fs::read(store.journal_path()).unwrap();
+        store.delete(&p.id).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(!store.startup().unwrap().enabled);
+        assert_eq!(fs::read(store.journal_path()).unwrap(), original);
+        let archive = fs::read_dir(store.root.join("deleted-profiles"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(fs::read(archive).unwrap(), bytes);
     }
     #[test]
     fn cpu_diagnostic_retains_exact_detail_without_changing_control_approval() {

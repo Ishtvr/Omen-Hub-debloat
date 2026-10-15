@@ -20,7 +20,7 @@ Die gemessene Zuordnung lautet CPU/GPU, mit Capabilitybytes 0/0 und Thermalpolic
 
 ## Profil- und Restore-Verhalten
 
-`max_fan` ist eine boolesche Profilvorgabe. Im nativen GPU-Profilfenster gibt es **Max-Fan im Profil: Nicht ändern / Ein / Aus**. „Nicht ändern“ entfernt nur diese Vorgabe aus dem Profil; es setzt keinen bereits aktiven Firmware-Override zurück. „Aus“ gibt den Max-Fan-Override frei und wählt keinen anderen BIOS-Lüftermodus. Speichern ändert ausschließlich Metadaten. Erst das ausdrückliche Anwenden startet den erhöhten Transaktionsprozess.
+`max_fan` ist eine boolesche Profilvorgabe. **Leistungsprofile → NVIDIA GPU → Max-Fan** nimmt sie optional per Checkbox auf und speichert Ein/Aus. Ohne Checkbox fehlt nur die Vorgabe; ein aktiver Firmware-Override wird nicht zurückgesetzt. Aus gibt den Max-Fan-Override frei und wählt keinen anderen BIOS-Lüftermodus. Speichern ändert nur Metadaten; erst das ausdrückliche Anwenden startet den erhöhten Transaktionsprozess.
 
 Vor dem ersten SET erfasst die Transaktion sämtliche Originalwerte. Der Max-Fan-Adapter prüft dabei Board/BIOS, Tabellenhash, Topologie, Thermalpolicy und die vollständigen reservierten Schalterbytes. Vor dem Schreiben wird das eigene erwartete Zustandsbild erneut mit der Firmware verglichen. Geänderte oder unbekannte Zustände blockieren die Operation. Diese Freigabe verlangt Netzbetrieb; die Capability ist ausdrücklich **nicht startup-safe**.
 

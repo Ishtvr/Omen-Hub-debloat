@@ -129,26 +129,11 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
                 true,
             ),
             (150, "Steuerung", t.heading, false, false),
-            (
-                151,
-                "Takt, VRAM und gespeicherte Profile",
-                t.small,
-                false,
-                true,
-            ),
-            (152, "GPU-V/F und Lüfterentwürfe", t.small, false, true),
-            (
-                153,
-                "Vier Tastaturzonen und Farbmodus",
-                t.small,
-                false,
-                true,
-            ),
             (160, "System", t.heading, false, false),
-            (161, "HP-Leistungsmodus · Vorschau", t.body, false, false),
+            (161, "Leistungsmodus", t.body, false, false),
             (
                 181,
-                "Balanced: Vorschau. Noch keine Hardware-Einstellungen angewendet.",
+                "Balanced (Default): noch nicht verfügbar.",
                 t.small,
                 false,
                 true,
@@ -184,7 +169,7 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
         control(
             103,
             "BUTTON",
-            "GPU-Profile …",
+            "Leistungsprofile",
             WS_TABSTOP,
             t.body,
             false,
@@ -193,7 +178,7 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
         control(
             104,
             "BUTTON",
-            "Lüfter & V/F …",
+            "Lüfterkurve",
             WS_TABSTOP,
             t.body,
             false,
@@ -202,7 +187,7 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
         control(
             105,
             "BUTTON",
-            "Beleuchtung …",
+            "Beleuchtung",
             WS_TABSTOP,
             t.body,
             false,
@@ -217,7 +202,11 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             false,
             false,
         );
-        for value in ["Quiet", "Balanced", "Performance", "Unleashed"] {
+        for value in [
+            "Quiet (Default)",
+            "Balanced (Default)",
+            "Performance (Default)",
+        ] {
             SendMessageW(combo, CB_ADDSTRING, 0, wide(value).as_ptr() as isize);
         }
         SendMessageW(combo, CB_SETCURSEL, 1, 0);
@@ -281,7 +270,6 @@ pub unsafe fn layout(hwnd: HWND) {
         for (i, id) in [103, 104, 105].iter().enumerate() {
             let x = 28 + i as i32 * (action + 16);
             boxes.push((*id, [x, 487, action, 44]));
-            boxes.push((151 + i as i32, [x, 540, action, 24]));
         }
         let bottom = (h - 180).max(578);
         boxes.extend([
@@ -434,7 +422,7 @@ pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
             hwnd,
             180,
             &format!(
-                "{} {}\r\nBoard: {} · BIOS: {}\r\nHP-WMI: {} · Lüfter/MUX noch nicht angebunden",
+                "{} {}\r\nBoard: {} · BIOS: {}\r\nHP-WMI: {}",
                 s.inventory.manufacturer,
                 s.inventory.model,
                 s.inventory.board,

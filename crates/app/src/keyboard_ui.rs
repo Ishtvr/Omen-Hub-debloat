@@ -1,17 +1,17 @@
-//! Four-zone native editor. Saving is metadata; reads/apply/restore use fixed UAC children.
+//! Direct four-zone lighting. One elevated editor; the dashboard stays normal.
 use crate::{
-    elevation::{self, Action},
-    gpu_ui::{control, input, text, token, wide},
+    native_ui::{self as ui, text, wide},
+    theme,
 };
 use omen_core::{
     features::Feature,
     keyboard::KeyboardState,
-    profiles::{Choice, DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
-    transaction::Backend,
+    profiles::{PerformanceProfile, Value},
 };
-use omen_platform::{Controller, RestoreState, profile_store::ProfileStore};
+use omen_platform::{DirectLighting, profile_store::ProfileStore};
 use std::{
     cell::{Cell, RefCell},
+    path::Path,
     ptr,
     sync::mpsc,
     thread,
@@ -19,189 +19,87 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::LibraryLoader::GetModuleHandleW,
+    System::SystemServices::SS_CENTER,
     UI::{
-        Controls::{
-            Dialogs::{CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW},
-            EM_SETLIMITTEXT,
-        },
-        Input::KeyboardAndMouse::{EnableWindow, GetKeyState},
+        Controls::Dialogs::*,
+        Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED},
+        Input::KeyboardAndMouse::{EnableWindow, GetFocus},
+        Shell::{IsUserAnAdmin, ShellExecuteW},
         WindowsAndMessaging::*,
     },
 };
 
-const UPDATE: u32 = WM_APP + 51;
-const SELECT: usize = 701;
-const NAME: usize = 702;
-const NEW: usize = 703;
-const SAVE: usize = 704;
-const READ: usize = 705;
-const APPLY: usize = 706;
-const RESTORE: usize = 707;
-const STATUS: usize = 708;
-const HEX: usize = 710;
-const PICK: usize = 714;
-const MODE: usize = 718;
-const CURRENT: usize = 722;
-const COPY_CURRENT: usize = 726;
-#[derive(Clone)]
-struct View {
-    profiles: Vec<PerformanceProfile>,
-    selected: Option<PerformanceProfile>,
-    binding: DeviceBinding,
-    pending: bool,
-    restore_ready: bool,
-}
-fn view(id: Option<&str>) -> Result<View, String> {
-    let store = ProfileStore::user_data()?;
-    let selected = id.map(|id| store.load(id)).transpose()?;
-    let mut c = Controller::new(false, None)?;
-    let restore_ready = store.last_transaction::<RestoreState>().is_ok_and(|t| {
-        selected.as_ref().is_some_and(|p| p.id == t.profile_id)
-            && t.requested
-                .iter()
-                .any(|s| matches!(s.feature, Feature::KeyboardColors | Feature::KeyboardEffect))
-    });
-    Ok(View {
-        profiles: store.list()?,
-        selected,
-        binding: c.context()?.binding,
-        pending: store.pending()?,
-        restore_ready,
-    })
-}
+const UPDATE: u32 = WM_APP + 21;
+const POWER: usize = 600;
+const ZONE: usize = 610;
+const STATUS: i32 = 624;
+const CLASS: &str = "OmenHubPPKeyboardEditor";
+const LABELS: [&str; 4] = ["Links", "Mitte", "Rechts", "Nummernblock"];
 enum Request {
-    Load(Option<String>),
-    Read(Option<String>),
-    Save {
-        baseline: Box<Option<PerformanceProfile>>,
-        binding: Box<DeviceBinding>,
-        name: String,
+    Read,
+    Apply {
+        expected: KeyboardState,
         colors: [[u8; 3]; 4],
-        mode: Option<Choice>,
+        enabled: bool,
     },
-    Apply(String),
-    Restore(String),
     Stop,
 }
-enum Update {
-    View(Box<View>, String),
-    Read(KeyboardState, bool, String),
-    Error(String),
+struct Update {
+    state: Option<KeyboardState>,
+    error: Option<String>,
 }
-fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
-    while let Ok(request) = rx.recv() {
+struct State {
+    theme: theme::Theme,
+    tx: mpsc::Sender<Request>,
+    rx: mpsc::Receiver<Update>,
+    live: RefCell<Option<KeyboardState>>,
+    colors: Cell<[[u8; 3]; 4]>,
+    enabled: Cell<bool>,
+    busy: Cell<bool>,
+    closing: Cell<bool>,
+    zones: Cell<[HWND; 4]>,
+    bounds: Cell<[RECT; 4]>,
+    power: Cell<HWND>,
+    preview: bool,
+    custom_colors: RefCell<[u32; 16]>,
+}
+fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<Update>) {
+    let mut control = DirectLighting::new();
+    while let Ok(request) = requests.recv() {
         if matches!(request, Request::Stop) {
             break;
         }
-        let result = (|| -> Result<Update, String> {
-            match request {
-                Request::Load(id) => {
-                    Ok(Update::View(Box::new(view(id.as_deref())?), String::new()))
-                }
-                Request::Read(id) => {
-                    let record = elevation::run(id.as_deref(), Action::KeyboardRead, || {
-                        matches!(
-                            rx.try_recv(),
-                            Ok(Request::Stop) | Err(mpsc::TryRecvError::Disconnected)
-                        )
-                    })?;
-                    let result = &record["result"]["Ok"];
-                    let state: KeyboardState = serde_json::from_value(result["state"].clone())
-                        .map_err(|e| e.to_string())?;
-                    state.validate()?;
-                    let applicable = result["plan"]["applicable"].as_bool() == Some(true);
-                    let status = if id.is_none() {
-                        "Firmwarezustand gelesen. Farben übernehmen oder einen eigenen Entwurf speichern.".into()
-                    } else if applicable {
-                        "Firmware und gespeichertes Profil geprüft. Anwenden überträgt das gesamte Profil nach Windows-Freigabe.".into()
-                    } else {
-                        format!(
-                            "Profil noch nicht anwendbar: {}",
-                            result["plan"]["blockers"]
-                        )
-                    };
-                    Ok(Update::Read(state, applicable, status))
-                }
-                Request::Save {
-                    baseline,
-                    binding,
-                    name,
+        let result = match control.as_mut() {
+            Ok(control) => match request {
+                Request::Read => control.read(),
+                Request::Apply {
+                    expected,
                     colors,
-                    mode,
-                } => {
-                    let store = ProfileStore::user_data()?;
-                    let mut profile = if let Some(old) = baseline.as_ref() {
-                        let fresh = store.load(&old.id)?;
-                        let managed = |p: &PerformanceProfile| {
-                            p.settings
-                                .iter()
-                                .filter(|s| {
-                                    matches!(
-                                        s.feature,
-                                        Feature::KeyboardColors | Feature::KeyboardEffect
-                                    )
-                                })
-                                .cloned()
-                                .collect::<Vec<_>>()
-                        };
-                        if managed(&fresh) != managed(old)
-                            || (name != old.name && fresh.name != old.name)
-                        {
-                            return Err("Beleuchtungsprofil wurde in einem anderen Fenster geändert. Neu laden, bevor es überschrieben wird.".into());
-                        }
-                        fresh
-                    } else {
-                        PerformanceProfile {
-                            schema: PROFILE_SCHEMA,
-                            id: format!("lighting-{}", token()),
-                            name: name.clone(),
-                            binding: (*binding).clone(),
-                            settings: vec![],
-                        }
-                    };
-                    if baseline.as_ref().as_ref().is_none_or(|p| name != p.name) {
-                        profile.name = name;
-                    }
-                    profile.settings.retain(|s| {
-                        !matches!(s.feature, Feature::KeyboardColors | Feature::KeyboardEffect)
-                    });
-                    profile.settings.push(Setting {
-                        feature: Feature::KeyboardColors,
-                        value: Value::Colors(colors.to_vec()),
-                    });
-                    if let Some(mode) = mode {
-                        profile.settings.push(Setting {
-                            feature: Feature::KeyboardEffect,
-                            value: Value::Choice(mode),
-                        });
-                    }
-                    profile.binding = profile.binding.for_settings(&profile.settings);
-                    store.save(&profile)?;
-                    Ok(Update::View(Box::new(view(Some(&profile.id))?),"Profil gespeichert. Keine Hardware verändert. Firmware prüfen, bevor das Profil angewendet wird.".into()))
-                }
-                Request::Apply(id) => {
-                    elevation::run(Some(&id), Action::Apply, || {
-                        matches!(
-                            rx.try_recv(),
-                            Ok(Request::Stop) | Err(mpsc::TryRecvError::Disconnected)
-                        )
-                    })?;
-                    Ok(Update::View(Box::new(view(Some(&id))?),"Gesamtes Profil angewendet; Farben, Modus und unveränderte Steuerbytes wurden zurückgelesen.".into()))
-                }
-                Request::Restore(id) => {
-                    elevation::run(Some(&id), Action::Restore, || {
-                        matches!(
-                            rx.try_recv(),
-                            Ok(Request::Stop) | Err(mpsc::TryRecvError::Disconnected)
-                        )
-                    })?;
-                    Ok(Update::View(Box::new(view(Some(&id))?),"Aufgezeichneter Originalzustand vollständig wiederhergestellt. Anmeldungsauswahl ausgeschaltet.".into()))
-                }
+                    enabled,
+                } => control.apply(&expected, &colors, enabled),
                 Request::Stop => unreachable!(),
+            },
+            Err(error) => Err(error.clone()),
+        };
+        let update = match result {
+            Ok(state) => Update {
+                state: Some(state),
+                error: None,
+            },
+            Err(error) => {
+                let state = control.as_mut().ok().and_then(|c| c.read().ok());
+                if let Ok(user) = ProfileStore::user_data() {
+                    if let Ok(store) = ProfileStore::at(user.root().join("keyboard-control")) {
+                        let _=store.save_control_result(&serde_json::json!({"schema":1,"operation":"lighting_direct","detail":error}));
+                    }
+                }
+                Update {
+                    state,
+                    error: Some(error),
+                }
             }
-        })();
-        if tx.send(result.unwrap_or_else(Update::Error)).is_err() {
+        };
+        if updates.send(update).is_err() {
             break;
         }
         unsafe {
@@ -209,271 +107,226 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
         }
     }
 }
-#[derive(Clone, Copy)]
-struct Controls {
-    profiles: HWND,
-    name: HWND,
-    new: HWND,
-    save: HWND,
-    read: HWND,
-    apply: HWND,
-    restore: HWND,
-    hex: [HWND; 4],
-    pick: [HWND; 4],
-    swatch: [HWND; 4],
-    current: [HWND; 4],
-    mode: HWND,
-    source: HWND,
-    status: HWND,
-    copy: HWND,
-}
-struct State {
-    tx: mpsc::Sender<Request>,
-    rx: mpsc::Receiver<Update>,
-    view: RefCell<Option<View>>,
-    live: RefCell<Option<KeyboardState>>,
-    controls: Cell<Option<Controls>>,
-    font: Cell<HFONT>,
-    theme: crate::theme::Theme,
-    busy: Cell<bool>,
-    rendering: Cell<bool>,
-    dirty: Cell<bool>,
-    checked: Cell<bool>,
-}
-fn id(s: &State) -> Option<String> {
-    s.view
-        .borrow()
-        .as_ref()?
-        .selected
-        .as_ref()
-        .map(|p| p.id.clone())
-}
-fn colors(s: &State) -> Result<[[u8; 3]; 4], String> {
-    let c = s.controls.get().ok_or("Fenster noch nicht bereit")?;
-    let mut values = [[0; 3]; 4];
-    for (i, field) in c.hex.iter().enumerate() {
-        let value = input(*field)?;
-        let value = value.trim().trim_start_matches('#');
-        if value.len() != 6 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(format!(
-                "Zone {}: Farbe mit sechs Hex-Zeichen eingeben, z. B. 3399FF.",
-                i + 1
-            ));
-        }
-        let n = u32::from_str_radix(value, 16).map_err(|e| e.to_string())?;
-        values[i] = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-    }
-    Ok(values)
-}
-fn hex(color: [u8; 3]) -> String {
-    format!("{:02X}{:02X}{:02X}", color[0], color[1], color[2])
-}
-fn enabled(s: &State) {
-    let Some(c) = s.controls.get() else { return };
-    let ready = s.view.borrow().is_some() && !s.busy.get();
+fn status(state: &State, message: &str, failed: bool) {
     unsafe {
-        for h in [c.profiles, c.name, c.new, c.save, c.read, c.mode] {
-            EnableWindow(h, ready as i32);
-        }
-        for h in c.hex.into_iter().chain(c.pick) {
-            EnableWindow(h, ready as i32);
-        }
-        let v = s.view.borrow();
-        let blocked = v.as_ref().is_none_or(|v| v.pending);
-        EnableWindow(
-            c.apply,
-            (ready && !blocked && !s.dirty.get() && s.checked.get() && id(s).is_some()) as i32,
-        );
-        EnableWindow(
-            c.restore,
-            (ready && v.as_ref().is_some_and(|v| v.restore_ready)) as i32,
-        );
-        EnableWindow(c.copy, (ready && s.live.borrow().is_some()) as i32);
+        let hwnd = GetParent(state.power.get());
+        let handle = GetDlgItem(hwnd, STATUS);
+        text(handle, message);
+        theme::error(handle, failed);
     }
 }
-fn dirty(s: &State) {
-    if s.rendering.get() {
+fn refresh(state: &State) {
+    unsafe {
+        let ready = state.live.borrow().is_some() || state.preview;
+        EnableWindow(state.power.get(), (!state.busy.get()) as i32);
+        text(
+            state.power.get(),
+            if state.busy.get() {
+                "Wird übernommen …"
+            } else if !ready {
+                "Erneut verbinden"
+            } else if state.enabled.get() {
+                "Ein"
+            } else {
+                "Aus"
+            },
+        );
+        for handle in state.zones.get() {
+            EnableWindow(
+                handle,
+                (ready && !state.busy.get() && state.enabled.get()) as i32,
+            );
+            InvalidateRect(handle, ptr::null(), 0);
+        }
+        InvalidateRect(state.power.get(), ptr::null(), 0);
+    }
+}
+fn dispatch(state: &State, request: Request) {
+    if state.busy.replace(true) {
         return;
     }
-    s.dirty.set(true);
-    s.checked.set(false);
-    if let Some(c) = s.controls.get() {
-        text(
-            c.status,
-            "Ungespeicherter Entwurf. Speichern verändert keine Hardware.",
+    status(state, "Wird übernommen …", false);
+    refresh(state);
+    if state.tx.send(request).is_err() {
+        state.busy.set(false);
+        status(state, "Verbindung beendet. Fenster neu öffnen.", true);
+        refresh(state);
+    }
+}
+fn apply(state: &State, colors: [[u8; 3]; 4], enabled: bool) {
+    if state.preview {
+        state.colors.set(colors);
+        state.enabled.set(enabled);
+        refresh(state);
+        return;
+    }
+    let expected = state.live.borrow().clone();
+    if let Some(expected) = expected {
+        dispatch(
+            state,
+            Request::Apply {
+                expected,
+                colors,
+                enabled,
+            },
         );
-        unsafe {
-            for h in c.swatch {
-                InvalidateRect(h, ptr::null(), 1);
+    }
+}
+fn pick(state: &State, zone: usize) {
+    if state.busy.get() || !state.enabled.get() {
+        return;
+    }
+    let mut colors = state.colors.get();
+    let [r, g, b] = colors[zone];
+    let mut custom = state.custom_colors.borrow_mut();
+    let mut choose: CHOOSECOLORW = unsafe { std::mem::zeroed() };
+    choose.lStructSize = size_of::<CHOOSECOLORW>() as u32;
+    choose.hwndOwner = unsafe { GetParent(state.power.get()) };
+    choose.rgbResult = theme::rgb(r, g, b);
+    choose.lpCustColors = custom.as_mut_ptr();
+    choose.Flags = CC_RGBINIT | CC_FULLOPEN;
+    if unsafe { ChooseColorW(&mut choose) } != 0 {
+        colors[zone] = [
+            (choose.rgbResult & 255) as u8,
+            ((choose.rgbResult >> 8) & 255) as u8,
+            ((choose.rgbResult >> 16) & 255) as u8,
+        ];
+        drop(custom);
+        apply(state, colors, true);
+    }
+}
+unsafe fn layout(hwnd: HWND, state: &State) {
+    unsafe {
+        let mut client: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut client);
+        let w = client.right;
+        let h = client.bottom;
+        ui::place(GetDlgItem(hwnd, 620), 32, 26, w - 270, 40);
+        ui::place(state.power.get(), w - 180, 25, 148, 42);
+        let keyboard_w = w - 64;
+        let keyboard_h = (keyboard_w * 31 / 100).clamp(200, 330);
+        let top = 104 + ((h - 180 - keyboard_h).max(0) / 2);
+        let mut bounds = [RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        }; 4];
+        for (i, bound) in bounds.iter_mut().enumerate() {
+            let left = 32 + keyboard_w * i as i32 / 4;
+            let right = 32 + keyboard_w * (i + 1) as i32 / 4;
+            *bound = RECT {
+                left,
+                top,
+                right,
+                bottom: top + keyboard_h,
+            };
+            ui::place(state.zones.get()[i], left, top, right - left, keyboard_h);
+            ui::place(
+                GetDlgItem(hwnd, 630 + i as i32),
+                left,
+                top + keyboard_h + 12,
+                right - left,
+                24,
+            );
+        }
+        state.bounds.set(bounds);
+        ui::place(GetDlgItem(hwnd, STATUS), 32, h - 49, w - 64, 28);
+    }
+}
+unsafe fn key(dc: HDC, rect: RECT, color: COLORREF) {
+    unsafe {
+        let brush = CreateSolidBrush(color);
+        let pen = CreatePen(PS_SOLID, 1, theme::BORDER);
+        let old_b = SelectObject(dc, brush);
+        let old_p = SelectObject(dc, pen);
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, 5, 5);
+        SelectObject(dc, old_b);
+        SelectObject(dc, old_p);
+        DeleteObject(brush);
+        DeleteObject(pen);
+    }
+}
+unsafe fn draw_zone(state: &State, item: &DRAWITEMSTRUCT) {
+    unsafe {
+        let zone = (item.CtlID as usize) - ZONE;
+        let bounds = state.bounds.get();
+        let full_w = bounds[3].right - bounds[0].left;
+        let h = item.rcItem.bottom;
+        let local_left = bounds[zone].left - bounds[0].left;
+        ui::fill(item.hDC, &item.rcItem, state.theme.panel_color());
+        let save = SaveDC(item.hDC);
+        let mut origin = POINT { x: 0, y: 0 };
+        GetViewportOrgEx(item.hDC, &mut origin);
+        SetViewportOrgEx(item.hDC, origin.x - local_left, origin.y, ptr::null_mut());
+        let unit = (full_w - 32) as f32 / 20.0;
+        let row_h = (h - 30) as f32 / 6.0;
+        let color = |center: f32| {
+            if !state.enabled.get() || (state.live.borrow().is_none() && !state.preview) {
+                return theme::rgb(52, 58, 65);
+            }
+            let index = ((center / 5.0) as usize).min(3);
+            let [r, g, b] = state.colors.get()[index];
+            theme::rgb(r, g, b)
+        };
+        for row in 0..6 {
+            let mut columns: Vec<(f32, f32)> = if row == 5 {
+                vec![
+                    (0., 1.2),
+                    (1.2, 1.2),
+                    (2.4, 1.2),
+                    (3.6, 5.2),
+                    (8.8, 1.2),
+                    (10., 1.2),
+                    (11.2, 1.2),
+                    (12.4, 1.2),
+                    (13.6, 1.4),
+                ]
+            } else if row == 2 {
+                std::iter::once((0., 1.5))
+                    .chain((0..12).map(|i| (1.5 + i as f32, 1.)))
+                    .chain(std::iter::once((13.5, 1.5)))
+                    .collect()
+            } else if row == 3 {
+                std::iter::once((0., 1.8))
+                    .chain((0..11).map(|i| (1.8 + i as f32, 1.)))
+                    .chain(std::iter::once((12.8, 2.2)))
+                    .collect()
+            } else if row == 4 {
+                std::iter::once((0., 2.2))
+                    .chain((0..10).map(|i| (2.2 + i as f32, 1.)))
+                    .chain(std::iter::once((12.2, 2.8)))
+                    .collect()
+            } else {
+                (0..15).map(|i| (i as f32, 1.)).collect()
+            };
+            columns.extend((0..4).map(|i| (16. + i as f32, 1.)));
+            for (x, width) in columns {
+                let rect = RECT {
+                    left: 16 + (x * unit) as i32 + 2,
+                    top: 15 + (row as f32 * row_h) as i32 + 2,
+                    right: 16 + ((x + width) * unit) as i32 - 3,
+                    bottom: 15 + ((row + 1) as f32 * row_h) as i32 - 3,
+                };
+                key(item.hDC, rect, color(x + width / 2.));
             }
         }
-    }
-    enabled(s);
-}
-fn invalidate_live(s: &State) {
-    *s.live.borrow_mut() = None;
-    s.checked.set(false);
-    if let Some(c) = s.controls.get() {
-        for field in c.current {
-            text(field, "Firmware: nicht gelesen");
+        RestoreDC(item.hDC, save);
+        if item.itemState & (ODS_FOCUS | ODS_SELECTED) != 0 || GetFocus() == item.hwndItem {
+            let pen = CreatePen(PS_SOLID, 2, theme::ACCENT);
+            let old_p = SelectObject(item.hDC, pen);
+            let old_b = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+            Rectangle(
+                item.hDC,
+                2,
+                2,
+                item.rcItem.right - 2,
+                item.rcItem.bottom - 2,
+            );
+            SelectObject(item.hDC, old_p);
+            SelectObject(item.hDC, old_b);
+            DeleteObject(pen);
         }
-        text(
-            c.source,
-            "Firmwarezustand erneut prüfen, um aktuelle Farben zu lesen.",
-        );
-    }
-}
-fn dispatch(s: &State, request: Request, status: &str) {
-    if s.busy.replace(true) {
-        return;
-    }
-    // A child may write before returning an error. Drop the old GET snapshot
-    // before dispatch, including when UAC is cancelled or the child times out.
-    if matches!(
-        &request,
-        Request::Read(_) | Request::Apply(_) | Request::Restore(_)
-    ) {
-        invalidate_live(s);
-    }
-    if let Some(c) = s.controls.get() {
-        text(c.status, status);
-    }
-    enabled(s);
-    if s.tx.send(request).is_err() {
-        s.busy.set(false);
-        if let Some(c) = s.controls.get() {
-            text(c.status, "Steuerung nicht erreichbar. Fenster neu öffnen.");
-        }
-        enabled(s);
-    }
-}
-fn show(s: &State, v: View, status: &str) {
-    let Some(c) = s.controls.get() else { return };
-    invalidate_live(s);
-    s.rendering.set(true);
-    unsafe {
-        SendMessageW(c.profiles, CB_RESETCONTENT, 0, 0);
-        SendMessageW(
-            c.profiles,
-            CB_ADDSTRING,
-            0,
-            wide("Neues Beleuchtungsprofil …").as_ptr() as isize,
-        );
-        for p in &v.profiles {
-            SendMessageW(c.profiles, CB_ADDSTRING, 0, wide(&p.name).as_ptr() as isize);
-        }
-        let selected = v
-            .selected
-            .as_ref()
-            .and_then(|p| v.profiles.iter().position(|q| q.id == p.id))
-            .map_or(0, |i| i + 1);
-        SendMessageW(c.profiles, CB_SETCURSEL, selected, 0);
-    }
-    text(
-        c.name,
-        v.selected
-            .as_ref()
-            .map_or("Meine Tastaturfarben", |p| &p.name),
-    );
-    let color_value = v.selected.as_ref().and_then(|p| {
-        p.settings
-            .iter()
-            .find(|s| s.feature == Feature::KeyboardColors)
-    });
-    let values = match color_value {
-        Some(Setting {
-            value: Value::Colors(colors),
-            ..
-        }) if colors.len() == 4 => colors.clone(),
-        _ => vec![[255; 3]; 4],
-    };
-    for (field, value) in c.hex.iter().zip(values) {
-        text(*field, &hex(value));
-    }
-    let mode = v.selected.as_ref().and_then(|p| {
-        p.settings
-            .iter()
-            .find(|s| s.feature == Feature::KeyboardEffect)
-    });
-    let selected = match mode {
-        Some(Setting {
-            value: Value::Choice(Choice::FirmwareDefault),
-            ..
-        }) => 1,
-        None if v.selected.is_some() => 2,
-        _ => 0,
-    };
-    unsafe {
-        SendMessageW(c.mode, CB_SETCURSEL, selected, 0);
-    }
-    text(
-        c.source,
-        "Vier Zonen · Farben sind Entwürfe oder Profilwerte. Firmware prüfen liest den tatsächlichen Zustand mit Administratorfreigabe.",
-    );
-    *s.view.borrow_mut() = Some(v);
-    s.busy.set(false);
-    s.dirty.set(false);
-    s.checked.set(false);
-    s.rendering.set(false);
-    enabled(s);
-    text(
-        c.status,
-        if status.is_empty() {
-            "Farben speichern, Firmware prüfen, dann das gesamte Profil anwenden. Animationen und automatische Beleuchtungs-Wiederanwendung sind noch nicht freigegeben."
-        } else {
-            status
-        },
-    );
-}
-fn live(s: &State, state: KeyboardState, checked: bool, status: &str) {
-    let Some(c) = s.controls.get() else { return };
-    if let Ok(colors) = state.colors() {
-        for (h, v) in c.current.iter().zip(colors) {
-            text(*h, &format!("Firmware: #{}", hex(v)));
-        }
-    }
-    text(
-        c.source,
-        if state.custom_colors_enabled().unwrap_or(false) {
-            "Firmware: Eigene Farben aktiv. Der Modusschalter erhält die bekannten Steuerzustände; eine Helligkeitsskala wird hier nicht angeboten."
-        } else {
-            "Firmware: Voreinstellung aktiv. Eigene Farben im Profil auswählen, damit die gespeicherten Zonenfarben verwendet werden."
-        },
-    );
-    *s.live.borrow_mut() = Some(state);
-    s.checked.set(checked);
-    s.busy.set(false);
-    text(c.status, status);
-    enabled(s);
-}
-fn save(s: &State) {
-    let Some(c) = s.controls.get() else { return };
-    let request = (|| -> Result<Request, String> {
-        let colors = colors(s)?;
-        let name = input(c.name)?.trim().to_owned();
-        if name.is_empty() {
-            return Err("Profilnamen eingeben.".into());
-        }
-        let selected = unsafe { SendMessageW(c.mode, CB_GETCURSEL, 0, 0) };
-        let mode = match selected {
-            0 => Some(Choice::Static),
-            1 => Some(Choice::FirmwareDefault),
-            2 => None,
-            _ => return Err("Beleuchtungsmodus auswählen.".into()),
-        };
-        let v = s.view.borrow();
-        let v = v.as_ref().ok_or("Profilansicht fehlt")?;
-        Ok(Request::Save {
-            baseline: Box::new(v.selected.clone()),
-            binding: Box::new(v.binding.clone()),
-            name,
-            colors,
-            mode,
-        })
-    })();
-    match request {
-        Ok(r) => dispatch(s, r, "Profil wird gespeichert; keine Hardwareänderung …"),
-        Err(e) => text(c.status, &e),
     }
 }
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -482,343 +335,154 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             let create = &*(l as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
         }
-        let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State;
-        if pointer.is_null() {
+        let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const State;
+        if raw.is_null() {
             return DefWindowProcW(hwnd, message, w, l);
         }
-        let s = &*pointer;
-        if let Some(color) = s.theme.color(message, w, l) {
+        let state = &*raw;
+        if let Some(color) = state.theme.color(message, w, l) {
             return color;
         }
         match message {
             WM_CREATE => {
-                s.theme.frame(hwnd);
-                let mut f: LOGFONTW = std::mem::zeroed();
-                f.lfHeight = -18;
-                for (a, b) in f.lfFaceName.iter_mut().zip(wide("Segoe UI")) {
-                    *a = b;
-                }
-                s.font.set(CreateFontIndirectW(&f));
-                let child = |id: usize, class: &str, label: &str, style: u32, rect: [i32; 4]| {
-                    control(hwnd, s.font.get(), id, class, label, style, rect)
-                };
-                child(
-                    0,
-                    "STATIC",
-                    "Tastaturbeleuchtung · vier Zonen",
-                    0,
-                    [20, 18, 720, 28],
-                );
-                child(
-                    0,
-                    "STATIC",
-                    "Speichern hält einen Entwurf fest. Anwenden verändert die Beleuchtungsfirmware.",
-                    0,
-                    [20, 53, 720, 28],
-                );
-                child(0, "STATIC", "Profil", 0, [20, 82, 285, 20]);
-                child(0, "STATIC", "Profilname", 0, [321, 82, 315, 20]);
-                let profiles = child(
-                    SELECT,
-                    "COMBOBOX",
-                    "",
-                    WS_TABSTOP | CBS_DROPDOWNLIST as u32,
-                    [20, 106, 285, 240],
-                );
-                let name = child(
-                    NAME,
-                    "EDIT",
-                    "",
-                    WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
-                    [321, 106, 315, 32],
-                );
-                SendMessageW(name, EM_SETLIMITTEXT, 96, 0);
-                let new = child(NEW, "BUTTON", "&Neu", WS_TABSTOP, [652, 106, 88, 32]);
-                let source = child(
-                    0,
-                    "STATIC",
-                    "Profile werden geladen …",
-                    0,
-                    [20, 148, 720, 52],
-                );
-                let hex = std::array::from_fn(|i| {
-                    child(
-                        0,
-                        "STATIC",
-                        &format!("Zone {}", i + 1),
-                        0,
-                        [20, 211 + i as i32 * 58, 86, 26],
-                    );
-                    let h = child(
-                        HEX + i,
-                        "EDIT",
-                        "FFFFFF",
-                        WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
-                        [125, 206 + i as i32 * 58, 120, 32],
-                    );
-                    SendMessageW(h, EM_SETLIMITTEXT, 7, 0);
-                    h
-                });
-                let swatch = std::array::from_fn(|i| {
-                    child(
-                        740 + i,
+                state.theme.frame(hwnd);
+                ui::control(hwnd, state.theme.title, 620, "STATIC", "Beleuchtung", 0);
+                state.power.set(ui::control(
+                    hwnd,
+                    state.theme.body,
+                    POWER,
+                    "BUTTON",
+                    "Wird gelesen …",
+                    WS_TABSTOP,
+                ));
+                let zones = std::array::from_fn(|i| {
+                    ui::control(
+                        hwnd,
+                        state.theme.body,
+                        ZONE + i,
                         "BUTTON",
-                        "",
-                        BS_OWNERDRAW as u32,
-                        [270, 206 + i as i32 * 58, 78, 32],
+                        LABELS[i],
+                        WS_TABSTOP | BS_OWNERDRAW as u32,
                     )
                 });
-                let pick = std::array::from_fn(|i| {
-                    child(
-                        PICK + i,
-                        "BUTTON",
-                        "Farbe wählen …",
-                        WS_TABSTOP,
-                        [372, 206 + i as i32 * 58, 164, 32],
-                    )
-                });
-                let current = std::array::from_fn(|i| {
-                    child(
-                        CURRENT + i,
-                        "STATIC",
-                        "Firmware: nicht gelesen",
-                        0,
-                        [554, 211 + i as i32 * 58, 186, 26],
-                    )
-                });
-                child(0, "STATIC", "Anzeige", 0, [20, 452, 90, 26]);
-                let mode = child(
-                    MODE,
-                    "COMBOBOX",
-                    "",
-                    WS_TABSTOP | CBS_DROPDOWNLIST as u32,
-                    [125, 448, 615, 180],
-                );
-                for value in [
-                    "Eigene Farben aktivieren",
-                    "Firmware-Voreinstellung verwenden",
-                    "Aktivierung unverändert lassen",
-                ] {
-                    SendMessageW(mode, CB_ADDSTRING, 0, wide(value).as_ptr() as isize);
+                state.zones.set(zones);
+                for (i, label) in LABELS.iter().enumerate() {
+                    let c =
+                        ui::control(hwnd, state.theme.small, 630 + i, "STATIC", label, SS_CENTER);
+                    theme::muted(c);
                 }
-                let read = child(
-                    READ,
-                    "BUTTON",
-                    "Firmware prüfen …",
-                    WS_TABSTOP,
-                    [20, 499, 215, 34],
+                ui::control(
+                    hwnd,
+                    state.theme.small,
+                    STATUS as usize,
+                    "STATIC",
+                    "Tastatur wird gelesen …",
+                    0,
                 );
-                let copy = child(
-                    COPY_CURRENT,
-                    "BUTTON",
-                    "Firmwarefarben übernehmen",
-                    WS_TABSTOP,
-                    [250, 499, 280, 34],
-                );
-                let save = child(
-                    SAVE,
-                    "BUTTON",
-                    "&Speichern",
-                    WS_TABSTOP,
-                    [552, 499, 188, 34],
-                );
-                let apply = child(
-                    APPLY,
-                    "BUTTON",
-                    "Gesamtes Profil &anwenden …",
-                    WS_TABSTOP,
-                    [20, 552, 348, 38],
-                );
-                let restore = child(
-                    RESTORE,
-                    "BUTTON",
-                    "Original &wiederherstellen …",
-                    WS_TABSTOP,
-                    [389, 552, 351, 38],
-                );
-                let status = child(
-                    STATUS,
-                    "EDIT",
-                    "Wird geladen …",
-                    WS_BORDER
-                        | ES_MULTILINE as u32
-                        | ES_READONLY as u32
-                        | ES_AUTOVSCROLL as u32
-                        | WS_VSCROLL,
-                    [20, 610, 720, 104],
-                );
-                let c = Controls {
-                    profiles,
-                    name,
-                    new,
-                    save,
-                    read,
-                    apply,
-                    restore,
-                    hex,
-                    pick,
-                    swatch,
-                    current,
-                    mode,
-                    source,
-                    status,
-                    copy,
-                };
-                if [
-                    profiles, name, source, mode, read, status, save, apply, restore,
-                ]
-                .iter()
-                .chain(hex.iter())
-                .any(|h| h.is_null())
-                {
-                    return -1;
-                }
-                s.controls.set(Some(c));
-                enabled(s);
+                layout(hwnd, state);
+                refresh(state);
                 0
             }
-            WM_DRAWITEM => {
-                let item = &*(l as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
-                if (740..744).contains(&item.CtlID) {
-                    let i = (item.CtlID - 740) as usize;
-                    let value = colors(s).map_or([128; 3], |v| v[i]);
-                    let color = u32::from(value[0])
-                        | (u32::from(value[1]) << 8)
-                        | (u32::from(value[2]) << 16);
-                    let fill = CreateSolidBrush(color);
-                    FillRect(item.hDC, &item.rcItem, fill);
-                    DeleteObject(fill);
-                    FrameRect(item.hDC, &item.rcItem, GetSysColorBrush(COLOR_WINDOWTEXT));
-                    1
-                } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
-                    s.theme
-                        .button(item, s.font.get(), item.CtlID == SAVE as u32);
-                    1
-                } else {
-                    0
-                }
+            WM_SIZE => {
+                layout(hwnd, state);
+                0
             }
-            WM_ERASEBKGND => {
-                s.theme.fill(hwnd, w as HDC);
+            WM_GETMINMAXINFO => {
+                let info = &mut *(l as *mut MINMAXINFO);
+                info.ptMinTrackSize = POINT { x: 760, y: 480 };
+                0
+            }
+            WM_ERASEBKGND | WM_PRINTCLIENT => {
+                let mut rect = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rect);
+                ui::fill(w as HDC, &rect, state.theme.bg());
                 1
             }
-            WM_PRINTCLIENT => {
-                s.theme.fill(hwnd, w as HDC);
+            WM_DRAWITEM => {
+                let item = &*(l as *const DRAWITEMSTRUCT);
+                if (ZONE..ZONE + 4).contains(&(item.CtlID as usize)) {
+                    draw_zone(state, item);
+                } else {
+                    state.theme.button(
+                        item,
+                        state.theme.body,
+                        state.enabled.get() && item.CtlID == POWER as u32,
+                    );
+                }
+                1
+            }
+            WM_COMMAND => {
+                let id = w & 0xffff;
+                let notification = (w >> 16) & 0xffff;
+                if notification != BN_CLICKED as usize || state.busy.get() {
+                    return 0;
+                }
+                if id == POWER {
+                    if state.live.borrow().is_none() && !state.preview {
+                        dispatch(state, Request::Read);
+                    } else {
+                        apply(state, state.colors.get(), !state.enabled.get());
+                    }
+                } else if (ZONE..ZONE + 4).contains(&id) {
+                    pick(state, id - ZONE);
+                }
                 0
             }
             UPDATE => {
-                while let Ok(update) = s.rx.try_recv() {
-                    match update {
-                        Update::View(v, status) => show(s, *v, &status),
-                        Update::Read(state, checked, status) => live(s, state, checked, &status),
-                        Update::Error(e) => {
-                            s.busy.set(false);
-                            s.checked.set(false);
-                            if let Some(c) = s.controls.get() {
-                                text(c.status, &e);
-                            }
-                            enabled(s);
+                while let Ok(update) = state.rx.try_recv() {
+                    state.busy.set(false);
+                    if let Some(live) = update.state {
+                        if let Ok(colors) = live.colors().and_then(|v| {
+                            v.try_into().map_err(|_| "Vier Zonen erforderlich".into())
+                        }) {
+                            state.colors.set(colors);
                         }
+                        state
+                            .enabled
+                            .set(live.custom_colors_enabled().unwrap_or(false));
+                        *state.live.borrow_mut() = Some(live);
+                    } else {
+                        *state.live.borrow_mut() = None;
                     }
+                    if let Some(error) = update.error {
+                        status(
+                            state,
+                            if error.contains("outside this window") {
+                                "Beleuchtung wurde zwischenzeitlich geändert. Erneut wählen."
+                            } else {
+                                "Beleuchtung konnte nicht geändert werden. Erneut verbinden."
+                            },
+                            true,
+                        );
+                    } else {
+                        status(
+                            state,
+                            if state.enabled.get() {
+                                "Zone auswählen, um die Farbe zu ändern."
+                            } else {
+                                "Beleuchtung aus."
+                            },
+                            false,
+                        );
+                    }
+                    refresh(state);
                 }
-                0
-            }
-            WM_COMMAND => {
-                if s.rendering.get() || s.busy.get() {
-                    return 0;
-                }
-                let Some(c) = s.controls.get() else { return 0 };
-                let code = (w >> 16) as u32;
-                let action = w & 0xffff;
-                if (matches!(action, NEW | SAVE | READ | APPLY | RESTORE | COPY_CURRENT)
-                    || (PICK..PICK + 4).contains(&action))
-                    && code != BN_CLICKED
-                {
-                    return 0;
-                }
-                if (action == NAME || (HEX..HEX + 4).contains(&action)) && code == EN_CHANGE {
-                    dirty(s);
-                    return 0;
-                }
-                if action == MODE && code == CBN_SELCHANGE {
-                    dirty(s);
-                    return 0;
-                }
-                match action {
-                    SELECT if code == CBN_SELCHANGE => {
-                        let i = SendMessageW(c.profiles, CB_GETCURSEL, 0, 0);
-                        let selected = s
-                            .view
-                            .borrow()
-                            .as_ref()
-                            .and_then(|v| {
-                                usize::try_from(i - 1).ok().and_then(|i| v.profiles.get(i))
-                            })
-                            .map(|p| p.id.clone());
-                        dispatch(s, Request::Load(selected), "Profil wird geladen …");
-                    }
-                    NEW => dispatch(s, Request::Load(None), "Neuer Beleuchtungsentwurf …"),
-                    SAVE => save(s),
-                    READ => dispatch(
-                        s,
-                        Request::Read(id(s)),
-                        "Windows-Freigabe für das Lesen und die Profilprüfung …",
-                    ),
-                    APPLY if !s.dirty.get() && s.checked.get() => {
-                        if let Some(id) = id(s) {
-                            dispatch(
-                                s,
-                                Request::Apply(id),
-                                "Windows-Freigabe für das gesamte Profil …",
-                            );
-                        }
-                    }
-                    RESTORE if s.view.borrow().as_ref().is_some_and(|v| v.restore_ready) => {
-                        if let Some(id) = id(s) {
-                            dispatch(
-                                s,
-                                Request::Restore(id),
-                                "Windows-Freigabe für die aufgezeichneten Originalwerte …",
-                            );
-                        }
-                    }
-                    COPY_CURRENT => {
-                        if let Some(state) = s.live.borrow().as_ref() {
-                            if let Ok(values) = state.colors() {
-                                for (h, v) in c.hex.iter().zip(values) {
-                                    text(*h, &hex(v));
-                                }
-                            }
-                        }
-                        dirty(s);
-                    }
-                    _ if (PICK..PICK + 4).contains(&action) => {
-                        let i = action - PICK;
-                        let color = colors(s).map_or([255; 3], |v| v[i]);
-                        let mut custom = [0u32; 16];
-                        let mut chooser: CHOOSECOLORW = std::mem::zeroed();
-                        chooser.lStructSize = size_of::<CHOOSECOLORW>() as u32;
-                        chooser.hwndOwner = hwnd;
-                        chooser.rgbResult = u32::from(color[0])
-                            | (u32::from(color[1]) << 8)
-                            | (u32::from(color[2]) << 16);
-                        chooser.lpCustColors = custom.as_mut_ptr();
-                        chooser.Flags = CC_RGBINIT | CC_FULLOPEN;
-                        if ChooseColorW(&mut chooser) != 0 {
-                            let v = chooser.rgbResult;
-                            text(c.hex[i], &hex([v as u8, (v >> 8) as u8, (v >> 16) as u8]));
-                            dirty(s);
-                        }
-                    }
-                    _ => {}
+                if state.closing.get() && !state.busy.get() {
+                    DestroyWindow(hwnd);
                 }
                 0
             }
             WM_CLOSE => {
-                DestroyWindow(hwnd);
+                if state.busy.get() {
+                    state.closing.set(true);
+                    status(state, "Änderung wird abgeschlossen …", false);
+                } else {
+                    DestroyWindow(hwnd);
+                }
                 0
             }
             WM_DESTROY => {
+                let _ = state.tx.send(Request::Stop);
                 PostQuitMessage(0);
                 0
             }
@@ -827,217 +491,122 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
 }
 pub fn run(selected: Option<String>) -> Result<(), String> {
-    run_window(selected, None)
+    if selected.is_some() {
+        return Err("Beleuchtung direkt über keyboard-ui ohne Profilparameter öffnen.".into());
+    }
+    if unsafe { IsUserAnAdmin() } == 0 {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                wide("runas").as_ptr(),
+                wide(&exe.to_string_lossy()).as_ptr(),
+                wide("keyboard-ui").as_ptr(),
+                ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as usize <= 32 {
+            return Err("Windows-Freigabe für Beleuchtung abgebrochen.".into());
+        }
+        return Ok(());
+    }
+    run_window(None, None, None)
 }
-pub fn preview(selected: String, path: &std::path::Path) -> Result<(), String> {
-    run_window(Some(selected), Some(path.into()))
+pub fn preview(selected: String, path: &Path, size: Option<[i32; 2]>) -> Result<(), String> {
+    run_window(
+        Some(ProfileStore::user_data()?.load(&selected)?),
+        Some(path),
+        size,
+    )
 }
-fn run_window(selected: Option<String>, preview: Option<std::path::PathBuf>) -> Result<(), String> {
-    if let Some(id) = &selected {
-        omen_core::profiles::validate_id(id)?;
+fn run_window(
+    preview_profile: Option<PerformanceProfile>,
+    preview: Option<&Path>,
+    size: Option<[i32; 2]>,
+) -> Result<(), String> {
+    let [width, height] = size.unwrap_or([1000, 590]);
+    if !(760..=2560).contains(&width) || !(480..=1600).contains(&height) {
+        return Err("Lighting preview dimensions outside supported capture bounds".into());
     }
     let (tx, requests) = mpsc::channel();
     let (updates, rx) = mpsc::channel();
-    let s = Box::new(State {
+    let colors = preview_profile
+        .as_ref()
+        .and_then(|p| {
+            p.settings.iter().find_map(|s| {
+                if let Value::Colors(v) = &s.value {
+                    Some(v.clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .and_then(|v| v.try_into().ok())
+        .unwrap_or([[185, 213, 248]; 4]);
+    let enabled = preview_profile
+        .as_ref()
+        .and_then(|p| {
+            p.settings
+                .iter()
+                .find(|s| s.feature == Feature::KeyboardEffect)
+        })
+        .is_none_or(|s| s.value == Value::Choice(omen_core::profiles::Choice::Static));
+    let state = Box::new(State {
+        theme: theme::Theme::new(),
         tx,
         rx,
-        view: RefCell::new(None),
         live: RefCell::new(None),
-        controls: Cell::new(None),
-        font: Cell::new(ptr::null_mut()),
-        theme: crate::theme::Theme::new(),
+        colors: Cell::new(colors),
+        enabled: Cell::new(enabled),
         busy: Cell::new(false),
-        rendering: Cell::new(false),
-        dirty: Cell::new(false),
-        checked: Cell::new(false),
+        closing: Cell::new(false),
+        zones: Cell::new([ptr::null_mut(); 4]),
+        bounds: Cell::new(
+            [RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }; 4],
+        ),
+        power: Cell::new(ptr::null_mut()),
+        preview: preview.is_some(),
+        custom_colors: RefCell::new([0; 16]),
     });
     unsafe {
-        let instance = GetModuleHandleW(ptr::null());
-        let class = wide("OmenHubPPKeyboardEditor");
-        let mut reg: WNDCLASSW = std::mem::zeroed();
-        reg.lpfnWndProc = Some(procedure);
-        reg.hInstance = instance;
-        reg.lpszClassName = class.as_ptr();
-        reg.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
-        reg.hbrBackground = s.theme.background;
-        if RegisterClassW(&reg) == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let hwnd = CreateWindowExW(
-            WS_EX_CONTROLPARENT,
-            class.as_ptr(),
-            wide("Omen Hub++ – Tastaturbeleuchtung").as_ptr(),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            780,
-            780,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            instance,
-            (&*s as *const State).cast(),
-        );
-        if hwnd.is_null() {
-            return Err(std::io::Error::last_os_error().to_string());
+        ui::register(CLASS, Some(procedure))?;
+        let hwnd = ui::create(
+            CLASS,
+            "Omen Hub++ – Beleuchtung",
+            width,
+            height,
+            (&*state as *const State).cast_mut().cast(),
+            preview.is_some(),
+        )?;
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        if let Some(path) = preview {
+            status(
+                &state,
+                if state.enabled.get() {
+                    "Zone auswählen, um die Farbe zu ändern."
+                } else {
+                    "Beleuchtung aus."
+                },
+                false,
+            );
+            let result = crate::curve_widget::render_window(hwnd, path);
+            DestroyWindow(hwnd);
+            return result;
         }
         let handle = hwnd as usize;
         let thread = thread::spawn(move || worker(handle, requests, updates));
-        ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });
-        dispatch(&s, Request::Load(selected), "Profile werden geladen …");
-        let mut message: MSG = std::mem::zeroed();
-        let mut preview_error = None;
-        let result = loop {
-            let r = GetMessageW(&mut message, ptr::null_mut(), 0, 0);
-            if r <= 0 {
-                break r;
-            }
-            if message.message == WM_KEYDOWN && message.wParam == 0x53 && GetKeyState(0x11) < 0 {
-                save(&s);
-                continue;
-            }
-            if IsDialogMessageW(hwnd, &message) == 0 {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-            if let Some(path) = &preview {
-                if message.message == UPDATE && !s.busy.get() {
-                    if s.view.borrow().is_some() {
-                        if let Err(e) = crate::curve_widget::render_window(hwnd, path) {
-                            preview_error = Some(e);
-                        }
-                    } else {
-                        preview_error =
-                            Some("Beleuchtungsansicht konnte nicht geladen werden.".into());
-                    }
-                    DestroyWindow(hwnd);
-                    break 1;
-                }
-            }
-        };
-        let _ = s.tx.send(Request::Stop);
+        dispatch(&state, Request::Read);
+        ui::messages(hwnd);
+        let _ = state.tx.send(Request::Stop);
         if thread.is_finished() {
             let _ = thread.join();
         }
-        if !s.font.get().is_null() {
-            DeleteObject(s.font.get());
-        }
-        if let Some(e) = preview_error {
-            Err(e)
-        } else if result < 0 {
-            Err(std::io::Error::last_os_error().to_string())
-        } else {
-            Ok(())
-        }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use omen_core::keyboard::{decode_keyboard_capability, decode_legacy_lighting};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
-
-    #[test]
-    fn native_firmware_snapshot_is_discarded_after_refresh_or_possible_write() {
-        // A hidden window with real controls, synthetic firmware and no worker:
-        // exercise completion/error transitions without UAC or hardware IO.
-        let (tx, requests) = mpsc::channel();
-        let (updates, rx) = mpsc::channel();
-        let s = Box::new(State {
-            tx,
-            rx,
-            view: RefCell::new(None),
-            live: RefCell::new(None),
-            controls: Cell::new(None),
-            font: Cell::new(ptr::null_mut()),
-            theme: crate::theme::Theme::new(),
-            busy: Cell::new(false),
-            rendering: Cell::new(false),
-            dirty: Cell::new(false),
-            checked: Cell::new(false),
-        });
-        let binding = DeviceBinding {
-            manufacturer: "Test".into(),
-            board: "test".into(),
-            bios: "test".into(),
-            cpu_names: vec![],
-            nvidia_uuid: None,
-            nvidia_driver: None,
-            nvidia_vbios: None,
-        };
-        let v = View {
-            profiles: vec![],
-            selected: None,
-            binding,
-            pending: false,
-            restore_ready: false,
-        };
-        let capability = decode_keyboard_capability(0, &[1, 0, 0, 0]).unwrap();
-        let state = KeyboardState {
-            board: "test".into(),
-            bios: "test".into(),
-            legacy: Some(
-                decode_legacy_lighting(capability.kind, 0, &[0; 128], 0, &[0; 128]).unwrap(),
-            ),
-            capability,
-        };
-        unsafe {
-            let instance = GetModuleHandleW(ptr::null());
-            let class = wide("OmenHubPPKeyboardSnapshotTest");
-            let mut reg: WNDCLASSW = std::mem::zeroed();
-            reg.lpfnWndProc = Some(procedure);
-            reg.hInstance = instance;
-            reg.lpszClassName = class.as_ptr();
-            reg.hbrBackground = s.theme.background;
-            assert_ne!(RegisterClassW(&reg), 0);
-            let hwnd = CreateWindowExW(
-                0,
-                class.as_ptr(),
-                wide("Snapshot test").as_ptr(),
-                WS_OVERLAPPED,
-                0,
-                0,
-                780,
-                780,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                instance,
-                (&*s as *const State).cast(),
-            );
-            assert!(!hwnd.is_null());
-            let c = s.controls.get().unwrap();
-            let clear = || {
-                assert!(s.live.borrow().is_none());
-                assert!(!s.checked.get());
-                assert_eq!(IsWindowEnabled(c.copy), 0);
-                for h in c.current {
-                    assert_eq!(input(h).unwrap(), "Firmware: nicht gelesen");
-                }
-            };
-            show(&s, v.clone(), "Initial load");
-            live(&s, state.clone(), true, "Verified GET");
-            assert_ne!(IsWindowEnabled(c.copy), 0);
-            show(&s, v, "Successful apply or restore refreshed the view");
-            clear();
-            for request in [
-                Request::Read(None),
-                Request::Apply("test".into()),
-                Request::Restore("test".into()),
-            ] {
-                live(&s, state.clone(), true, "Verified GET");
-                dispatch(&s, request, "Child starting");
-                clear();
-                assert!(requests.try_recv().is_ok());
-                updates
-                    .send(Update::Error("Child failed after possible write".into()))
-                    .unwrap();
-                SendMessageW(hwnd, UPDATE, 0, 0);
-                clear();
-                assert!(!s.busy.get());
-            }
-            DestroyWindow(hwnd);
-            DeleteObject(s.font.get());
-            UnregisterClassW(class.as_ptr(), instance);
-        }
-    }
+    Ok(())
 }

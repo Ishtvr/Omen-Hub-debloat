@@ -108,11 +108,11 @@ fn lighting_target(state: &KeyboardState, settings: &[Setting]) -> Result<Keyboa
             (Feature::KeyboardEffect, Value::Choice(Choice::Static)) => {
                 target = target.with_classic_mode(true)?
             }
-            (Feature::KeyboardEffect, Value::Choice(Choice::FirmwareDefault)) => {
+            (Feature::KeyboardEffect, Value::Choice(Choice::FirmwareDefault | Choice::Off)) => {
                 target = target.with_classic_mode(false)?
             }
             (Feature::KeyboardEffect, _) => {
-                return Err("Only own static colors and firmware preset are qualified".into());
+                return Err("Only static lighting and Off are qualified".into());
             }
             _ => {}
         }
@@ -1072,7 +1072,15 @@ impl Backend for Controller {
                 .ok_or("No complete keyboard target proof")?
                 .clone();
             let actual = self.keyboard_state()?;
-            if actual != expected || setting.value != keyboard_value(setting.feature, &actual)? {
+            let actual_value = if setting.feature == Feature::KeyboardEffect
+                && setting.value == Value::Choice(Choice::Off)
+                && !actual.custom_colors_enabled()?
+            {
+                Value::Choice(Choice::Off)
+            } else {
+                keyboard_value(setting.feature, &actual)?
+            };
+            if actual != expected || setting.value != actual_value {
                 return Err("Keyboard target, opaque fields or brightness readback differs".into());
             }
             return Ok(setting.value.clone());
@@ -1439,7 +1447,7 @@ impl Backend for Controller {
             let Value::Choice(mode) = setting.value else {
                 return Err("Missing classic keyboard mode".into());
             };
-            if !matches!(mode, Choice::Static | Choice::FirmwareDefault)
+            if !matches!(mode, Choice::Static | Choice::FirmwareDefault | Choice::Off)
                 || self
                     .keyboard_mode_calibration
                     .is_some_and(|allowed| allowed != mode)
@@ -1547,7 +1555,7 @@ impl Backend for Controller {
             let Value::Choice(mode) = setting.value else {
                 return Err("Typed keyboard mode missing".into());
             };
-            if !matches!(mode, Choice::Static | Choice::FirmwareDefault)
+            if !matches!(mode, Choice::Static | Choice::FirmwareDefault | Choice::Off)
                 || self
                     .keyboard_mode_calibration
                     .is_some_and(|allowed| allowed != mode)

@@ -68,11 +68,11 @@ try {
     }
     if ($taskText -notmatch 'Auslastung: \d+[\.,]\d+ %') { throw 'CPU busy-time measurement did not become ready.' }
     $taskCombo = [OmenUiSmoke]::GetDlgItem($taskWindow, 102)
-    [void][OmenUiSmoke]::SendMessage($taskCombo, 0x014E, [UIntPtr]::new([uint64]3), [IntPtr]::Zero)
-    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]0x00010066), [IntPtr]::Zero)
+    [void][OmenUiSmoke]::SendMessage($taskCombo, 0x014E, [UIntPtr]::new([uint64]2), [IntPtr]::Zero)
+    [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]0x00090066), [IntPtr]::Zero)
     Start-Sleep -Milliseconds 150
     $taskText = [OmenUiSmoke]::ChildrenText($taskWindow)
-    if ($taskText -notmatch 'Unleashed: Vorschau') { throw 'Profile preview did not update.' }
+    if ($taskText -notmatch 'Performance \(Default\): noch nicht verfügbar.') { throw 'Profile preview did not update.' }
     $taskLocal = Join-Path $taskRepo '.local'
     New-Item -ItemType Directory -Force -Path $taskLocal | Out-Null
     $taskText | Set-Content -LiteralPath (Join-Path $taskLocal 'ui-smoke-text.txt') -Encoding utf8
@@ -84,9 +84,9 @@ try {
     if ([OmenUiSmoke]::GetDlgItem($taskWindow,106)-ne[IntPtr]::Zero) { throw 'Hidden dashboard did not release its native controls.' }
     [void][OmenUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]201),[IntPtr]::Zero)
     $taskReturnDeadline=(Get-Date).AddSeconds(5)
-    do {$taskText=[OmenUiSmoke]::ChildrenText($taskWindow);if($taskText-match'Board: 8E35'-and$taskText-match'Unleashed: Vorschau'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskReturnDeadline)
+    do {$taskText=[OmenUiSmoke]::ChildrenText($taskWindow);if($taskText-match'Board: 8E35'-and$taskText-match'Performance \(Default\): noch nicht verfügbar.'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskReturnDeadline)
     $taskRestoredCombo=[OmenUiSmoke]::GetDlgItem($taskWindow,102)
-    if($taskText-notmatch'Unleashed: Vorschau'-or[OmenUiSmoke]::SendMessage($taskRestoredCombo,0x0147,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt64()-ne3){throw 'Rebuilt dashboard lost its preview selection.'}
+    if($taskText-notmatch'Performance \(Default\): noch nicht verfügbar.'-or[OmenUiSmoke]::SendMessage($taskRestoredCombo,0x0147,[UIntPtr]::Zero,[IntPtr]::Zero).ToInt64()-ne2){throw 'Rebuilt dashboard lost its preview selection.'}
     if(-not[OmenUiSmoke]::IsWindowVisible($taskWindow)-or[OmenUiSmoke]::GetDlgItem($taskWindow,103)-eq[IntPtr]::Zero){throw 'Tray return did not rebuild operable controls.'}
     [void][OmenUiSmoke]::PostMessage($taskWindow, 0x0111, [UIntPtr]::new([uint64]202), [IntPtr]::Zero)
     if (-not $taskProcess.WaitForExit(3000)) { throw 'Application did not exit within 3 seconds.' }

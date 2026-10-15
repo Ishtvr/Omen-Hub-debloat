@@ -8,6 +8,7 @@ pub mod fan;
 pub mod features;
 pub mod hp;
 pub mod keyboard;
+pub mod preset;
 pub mod profiles;
 pub mod supervisor;
 pub mod transaction;

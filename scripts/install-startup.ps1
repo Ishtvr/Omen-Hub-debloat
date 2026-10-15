@@ -1,7 +1,7 @@
 # Installs the fixed, native profile entry point for the current user's logon.
 # No profile is selected or applied by this installer. Windows PowerShell 5.1.
 #requires -Version 5.1
-param([ValidateSet('Install','Inspect','Remove')][string]$Mode = 'Install')
+param([ValidateSet('Install','Inspect','Remove')][string]$Mode = 'Install',[string]$SourceBinary='')
 $ErrorActionPreference = 'Stop'
 $taskIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskSid = $taskIdentity.User.Value
@@ -52,7 +52,7 @@ if ($Mode -eq 'Remove') {
     [pscustomobject]@{ Removed = $true; TaskName = $taskName; ProfilesRetained = $true } | ConvertTo-Json
     return
 }
-$taskSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\Omen Hub++.exe'
+$taskSource = if([string]::IsNullOrWhiteSpace($SourceBinary)){Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\Omen Hub++.exe'}else{[IO.Path]::GetFullPath($SourceBinary)}
 if (-not (Test-Path -LiteralPath $taskSource -PathType Leaf)) { throw 'Build the release executable before installing startup.' }
 $taskSourceHash = (Get-FileHash -LiteralPath $taskSource -Algorithm SHA256).Hash
 New-Item -ItemType Directory -Force -Path $taskInstallRoot | Out-Null
@@ -69,7 +69,9 @@ foreach ($taskPrincipal in @($taskAdmins,$taskSystem)) {
 }
 $taskAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($taskUser,[Security.AccessControl.FileSystemRights]::ReadAndExecute,$taskInheritance,$taskPropagation,[Security.AccessControl.AccessControlType]::Allow))
 Set-Acl -LiteralPath $taskInstallRoot -AclObject $taskAcl
-Copy-Item -LiteralPath $taskSource -Destination $taskBinary -Force
+if(-not [IO.Path]::GetFullPath($taskSource).Equals($taskBinary,[StringComparison]::OrdinalIgnoreCase)){
+    Copy-Item -LiteralPath $taskSource -Destination $taskBinary -Force
+}
 if ((Get-FileHash -LiteralPath $taskBinary -Algorithm SHA256).Hash -ne $taskSourceHash) { throw 'Installed executable hash differs from the release.' }
 # Protect the file even when replacing a pre-existing file with explicit permissions.
 $taskFileAcl = [Security.AccessControl.FileSecurity]::new()

@@ -1,6 +1,6 @@
 # GPU-Steuerung und eigene Profile
 
-Stand: 15. Oktober 2026. Der native Editor ist im Dashboard über **GPU-Profile …** erreichbar, alternativ über `gpu-ui`. Speichern ändert keine Hardware. Anwenden, Original wiederherstellen und die Freigabe für die nächste Anmeldung laufen über einen einzelnen, festen UAC-Prozess. Der normale Tray-Prozess bleibt uneleviert.
+Stand: 15. Oktober 2026. **Leistungsprofile → Custom Presets** ersetzt das frühere GPU-Profilfenster; `presets-ui [id]` ist der direkte Einstieg, `gpu-ui` bleibt Alias. Die vollständige Bedienung steht in [CUSTOM_PRESETS.md](CUSTOM_PRESETS.md). Speichern verändert keine Hardware. Anwenden/Wiederherstellen/Anmeldefreigabe verwenden feste UAC-Children; Dashboard und Tray bleiben uneleviert.
 
 ## Tatsächlich freigegeben
 
@@ -22,21 +22,21 @@ Das ist **Frequenzsteuerung an Spannungsankern**, wie sie für Undervolting-Ziel
 
 ## Einheitliches Profilformat
 
-Der neue gemeinsame [Kurveneditor](CURVE_EDITOR.md) ist über **Lüfter & V/F …** erreichbar. Er bearbeitet einzelne GPU-Frequenzpunkte und getrennte CPU-/GPU-Lüfterkurven interaktiv. Er speichert ausschließlich Metadaten; eine enthaltene Lüfterkurve sperrt die Hardware-Anwendung weiterhin bis zur validierten HP-Anbindung. Der getrennte Max-Fan-Override ist inzwischen manuell qualifiziert, aber kein Kurvenadapter.
+Die **GPU-Leistungskurve** liegt im GPU-Bereich des gespeicherten Presets und öffnet `gpu-curve-ui`; **Lüfterkurve** im Dashboard öffnet `fan-ui` mit CPU-/GPU-Lüfterentwürfen. `curve-ui` bleibt der kombinierte CLI-Einstieg. Alle drei verwenden denselben [Kurveneditor](CURVE_EDITOR.md) und speichern nur Metadaten; enthaltene Lüfterkurven sperren die Hardware-Anwendung weiterhin. Der qualifizierte Max-Fan-Override ist kein Kurvenadapter.
 
-Das versionierte Format enthält **85 typisierte Feature-Schlüssel** aus den relevanten GPU-, CPU/APU-, Intel-, Windows-, Radeon-, Upscaling- und OMEN-Funktionsgruppen. Das ist ein Datenkatalog, keine Zusage von 85 funktionierenden Adaptern. Im NVIDIA-Bereich sind Core-/Memory-Offsets und vollständige Graphics-V/F-Kurven schreibbar. Seit 14. Oktober sind zusätzlich modellgebundene Vier-Zonen-Farben und der statische/Firmware-Beleuchtungsmodus manuell anwendbar, seit 15. Oktober auch Max-Fan; Beleuchtung und Max-Fan bleiben für Startup gesperrt. Bedienung und Grenzen: [KEYBOARD_UI.md](KEYBOARD_UI.md), [FAN_CONTROL.md](FAN_CONTROL.md).
+Das versionierte Format enthält **91 typisierte Feature-Schlüssel**, einschließlich sechs ergänzter CPU-Boost-/Windows-Prozessorfelder. Das ist ein Datenkatalog, keine Zusage von 91 funktionierenden Adaptern. Core-/VRAM-Offsets, vollständige Graphics-V/F-Kurven, modellgebundene Vier-Zonen-Farben/statisch-aus und manuelles Max-Fan sind unter ihren bisherigen Grenzen schreibbar. Beleuchtung und Max-Fan bleiben für Startup gesperrt. Die UI lässt Super Resolution und Radeon Graphics Options weg, erhält vorhandene solche Settings beim Save jedoch vollständig.
 
 Integer, Schalter, Auswahllisten, V/F-Punkte, Werte pro CPU-Kern, Core-Ratios, Lüfterkurven und RGB-Farben sind verschiedene Datentypen. Einheiten sind explizit: MHz, mV, mW, °C oder Curve-Optimizer-Schritte. Curve Optimizer wird nicht als Millivolt-Offset ausgegeben. Profile enthalten keine Shell-Kommandos, frei wählbaren Opcodes, EC-Adressen oder Treiberstrukturen.
 
-Nicht unterstützte Parameter können im Datenformat gespeichert werden. **Ein einziges nicht anwendbares Setting sperrt das gesamte Profil vor dem ersten Schreibzugriff.** Es gibt keinen stillen Teilerfolg. Die vier HP-Systemprofile im ursprünglichen Dashboard bleiben ausdrücklich Vorschauen.
+Nicht unterstützte Parameter können als Metadaten gespeichert werden. **Ein einziges nicht anwendbares Setting sperrt das gesamte Profil vor dem ersten Schreibzugriff.** Es gibt keinen stillen Teilerfolg. Die drei Dashboard-Defaults Quiet/Balanced/Performance sind ausdrücklich noch nicht verfügbar; der frühere Unleashed-Eintrag steht unter GPU als Dynamic Boost und bleibt hardwareseitig gesperrt.
 
 CPU-/Windows-/iGPU-Profile brauchen keine NVIDIA-Sitzung, sofern sie keine NVIDIA-GPU-Settings enthalten. Ihre Geräteprüfung verlangt deshalb keine aufgeweckte diskrete GPU. Dies bereitet den gewünschten späteren Battery-Modus vor; MUX/iGPU-only, effizientes CPU-Boost und CPU-Voltage/Curve-Optimizer-Adapter sind noch nicht implementiert.
 
 ## Max-Fan als Profilvorgabe
 
-**Max-Fan im Profil** im Kopf des GPU-Editors unterscheidet **Nicht ändern**, **Ein** und **Aus**. Diese Auswahl zeigt gespeicherte Absicht, keinen aktuellen Firmwarezustand. „Nicht ändern“ entfernt nur die Profilvorgabe; ein bereits aktiver Override bleibt davon unberührt. „Aus“ gibt beim ausdrücklichen Apply den Override frei und wählt keine BIOS-Lüfterautomatik. Änderungen sperren Apply bis zum Speichern. Save erhält die vollständige individuelle GPU-Kurve und fremde Profileinstellungen.
+**Max-Fan** in der NVIDIA-Gruppe wird optional per Checkbox aufgenommen, mit getrenntem Ein/Aus-Wert. Ein fehlendes Setting entfernt nur die Profilvorgabe und setzt keinen aktiven Override zurück. Aus gibt beim ausdrücklichen Apply den Override frei und wählt keine BIOS-Automatik. Die Auswahl ist Profilabsicht, kein gelesener Firmwarezustand. Änderungen sperren Apply bis Save; Name und fremde Settings sowie die vollständige GPU-Kurve bleiben erhalten.
 
-Das boolesche `max_fan` ist auf **8E35/F.13**, Netzbetrieb und die frisch bestätigte Tabellen-/Topologie-/Schalteridentität begrenzt. Der vollständige Originalschalter wird dauerhaft protokolliert und kann auch in einem neuen Prozess restauriert werden. Ein Max-Fan-only-Profil benötigt keine NVIDIA-Sitzung. Die native Ansicht enthält weiterhin GPU-Vorgaben; reine Fan-Profile können per CLI angelegt werden. Max-Fan bleibt bis zu realen Lifecycle-Proben für automatischen Anmeldestart gesperrt. Details und die Grenze zu eigenen Temperaturkurven: [FAN_CONTROL.md](FAN_CONTROL.md).
+Das boolesche `max_fan` ist auf **8E35/F.13**, Netzbetrieb und die frisch bestätigte Tabellen-/Topologie-/Schalteridentität begrenzt. Der vollständige Originalschalter wird dauerhaft protokolliert und kann auch in einem neuen Prozess restauriert werden. Ein Max-Fan-only-Profil benötigt keine NVIDIA-Sitzung. Reine Max-Fan-Profile lassen sich im Custom-Presets-Editor ohne GPU-Taktvorgaben anlegen. Max-Fan bleibt bis zu realen Lifecycle-Proben für automatischen Anmeldestart gesperrt. Details und die Grenze zu eigenen Temperaturkurven: [FAN_CONTROL.md](FAN_CONTROL.md).
 
 ## Transaktion und Wiederherstellung
 

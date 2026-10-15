@@ -368,6 +368,31 @@ unsafe extern "system" fn control_proc(
     _data: usize,
 ) -> LRESULT {
     unsafe {
+        // Preserve native checkbox roles, automatic toggling and keyboard input;
+        // replace only classic painting (including embossed disabled lettering).
+        if matches!(m, WM_PAINT | WM_PRINT | WM_PRINTCLIENT) {
+            let kind = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & BS_TYPEMASK as u32;
+            let mut class = [0u16; 32];
+            let n = GetClassNameW(hwnd, class.as_mut_ptr(), 32);
+            if matches!(kind,k if k==BS_AUTOCHECKBOX as u32||k==BS_CHECKBOX as u32)
+                && String::from_utf16_lossy(&class[..n.max(0) as usize])
+                    .eq_ignore_ascii_case("button")
+            {
+                let mut paint: PAINTSTRUCT = std::mem::zeroed();
+                let dc = if m == WM_PAINT {
+                    BeginPaint(hwnd, &mut paint)
+                } else {
+                    w as HDC
+                };
+                if !dc.is_null() {
+                    checkbox(hwnd, dc);
+                }
+                if m == WM_PAINT {
+                    EndPaint(hwnd, &paint);
+                }
+                return 0;
+            }
+        }
         if m == WM_MOUSEMOVE && GetPropW(hwnd, wide(HOVER).as_ptr()).is_null() {
             SetPropW(hwnd, wide(HOVER).as_ptr(), 1usize as HANDLE);
             let mut t = TRACKMOUSEEVENT {
@@ -470,5 +495,118 @@ unsafe extern "system" fn control_proc(
             }
         }
         result
+    }
+}
+
+unsafe fn checkbox(hwnd: HWND, dc: HDC) {
+    unsafe {
+        let saved = SaveDC(dc);
+        let mut rect: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut rect);
+        let background =
+            SendMessageW(GetParent(hwnd), WM_CTLCOLORBTN, dc as usize, hwnd as isize) as HBRUSH;
+        FillRect(dc, &rect, background);
+        let mut hc: HIGHCONTRASTW = std::mem::zeroed();
+        hc.cbSize = size_of::<HIGHCONTRASTW>() as u32;
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            hc.cbSize,
+            (&mut hc as *mut HIGHCONTRASTW).cast(),
+            0,
+        );
+        let contrast = hc.dwFlags & HCF_HIGHCONTRASTON != 0;
+        let enabled = windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(hwnd) != 0;
+        let checked = SendMessageW(hwnd, BM_GETCHECK, 0, 0) == 1;
+        let accent = if contrast {
+            GetSysColor(COLOR_HIGHLIGHT)
+        } else {
+            ACCENT
+        };
+        let foreground = if contrast {
+            GetSysColor(if enabled {
+                COLOR_WINDOWTEXT
+            } else {
+                COLOR_GRAYTEXT
+            })
+        } else if enabled {
+            FOREGROUND
+        } else {
+            MUTED
+        };
+        let top = (rect.bottom - 16) / 2;
+        let box_rect = RECT {
+            left: 2,
+            top,
+            right: 18,
+            bottom: top + 16,
+        };
+        let fill = CreateSolidBrush(if checked && enabled {
+            accent
+        } else if contrast {
+            GetSysColor(COLOR_WINDOW)
+        } else {
+            FIELD
+        });
+        FillRect(dc, &box_rect, fill);
+        DeleteObject(fill);
+        let border = CreateSolidBrush(
+            if enabled && (GetFocus() == hwnd || !GetPropW(hwnd, wide(HOVER).as_ptr()).is_null()) {
+                accent
+            } else if contrast {
+                foreground
+            } else {
+                BORDER
+            },
+        );
+        FrameRect(dc, &box_rect, border);
+        DeleteObject(border);
+        if checked {
+            let pen = CreatePen(
+                PS_SOLID,
+                2,
+                if enabled {
+                    if contrast {
+                        GetSysColor(COLOR_HIGHLIGHTTEXT)
+                    } else {
+                        ACCENT_INK
+                    }
+                } else {
+                    foreground
+                },
+            );
+            let old = SelectObject(dc, pen);
+            MoveToEx(dc, 5, top + 8, ptr::null_mut());
+            LineTo(dc, 9, top + 12);
+            LineTo(dc, 15, top + 4);
+            SelectObject(dc, old);
+            DeleteObject(pen);
+        }
+        let font = SendMessageW(hwnd, WM_GETFONT, 0, 0);
+        if font != 0 {
+            SelectObject(dc, font as HFONT);
+        }
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextColor(dc, foreground);
+        let mut label = [0u16; 512];
+        let n = GetWindowTextW(hwnd, label.as_mut_ptr(), 512);
+        let mut label_rect = RECT {
+            left: 26,
+            top: 0,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        DrawTextW(
+            dc,
+            label.as_ptr(),
+            n,
+            &mut label_rect,
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+        );
+        if GetFocus() == hwnd {
+            let mut focus = rect;
+            InflateRect(&mut focus, -1, -2);
+            DrawFocusRect(dc, &focus);
+        }
+        RestoreDC(dc, saved);
     }
 }

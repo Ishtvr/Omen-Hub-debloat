@@ -1,7 +1,7 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
-use omen_core::{APP_NAME, CpuHardwareStatus, Profile, Snapshot};
+use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     ptr,
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -17,6 +17,7 @@ use windows_sys::Win32::{
 const UPDATE: u32 = WM_APP + 1;
 const TRAY: u32 = WM_APP + 2;
 const CPU_READER_PID: u32 = WM_APP + 61;
+const MODE_RESULT: u32 = WM_APP + 62;
 const REFRESH: usize = 101;
 const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
@@ -26,7 +27,7 @@ const CPU_SENSORS: usize = 106;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Request {
     Refresh,
     Visibility(bool),
@@ -34,6 +35,7 @@ enum Request {
     Resume,
     Power,
     CpuSensors,
+    ApplyPreset(String),
     Stop,
 }
 
@@ -48,6 +50,11 @@ struct State {
     taskbar_message: u32,
     theme: crate::theme::Theme,
     preview_index: Cell<usize>,
+    custom_profiles: RefCell<Vec<(String, String)>>,
+    selected_custom: RefCell<Option<String>>,
+    mode_result: Arc<Mutex<Option<String>>>,
+    applying_preset: Cell<bool>,
+    mode_status: RefCell<String>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -106,6 +113,7 @@ fn worker(
     rx: mpsc::Receiver<Request>,
     shared: Arc<Mutex<Option<Snapshot>>>,
     initially_visible: bool,
+    mode_result: Arc<Mutex<Option<String>>>,
 ) {
     let mut snapshot = Snapshot {
         inventory: crate::inventory::read(),
@@ -186,6 +194,10 @@ fn worker(
                 Err(_) => break,
             }
         };
+        let reset_hardware = matches!(
+            &request,
+            Some(Request::Resume | Request::Refresh | Request::Power)
+        );
         match request {
             Some(Request::Stop) => break,
             Some(Request::CpuSensors) => {
@@ -201,6 +213,18 @@ fn worker(
                     }
                 }
                 cpu = None;
+            }
+            Some(Request::ApplyPreset(id)) => {
+                let result =
+                    crate::elevation::run(Some(&id), crate::elevation::Action::Apply, || false);
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(if result.is_ok() {
+                    "Preset angewendet.".into()
+                } else {
+                    "Preset konnte nicht angewendet werden. Einstellungen unter Leistungsprofile prüfen.".into()
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
             }
             Some(Request::Visibility(value)) => {
                 visible = value;
@@ -229,13 +253,7 @@ fn worker(
             None => (),
         }
         if let Some(reader) = hardware.as_mut() {
-            if !visible
-                || suspended
-                || matches!(
-                    request,
-                    Some(Request::Resume | Request::Refresh | Request::Power)
-                )
-            {
+            if !visible || suspended || reset_hardware {
                 match reader.pause() {
                     Ok(()) => snapshot.cpu_hardware_status = CpuHardwareStatus::Paused,
                     Err(e) => {
@@ -244,6 +262,70 @@ fn worker(
                     }
                 }
             }
+        }
+    }
+}
+
+unsafe fn reload_modes(hwnd: HWND, state: &State) {
+    unsafe {
+        if state.profile.get().is_null() {
+            return;
+        }
+        let result = omen_platform::profile_store::ProfileStore::user_data().and_then(|s| s.list());
+        if let Ok(profiles) = result {
+            let entries = profiles
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect::<Vec<_>>();
+            SendMessageW(state.profile.get(), CB_RESETCONTENT, 0, 0);
+            for label in [
+                "Quiet (Default)",
+                "Balanced (Default)",
+                "Performance (Default)",
+            ] {
+                SendMessageW(
+                    state.profile.get(),
+                    CB_ADDSTRING,
+                    0,
+                    wide(label).as_ptr() as isize,
+                );
+            }
+            let mut selected = state.preview_index.get().min(2);
+            for (i, (id, name)) in entries.iter().enumerate() {
+                SendMessageW(
+                    state.profile.get(),
+                    CB_ADDSTRING,
+                    0,
+                    wide(name).as_ptr() as isize,
+                );
+                if state.selected_custom.borrow().as_ref() == Some(id) {
+                    selected = i + 3;
+                }
+            }
+            if selected < 3 {
+                *state.selected_custom.borrow_mut() = None;
+            }
+            *state.custom_profiles.borrow_mut() = entries;
+            SendMessageW(state.profile.get(), CB_SETCURSEL, selected, 0);
+            if selected < 3 {
+                *state.mode_status.borrow_mut() = format!(
+                    "{} (Default): noch nicht verfügbar.",
+                    ["Quiet", "Balanced", "Performance"][selected]
+                );
+            }
+            SetWindowTextW(
+                state.preview.get(),
+                wide(&state.mode_status.borrow()).as_ptr(),
+            );
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.profile.get(),
+                (!state.applying_preset.get()) as i32,
+            );
+        } else {
+            SetWindowTextW(
+                GetDlgItem(hwnd, 181),
+                wide("Gespeicherte Presets konnten nicht geladen werden.").as_ptr(),
+            );
         }
     }
 }
@@ -313,18 +395,7 @@ unsafe fn show_dashboard(hwnd: HWND, state: &State) {
             state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
             state.preview.set(GetDlgItem(hwnd, 181));
             state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
-            SendMessageW(
-                state.profile.get(),
-                CB_SETCURSEL,
-                state.preview_index.get(),
-                0,
-            );
-            SendMessageW(
-                hwnd,
-                WM_COMMAND,
-                PROFILE | ((CBN_SELCHANGE as usize) << 16),
-                0,
-            );
+            reload_modes(hwnd, state);
             redraw(state);
         }
         ShowWindow(hwnd, SW_RESTORE);
@@ -389,6 +460,7 @@ unsafe extern "system" fn window_proc(
                 state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
                 state.preview.set(GetDlgItem(hwnd, 181));
                 state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
+                reload_modes(hwnd, state);
                 if [
                     state.details.get(),
                     state.profile.get(),
@@ -445,6 +517,7 @@ unsafe extern "system" fn window_proc(
                     return 0;
                 }
                 if id == REFRESH {
+                    reload_modes(hwnd, state);
                     let _ = state.tx.send(Request::Refresh);
                 }
                 if id == CPU_SENSORS {
@@ -454,9 +527,9 @@ unsafe extern "system" fn window_proc(
                     match std::env::current_exe().and_then(|path| {
                         std::process::Command::new(path)
                             .arg(match id {
-                                CURVES => "curve-ui",
+                                CURVES => "fan-ui",
                                 KEYBOARD => "keyboard-ui",
-                                _ => "gpu-ui",
+                                _ => "presets-ui",
                             })
                             .spawn()
                     }) {
@@ -464,27 +537,48 @@ unsafe extern "system" fn window_proc(
                         Err(error) => {
                             SetWindowTextW(
                                 state.preview.get(),
-                                wide(&format!(
-                                    "GPU-Profile konnten nicht geöffnet werden: {error}"
-                                ))
-                                .as_ptr(),
+                                wide(&format!("Steuerung konnte nicht geöffnet werden: {error}"))
+                                    .as_ptr(),
                             );
                         }
                     }
                 }
-                if id == PROFILE && (wparam >> 16) as u32 == CBN_SELCHANGE {
+                if id == PROFILE
+                    && (wparam >> 16) as u32 == CBN_SELENDOK
+                    && !state.applying_preset.get()
+                {
                     let index = SendMessageW(state.profile.get(), CB_GETCURSEL, 0, 0);
-                    state.preview_index.set(index.max(0) as usize);
-                    let profile = match index {
-                        0 => Profile::Quiet,
-                        2 => Profile::Performance,
-                        3 => Profile::Unleashed,
-                        _ => Profile::Balanced,
-                    };
-                    let label = format!(
-                        "{profile:?}: Vorschau. Noch keine Hardware-Einstellungen angewendet."
-                    );
-                    SetWindowTextW(state.preview.get(), wide(&label).as_ptr());
+                    if index >= 3 {
+                        let selected = state
+                            .custom_profiles
+                            .borrow()
+                            .get(index as usize - 3)
+                            .cloned();
+                        if let Some((id, _)) = selected {
+                            state.applying_preset.set(true);
+                            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                                state.profile.get(),
+                                0,
+                            );
+                            *state.selected_custom.borrow_mut() = Some(id.clone());
+                            SetWindowTextW(
+                                state.preview.get(),
+                                wide("Windows-Freigabe …").as_ptr(),
+                            );
+                            *state.mode_status.borrow_mut() = "Windows-Freigabe …".into();
+                            let _ = state.tx.send(Request::ApplyPreset(id));
+                        }
+                    } else if index >= 0 {
+                        state.preview_index.set(index as usize);
+                        *state.selected_custom.borrow_mut() = None;
+                        let label = ["Quiet", "Balanced", "Performance"][index as usize];
+                        *state.mode_status.borrow_mut() =
+                            format!("{label} (Default): noch nicht verfügbar.");
+                        SetWindowTextW(
+                            state.preview.get(),
+                            wide(&format!("{label} (Default): noch nicht verfügbar.")).as_ptr(),
+                        );
+                    }
                 }
                 if id == SHOW as usize {
                     show_dashboard(hwnd, state);
@@ -496,6 +590,33 @@ unsafe extern "system" fn window_proc(
             }
             UPDATE => {
                 redraw(state);
+                0
+            }
+            MODE_RESULT => {
+                state.applying_preset.set(false);
+                if !state.profile.get().is_null() {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                        state.profile.get(),
+                        1,
+                    );
+                }
+                if let Some(message) = state
+                    .mode_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                {
+                    *state.mode_status.borrow_mut() = message.clone();
+                    if !state.preview.get().is_null() {
+                        SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
+                    }
+                }
+                0
+            }
+            WM_ACTIVATE => {
+                if wparam & 0xffff != WA_INACTIVE as usize {
+                    reload_modes(hwnd, state);
+                }
                 0
             }
             CPU_READER_PID => state
@@ -612,6 +733,11 @@ fn run_window(
         taskbar_message: 0,
         theme: crate::theme::Theme::new(),
         preview_index: Cell::new(1),
+        custom_profiles: RefCell::new(vec![]),
+        selected_custom: RefCell::new(None),
+        mode_result: Arc::new(Mutex::new(None)),
+        applying_preset: Cell::new(false),
+        mode_status: RefCell::new("Balanced (Default): noch nicht verfügbar.".into()),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
@@ -655,7 +781,9 @@ fn run_window(
         }
         let initially_visible = !start_in_tray || !state.tray.get();
         let worker_hwnd = hwnd as usize;
-        let worker = thread::spawn(move || worker(worker_hwnd, rx, shared, initially_visible));
+        let mode_result = state.mode_result.clone();
+        let worker =
+            thread::spawn(move || worker(worker_hwnd, rx, shared, initially_visible, mode_result));
         let power_registration = RegisterPowerSettingNotification(
             hwnd,
             &GUID_ACDC_POWER_SOURCE,

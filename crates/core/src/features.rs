@@ -66,6 +66,12 @@ pub enum Feature {
     WindowsBoostMode,
     WindowsEnergyMode,
     WindowsPowerPlan,
+    WindowsMinimumProcessorPercent,
+    WindowsMaximumProcessorPercent,
+    WindowsProcessorEppPercent,
+    WindowsCoreParkingMinPercent,
+    WindowsCoreParkingMaxPercent,
+    CpuBoostProfile,
     DisplayRefreshRateHz,
     CpuCcdAffinity,
     RadeonAntiLag,
@@ -205,6 +211,14 @@ impl Feature {
             Self::WindowsBoostMode => (Category::Windows, ValueKind::Choice, Unit::None),
             Self::WindowsEnergyMode => (Category::Windows, ValueKind::Choice, Unit::None),
             Self::WindowsPowerPlan => (Category::Windows, ValueKind::Choice, Unit::None),
+            Self::WindowsMinimumProcessorPercent
+            | Self::WindowsMaximumProcessorPercent
+            | Self::WindowsProcessorEppPercent
+            | Self::WindowsCoreParkingMinPercent
+            | Self::WindowsCoreParkingMaxPercent => {
+                (Category::Windows, ValueKind::Integer, Unit::Percent)
+            }
+            Self::CpuBoostProfile => (Category::Cpu, ValueKind::Choice, Unit::None),
             Self::DisplayRefreshRateHz => (Category::Windows, ValueKind::Integer, Unit::Hz),
             Self::CpuCcdAffinity => (Category::Windows, ValueKind::Integer, Unit::None),
             Self::RadeonAntiLag => (Category::Radeon, ValueKind::Boolean, Unit::None),
@@ -302,6 +316,12 @@ impl Feature {
             Self::WindowsBoostMode,
             Self::WindowsEnergyMode,
             Self::WindowsPowerPlan,
+            Self::WindowsMinimumProcessorPercent,
+            Self::WindowsMaximumProcessorPercent,
+            Self::WindowsProcessorEppPercent,
+            Self::WindowsCoreParkingMinPercent,
+            Self::WindowsCoreParkingMaxPercent,
+            Self::CpuBoostProfile,
             Self::DisplayRefreshRateHz,
             Self::CpuCcdAffinity,
             Self::RadeonAntiLag,

@@ -1,6 +1,6 @@
 //! Read-only CPU helper. A same-user, local, PID-bound pipe carries fixed
 //! sample/pause/stop requests; no profiles, register IDs or driver blobs in IPC.
-use crate::gpu_ui::{token, wide};
+use crate::native_ui::{token, wide};
 use omen_core::CpuHardwareSample;
 use omen_platform::CpuHardwareReader;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
 # Native GPU- und Lüfterkurven
 
-Der Kurveneditor ist im Dashboard über **Lüfter & V/F …** und im GPU-Profilfenster über **GPU-V/F- und Lüfterkurven bearbeiten …** erreichbar. Alternativ: `curve-ui [profil-id]`. Er verwendet native Windows-Controls und einen gemeinsamen GDI-Canvas, ohne WebView oder zusätzliche UI-Laufzeit.
+Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet nur die GPU-Kurve des gespeicherten Presets (`gpu-curve-ui [profil-id]`). Der kombinierte CLI-Einstieg `curve-ui [profil-id]` bleibt kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
 
 Standardmäßig öffnet sich die dunkle **Diagrammansicht** mit großer Kurve, Kurvenauswahl, Speichern, Rückgängig/Wiederholen, Hilfe und Zoom. **Profil / Werte …** öffnet Profilauswahl, Namen, Punktauswahl und Zahlenfelder; **Diagrammansicht** wechselt zurück. Enter im Diagramm öffnet diese Ansicht und fokussiert den Y-Wert des ausgewählten Punkts.
 

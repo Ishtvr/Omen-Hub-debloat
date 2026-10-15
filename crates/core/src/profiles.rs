@@ -201,6 +201,10 @@ impl Setting {
                         value,
                         Choice::PowerSaver | Choice::Balanced | Choice::HighPerformance
                     ),
+                    Feature::CpuBoostProfile => matches!(
+                        value,
+                        Choice::Auto | Choice::PowerSaver | Choice::Performance
+                    ),
                     Feature::OmenPerformanceMode => matches!(
                         value,
                         Choice::Quiet | Choice::Balanced | Choice::Performance | Choice::Unleashed

@@ -383,7 +383,6 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let _lease = ControlLease::acquire()?;
             let nonce = args.get(2).map(String::as_str);
             validate_nonce(nonce)?;
-            omen_platform::verify_startup_installation()?;
             let profile = store.load(&args[1])?;
             let mut controller = Controller::for_profile(&profile)?;
             let plan = transaction::plan(&profile, &mut controller, true);
@@ -392,6 +391,11 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             }
             store.startup_eligibility(&args[1])?;
             controller.verify_applied(&store.last_transaction::<RestoreState>()?)?;
+            if args[0] == "profile-ui-startup-enable" {
+                crate::startup_setup::ensure_current_installation()?;
+            } else {
+                omen_platform::verify_startup_installation()?;
+            }
             omen_platform::authorize_startup_profile(&profile)?;
             store.enable_startup(&args[1])?;
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"startup","nonce":nonce,"result":{"Ok":store.startup()?}}))?;

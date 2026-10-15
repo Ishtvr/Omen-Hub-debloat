@@ -46,7 +46,7 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [ ] Beleuchtungssettings für automatisches Anwenden freigeben, erst nach belegtem Lifecycle und Controller-Ownership; derzeit `startup_safe = false`.
 - [ ] Max-Fan bei echten AC-, Fehler-, Standby-/Resume- und Reboot-Übergängen sowie ohne ursprüngliche HP-Controller prüfen; automatischer Profilstart bleibt `startup_safe = false`. Eingeschwungene maximale Nenndrehzahl und Dauerstabilität separat messen.
 - [ ] Eigene Lüfterkurven erst mit qualifizierter Modusübernahme/Restore und koordiniertem thermischem Sicherheitsweg anwenden; Software-Level und zustandswirksamen FanCount-/Heartbeat-Pfad separat qualifizieren.
-- [x] Typisierte Gesamt-Transaktionen mit 85 semantischen Profil-Features, dauerhaften Originalbildern und Sperren bei nicht unterstützten Settings.
+- [x] Typisierte Gesamt-Transaktionen mit 91 semantischen Profil-Features, dauerhaften Originalbildern und Sperren bei nicht unterstützten Settings. Formatbreite bedeutet keine Schreibfreigabe für alle Features.
 - [x] NVIDIA-Core-/VRAM-Offsets auf dem Referenzgerät: GET/SET, exakter Readback, Teilfehler-Rollback und persistierte Recovery.
 - [x] Exakte NVIDIA-Graphics-V/F-ABI mit Ghidra und lesenden Proben belegen; alle 127 Frequenz-Deltas schreiben, zurücklesen und vollständig restaurieren.
 - [x] Kurvenziele von direkten mV-Offsets trennen; komplexe Preflight-Prüfung, einzelne immutable Spannungsanker und vollständige gespeicherte Kurven.
@@ -75,13 +75,14 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Dunkle Design-Tokens und native Control-/Darstellungsgrenzen in DESIGN.md, Sidecar und Surface-Briefs festhalten; Diagrammpalette und feste GPU-Anker behalten ihre eigene Regel.
 - [x] Dashboard-Kindcontrols im Tray freigeben und bei Rückkehr mit der bisherigen HP-Vorschauauswahl neu aufbauen; CPU-Freigabe und neue Energie-Baseline unabhängig im Worker behalten.
 - [x] Sichtbare NVIDIA-Lesesitzung auf einem wegwerfbaren Thread mit ursprünglicher FFI-/Library-Ownership, begrenztem Sample-Warten und gesundem Stop/Cleanup führen; Hersteller-Hang bleibt als gesonderter Störfall offen. CPU-Treiber-Hashprüfung bei identischer Begrenzung/Identität in 8-KiB-Blöcken streamen.
-- [x] Native GPU-Profile speichern, aktuellen Offset-Zustand anzeigen, anwenden und wiederherstellen; die HP-Systemmodi bleiben Vorschau.
+- [x] Custom Presets mit Auswahl/Neu/Name, getrennten GPU-/CPU-Gruppen und Anwenden/Speichern/Löschen; HP-Defaults bleiben ausdrücklich nicht verfügbar. Leistungsmodus listet die drei Defaults und eigene Profile, Dynamic Boost liegt unter GPU.
 - [x] Native V/F-Kurvenbearbeitung mit vorhandenem Spannungsanker, Plateau-Frequenzziel und Erhalt eigener vollständiger Kurven bei Name-/VRAM-Änderungen.
 - [x] Gemeinsames natives Kurven-Widget mit GPU-V/F, CPU-/GPU-Lüfterentwürfen, Maus-/Tastatur-/Zahlenbedienung und eigener Profilspeicherung; Hardwareadapter für eigene Lüfterkurven bleibt offen.
-- [x] **Max-Fan im Profil: Nicht ändern / Ein / Aus** im nativen GPU-Editor: nur Metadaten speichern, Apply bei ungespeicherten Änderungen sperren, vollständige Custom-GPU-Kurve erhalten, ausdrückliches UAC-Apply/Restore; Startup mit Max-Fan sperren.
-- [x] Nativer Vier-Zonen-Beleuchtungseditor mit Hex-/Farbauswahl, Metadaten-Save, UAC-Firmwareprüfung, Gesamtprofil-Apply und profilgebundenem Original-Restore.
+- [x] Optionales Max-Fan-Setting mit Checkbox und Ein/Aus im Custom Preset; Metadaten-Save, Apply-Sperre bei ungespeicherten Änderungen, Erhalt vollständiger GPU-Kurven, ausdrückliches UAC-Apply/Restore und Startup-Sperre bleiben erhalten.
+- [x] Direkte Beleuchtung mit vier anklickbaren Zonen samt Nummernblock, nativem Farbwähler und Ein/Aus; eigener dauerhafter Transaktionsspeicher, voller Readback/Restore und vom Benutzer bestätigte sichtbare Ein/Aus-Wirkung.
+- [x] Exakte CPU-Anzeigeeinheiten, konfliktprüfender Preset-Merge, archiviertes Löschen mit erhaltenem Hardwarejournal, abgelehnter Presetwechsel mit erhaltener Identität sowie feste Startup-Einrichtung nach vollem Preflight.
 - [ ] Lüfterkurven auf Hardware anwenden und MUX samt nötigem Neustartverhalten qualifizieren; Max-Fan-Lifecycle bleibt eine eigene offene Prüfung.
-- [ ] Erweiterte Tastaturbeleuchtung mit validierter Helligkeit, Aus-/Animationszuständen und unabhängigem Power-/Hotkey-Lifecycle.
+- [ ] Erweiterte Tastaturbeleuchtung mit validierter Helligkeit, Animationen und unabhängigem Power-/Hotkey-Lifecycle; Ein/Aus ist auf 8E35/F.13 inzwischen bestätigt.
 - [x] Versionierte Profile, atomarer Speicher außerhalb MSIX-AppData, kontrollierte Migration und geschützter Windows-Anmeldungseinstieg für bestätigte Revisionen.
 - [ ] Tatsächlichen Reboot, Suspend/Resume, AC-Wechsel und langfristige Stabilität mit ausgewähltem Profil messen.
 - [ ] Dienst nur für privilegierte Hardwarefunktionen; UI bleibt im Benutzerkonto.

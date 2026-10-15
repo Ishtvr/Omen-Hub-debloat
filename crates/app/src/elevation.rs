@@ -1,5 +1,5 @@
 //! Shared fixed-command UAC child bridge. No caller-defined executable/command.
-use crate::gpu_ui::{token, wide};
+use crate::native_ui::{token, wide};
 use omen_platform::profile_store::ProfileStore;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::{
@@ -13,7 +13,6 @@ pub enum Action {
     Apply,
     Restore,
     Startup,
-    KeyboardRead,
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -21,7 +20,6 @@ impl Action {
             Self::Apply => "apply",
             Self::Restore => "restore",
             Self::Startup => "startup",
-            Self::KeyboardRead => "keyboard_read",
         }
     }
 }
@@ -46,10 +44,6 @@ pub fn run(
         Action::Startup => format!(
             "profile-ui-startup-enable {} {nonce}",
             id.ok_or("Zuerst ein Profil speichern.")?
-        ),
-        Action::KeyboardRead => format!(
-            "keyboard-ui-read {nonce}{}",
-            id.map_or(String::new(), |id| format!(" {id}"))
         ),
     };
     let file = wide(
