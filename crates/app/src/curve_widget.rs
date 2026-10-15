@@ -470,6 +470,21 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             }
             WM_LBUTTONDBLCLK => {
                 finish_drag(hwnd, true);
+                // Fan curves: a double-click on free chart space adds a point there.
+                let (x, y) = coordinate(l);
+                let target = s.model.borrow().as_ref().and_then(|c| {
+                    let g = geometry(hwnd, c);
+                    (c.kind != Kind::Gpu
+                        && nearest(g, c, x, y).is_none()
+                        && (g.area.left..=g.area.right).contains(&x)
+                        && (g.area.top..=g.area.bottom).contains(&y))
+                    .then(|| g.data(x, y))
+                });
+                if let Some(at) = target {
+                    let result = mutate(hwnd, |c| c.insert_at(at).map(|_| true));
+                    deliver_result(hwnd, result);
+                    return 0;
+                }
                 let _ = mutate(hwnd, |c| {
                     c.clear_selection();
                     Ok(false)

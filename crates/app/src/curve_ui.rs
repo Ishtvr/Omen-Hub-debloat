@@ -295,6 +295,8 @@ struct State {
     theme: crate::theme::Theme,
     draft: bool,
     draft_result: RefCell<Option<Value>>,
+    /// Fan window: one shared curve, saved for both the CPU and the GPU fan.
+    fans_merged: bool,
 }
 fn discard(hwnd: HWND, s: &State) -> bool {
     !s.dirty.get()
@@ -325,6 +327,19 @@ fn selected(s: &State) -> Option<String> {
         .selected
         .as_ref()
         .map(|p| p.id.clone())
+}
+/// The fan window edits one curve; saving writes it for the CPU and the GPU fan.
+fn shared_fan_rows(rows: &[Row; 3]) -> [Row; 3] {
+    let mut rows = rows.clone();
+    rows[2] = Row {
+        curve: rows[1]
+            .curve
+            .as_ref()
+            .and_then(|c| Curve::fan(Kind::GpuFan, c.value().ok().as_ref()).ok()),
+        enabled: rows[1].enabled,
+        source: rows[1].source.clone(),
+    };
+    rows
 }
 fn sync(s: &State) {
     let Some(c) = s.controls.get() else {
@@ -517,10 +532,21 @@ fn dispatch(s: &State, request: Request, status: &str) {
         enabled(s);
     }
 }
-fn show(s: &State, view: View, status: &str) {
+fn show(s: &State, mut view: View, status: &str) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    if s.fans_merged && !view.rows[1].enabled && view.rows[2].enabled {
+        // A profile with only a GPU fan curve opens with that curve as the shared one.
+        if let Some(curve) = view.rows[2]
+            .curve
+            .as_ref()
+            .and_then(|c| Curve::fan(Kind::CpuFan, c.value().ok().as_ref()).ok())
+        {
+            view.rows[1].curve = Some(curve);
+            view.rows[1].enabled = true;
+        }
+    }
     s.rendering.set(true);
     unsafe {
         SendMessageW(c.profiles, CB_RESETCONTENT, 0, 0);
@@ -554,7 +580,11 @@ fn show(s: &State, view: View, status: &str) {
     text(
         c.status,
         if status.is_empty() {
-            "Entwurf · Speichern verändert keine Hardware. Shift: Kurve/Bereich · Strg + Z: Rückgängig · F1: Tastenkürzel"
+            if s.fans_merged {
+                "Eine Kurve für CPU- und GPU-Lüfter · Doppelklick: Punkt hinzufügen · Entf: Punkt entfernen · Speichern ändert keine Hardware."
+            } else {
+                "Entwurf · Speichern verändert keine Hardware. Shift: Kurve/Bereich · Strg + Z: Rückgängig · F1: Tastenkürzel"
+            }
         } else {
             status
         },
@@ -564,9 +594,10 @@ fn layout(hwnd: HWND, s: &State) {
     let Some(c) = s.controls.get() else {
         return;
     };
-    // The GPU draft chart keeps only Abbrechen, Übernehmen, Rückgängig and
-    // Tastenkürzel; redo, zoom and the whole curve remain keyboard/wheel actions.
-    let minimal = s.draft && s.graph_only.get();
+    // The GPU draft and the fan window keep only Speichern/Übernehmen,
+    // Rückgängig and Abbrechen below the chart (the GPU draft also keeps
+    // Tastenkürzel); redo, zoom and the whole curve remain keyboard/wheel actions.
+    let minimal = (s.draft || s.fans_merged) && s.graph_only.get();
     unsafe {
         for (i, handle) in c.modes.iter().enumerate() {
             ShowWindow(
@@ -600,13 +631,14 @@ fn layout(hwnd: HWND, s: &State) {
     if minimal {
         unsafe {
             ShowWindow(c.open, SW_SHOW);
+            ShowWindow(c.help, if s.draft { SW_SHOW } else { SW_HIDE });
             for (handle, b) in [
-                (c.open, [20, 14, 140, 30]),
-                (c.save, [172, 14, 140, 30]),
-                (c.undo, [324, 14, 140, 30]),
-                (c.help, [w - 155, 14, 135, 30]),
-                (c.canvas, [8, 54, w - 16, h - 108]),
-                (c.status, [20, h - 42, w - 40, 32]),
+                (c.canvas, [8, 8, w - 16, h - 104]),
+                (c.status, [20, h - 92, w - 40, 30]),
+                (c.save, [20, h - 54, 150, 36]),
+                (c.undo, [182, h - 54, 150, 36]),
+                (c.open, [344, h - 54, 150, 36]),
+                (c.help, [w - 170, h - 54, 150, 36]),
             ] {
                 MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
             }
@@ -733,7 +765,8 @@ fn layout(hwnd: HWND, s: &State) {
     }
 }
 fn help(hwnd: HWND, draft: bool) {
-    let message = "GPU-Kurve\r\nZiehen: Punkt oder ausgewählten Bereich vertikal verschieben.\r\nShift + Punkt ziehen: geladene Ausgangskurve/Auswahl verschieben.\r\nAlt + Punkt ziehen: aktuellen Entwurf/Auswahl gleichmäßig verschieben.\r\nStrg + Punkt ziehen: Kurve um den gegenüberliegenden Randpunkt neigen.\r\nShift + Ziehen im freien Diagramm: Spannungsbereich auswählen.\r\nShift + Links/Rechts: Auswahl erweitern. Strg + A: alle Punkte.\r\nShift + Enter: Auswahl abflachen; ohne Auswahl Plateau ab dem Punkt.\r\nEsc oder Doppelklick: Auswahl aufheben; Esc beim Ziehen: abbrechen.\r\n\r\nGemeinsame Bedienung\r\nLinks/Rechts: Punkt wählen. Oben/Unten: 1 MHz bzw. 1 %.\r\nStrg + Oben/Unten: 10 Schritte. Enter: Zahlenfeld bearbeiten.\r\nStrg + Z: Rückgängig. Strg + Y / Strg + Shift + Z: Wiederholen.\r\nStrg + D: geladenen Entwurf zurücksetzen. Strg + S: Profil speichern.\r\nMausrad oder +/−: Spannung/Temperatur zoomen. Strg: Y-Achse.\r\nShift + Mausrad: horizontal verschieben. Strg + 0: ganze Kurve.\r\n\r\nLüfter\r\nStrg + Links/Rechts: Temperatur bearbeiten. Shift: größere Schritte.\r\nEinfg/Entf: Punkt hinzufügen/entfernen. Separate CPU-/GPU-Kurven.\r\n\r\nSpeichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.\r\nLüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner sind noch nicht verfügbar.";
+    let message = "GPU-Kurve\r\nZiehen: Punkt oder ausgewählten Bereich vertikal verschieben.\r\nShift + Punkt ziehen: geladene Ausgangskurve/Auswahl verschieben.\r\nAlt + Punkt ziehen: aktuellen Entwurf/Auswahl gleichmäßig verschieben.\r\nStrg + Punkt ziehen: Kurve um den gegenüberliegenden Randpunkt neigen.\r\nShift + Ziehen im freien Diagramm: Spannungsbereich auswählen.\r\nShift + Links/Rechts: Auswahl erweitern. Strg + A: alle Punkte.\r\nShift + Enter: Auswahl abflachen; ohne Auswahl Plateau ab dem Punkt.\r\nEsc oder Doppelklick: Auswahl aufheben; Esc beim Ziehen: abbrechen.\r\n\r\nGemeinsame Bedienung\r\nLinks/Rechts: Punkt wählen. Oben/Unten: 1 MHz bzw. 1 %.\r\nStrg + Oben/Unten: 10 Schritte. Enter: Zahlenfeld bearbeiten.\r\nStrg + Z: Rückgängig. Strg + Y / Strg + Shift + Z: Wiederholen.\r\nStrg + D: geladenen Entwurf zurücksetzen. Strg + S: Profil speichern.\r\nMausrad oder +/−: Spannung/Temperatur zoomen. Strg: Y-Achse.\r\nShift + Mausrad: horizontal verschieben. Strg + 0: ganze Kurve.\r\n\r\nLüfter\r\nStrg + Links/Rechts: Temperatur bearbeiten. Shift: größere Schritte.\r\nDoppelklick auf freie Fläche oder Einfg: Punkt hinzufügen. Entf: Punkt entfernen.
+Eine gemeinsame Kurve gilt für CPU- und GPU-Lüfter.\r\n\r\nSpeichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.\r\nLüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner sind noch nicht verfügbar.";
     let message = if draft {
         message.replace("Strg + S: Profil speichern.", "Strg + S: Kurve in den Preset-Entwurf übernehmen.")
             .replace("Speichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.", "Übernehmen ändert nur den Preset-Entwurf. Erst dort speichern und ausdrücklich anwenden.")
@@ -1127,7 +1160,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                         baseline: Box::new(v.selected.clone()),
                                         binding: Box::new(v.binding.clone()),
                                         name: name.trim().into(),
-                                        rows: Box::new(v.rows.clone()),
+                                        rows: Box::new(if s.fans_merged {
+                                            shared_fan_rows(&v.rows)
+                                        } else {
+                                            v.rows.clone()
+                                        }),
                                     };
                                     drop(view);
                                     dispatch(
@@ -1142,6 +1179,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }
                     OPEN if s.draft => {
                         close(hwnd);
+                    }
+                    OPEN if s.fans_merged => {
+                        if discard(hwnd, s) {
+                            close(hwnd);
+                        }
                     }
                     OPEN if !s.dirty.get() => {
                         if let Some(id) = selected(s) {
@@ -1294,7 +1336,7 @@ fn run_editor(
                 .map_or(if fans == Some(true) { 1 } else { 0 }, |p| p.mode),
         ),
         allowed: match fans {
-            Some(true) => [false, true, true],
+            Some(true) => [false, true, false],
             Some(false) => [true, false, false],
             None => [true; 3],
         },
@@ -1306,6 +1348,7 @@ fn run_editor(
         surface: Cell::new(unsafe { CreateSolidBrush(plot::SURFACE) }),
         draft: draft.is_some(),
         draft_result: RefCell::new(None),
+        fans_merged: fans == Some(true) && draft.is_none(),
     });
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
@@ -1325,7 +1368,7 @@ fn run_editor(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
             wide(match fans {
-                Some(true) => "Omen Hub++ – Lüfterkurve",
+                Some(true) => "Omen Hub++ – Lüfterkurve (CPU + GPU)",
                 Some(false) => "Omen Hub++ – GPU-Leistungskurve",
                 None => "Omen Hub++ – GPU- und Lüfterkurven",
             })
@@ -1333,8 +1376,9 @@ fn run_editor(
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            preview.as_ref().map_or(1380, |p| p.width),
-            preview.as_ref().map_or(940, |p| p.height),
+            // Fits a 1152-px-high work area at 125 % with the buttons below the chart.
+            preview.as_ref().map_or(1240, |p| p.width),
+            preview.as_ref().map_or(780, |p| p.height),
             draft.as_ref().map_or(ptr::null_mut(), |d| d.0),
             ptr::null_mut(),
             instance,
@@ -1378,6 +1422,11 @@ fn run_editor(
             }
             None
         } else {
+            if state.fans_merged {
+                if let Some(c) = state.controls.get() {
+                    text(c.open, "Abbrechen");
+                }
+            }
             let thread = thread::spawn(move || worker(handle, requests, updates));
             dispatch(&state, Request::Load(id), "Kurven werden gelesen …");
             Some(thread)

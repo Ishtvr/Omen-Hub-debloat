@@ -21,6 +21,8 @@ struct Snapshot {
     selection: Option<(usize, usize)>,
 }
 const HISTORY_LIMIT: usize = 64;
+/// Fan curves accept up to one point per 2 °C over 0…110 °C.
+pub const MAX_FAN_POINTS: usize = 56;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -254,8 +256,10 @@ impl Curve {
         if self.kind == Kind::Gpu {
             return Err("GPU-Spannungsanker sind durch den Treiber festgelegt.".into());
         }
-        if self.points.len() >= 32 {
-            return Err("Höchstens 32 Lüfterpunkte sind möglich.".into());
+        if self.points.len() >= MAX_FAN_POINTS {
+            return Err(format!(
+                "Höchstens {MAX_FAN_POINTS} Lüfterpunkte sind möglich."
+            ));
         }
         let a = *self
             .points
@@ -283,6 +287,40 @@ impl Curve {
         points.insert(selected, point);
         self.replace(points)?;
         self.select(selected, false);
+        Ok(())
+    }
+    /// Adds a fan point at a chart position. The duty is clamped between its
+    /// neighbours so the curve stays non-decreasing.
+    pub fn insert_at(&mut self, at: Point) -> Result<(), String> {
+        if self.kind == Kind::Gpu {
+            return Err("GPU-Spannungsanker sind durch den Treiber festgelegt.".into());
+        }
+        if self.points.len() >= MAX_FAN_POINTS {
+            return Err(format!(
+                "Höchstens {MAX_FAN_POINTS} Lüfterpunkte sind möglich."
+            ));
+        }
+        let x = at.x.clamp(0, 110);
+        if self.points.iter().any(|p| p.x == x) {
+            return Err("Bei dieser Temperatur gibt es schon einen Punkt.".into());
+        }
+        let index = self
+            .points
+            .iter()
+            .position(|p| p.x > x)
+            .unwrap_or(self.points.len());
+        let low = index.checked_sub(1).map_or(0, |i| self.points[i].y);
+        let high = self.points.get(index).map_or(100, |p| p.y);
+        let mut points = self.points.clone();
+        points.insert(
+            index,
+            Point {
+                x,
+                y: at.y.clamp(low, high),
+            },
+        );
+        self.replace(points)?;
+        self.select(index, false);
         Ok(())
     }
     pub fn remove(&mut self) -> Result<(), String> {
@@ -745,5 +783,24 @@ mod tests {
             curve.remove().unwrap();
         }
         assert!(curve.remove().is_err());
+    }
+    #[test]
+    fn fan_points_insert_at_chart_position_and_stay_monotonic() {
+        let mut curve = Curve::fan(Kind::CpuFan, None).unwrap();
+        curve.insert_at(Point { x: 40, y: 99 }).unwrap();
+        // Between 30 °C/30 % and 55 °C/45 %: duty clamps to the right neighbour.
+        assert_eq!(curve.points[1], Point { x: 40, y: 45 });
+        assert_eq!(curve.selected, 1);
+        assert!(curve.insert_at(Point { x: 40, y: 40 }).is_err());
+        curve.insert_at(Point { x: 100, y: 0 }).unwrap();
+        assert_eq!(*curve.points.last().unwrap(), Point { x: 100, y: 100 });
+        while curve.points.len() < MAX_FAN_POINTS {
+            let x = (0..=110)
+                .find(|x| curve.points.iter().all(|p| p.x != *x))
+                .unwrap();
+            curve.insert_at(Point { x, y: 50 }).unwrap();
+        }
+        assert!(curve.insert_at(Point { x: 1, y: 50 }).is_err());
+        assert!(curve.value().is_ok());
     }
 }
