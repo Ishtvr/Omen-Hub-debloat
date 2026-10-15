@@ -38,6 +38,15 @@ Programmierbare NVIDIA-Steuerwerte, HP-GPU-Leistungsstatus sowie das produktive 
 
 Der Benutzer bestätigte am **15. Oktober**, nach Abschluss dieser Proben, die aktuell im ursprünglichen OMEN Gaming Hub gewählte Lüftereinstellung **„Automatisch“**. Diese Angabe ist kein zeitgleicher Firmware-Readback zum GET um 08:58 oder zu den Schreibproben. Sie ergänzt den Benutzerkontext, belegt aber weder ein eigenes Automatik-Statusfeld noch die Gleichsetzung „Max-Fan Aus = Automatisch“. Für eine solche Zuordnung fehlen weiterhin vollständiger Modus-Readback und Restore; aufgrund dieser Antwort wurde keine Hardwareeinstellung verändert.
 
+## Lüfterdienst, Kurve und Schnellschalter (Stand 16. Oktober 2026)
+
+Seit 16. Oktober übernimmt ein eigener Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`, geschützte Kopie unter `Program Files\OmenHubPlusPlus`, einmalige Windows-Freigabe) die Softwareregelung: Heartbeat `0x10` alle 20 s, Level `0x2E` alle 2 s, CPU-Tctl, GPU- und IR-Temperatur, Notfall-Vollkühlung und Glättung. Solange der Original-Hub läuft, wartet der Dienst; ohne Kurve sendet er nichts und das BIOS regelt.
+
+- Das Lüfterfenster speichert die gemeinsame CPU-/GPU-Kurve nur noch als `active-fan-curve.json`, nicht mehr als Leistungsprofil.
+- Der Schnellschalter auf der Startseite (rechts neben **Steuerung**) schreibt `fan-mode.json`: **Auto** folgt der gespeicherten Kurve, **Max** setzt beide Lüfter auf Höchststufe. Beim ersten Umschalten ohne installierten Dienst fragt Windows einmal nach der Freigabe.
+
+Der folgende Abschnitt beschreibt den Stand vor dem Lüfterdienst.
+
 ## Warum eigene Lüfterkurven noch nicht angewendet werden
 
 Der untersuchte Performance-/BIOS-Lüftermodus-SET **0x1A** koppelt Leistungsmodus und Lüfterzuständigkeit in einem gemeinsamen Payload. Das vollständige aktuelle Modusbild und seine unabhängige Rücklese-/Restore-Semantik sind noch nicht qualifiziert. Der Software-Level-SET **0x2E** wurde weder implementiert noch ausgeführt. Der als Lüfteranzahl benannte Aufruf **0x10** hat im Herstellerablauf Heartbeat-/Zustandswirkung und wurde ebenfalls nicht ausgeführt.

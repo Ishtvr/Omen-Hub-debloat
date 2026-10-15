@@ -107,6 +107,7 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
             ),
             (146, "", th.small, true, true),
             (150, t("dash.controls"), th.heading, false, false),
+            (151, t("fan.quick.label"), th.body, false, true),
             (160, t("dash.system"), th.heading, false, false),
             (161, t("dash.mode"), th.body, false, false),
             (181, t("mode.bios_unreadable"), th.small, false, true),
@@ -149,6 +150,9 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
             false,
             false,
         );
+        for (id, label) in [(106, "fan.quick.auto"), (107, "fan.quick.max")] {
+            control(id, "BUTTON", t(label), WS_TABSTOP, th.body, false, false);
+        }
         let combo = control(
             102,
             "COMBOBOX",
@@ -220,7 +224,11 @@ pub unsafe fn layout(hwnd: HWND) {
             (144, [right + 24, 290, content, 24]),
             (145, [right + 24, 318, content, 22]),
             (146, [right + 24, 344, content, 26]),
-            (150, [28, PANEL_BOTTOM + 24, width - 56, 30]),
+            (150, [28, PANEL_BOTTOM + 24, width - 400, 30]),
+            // Fan quick switch, right-aligned on the Controls heading line.
+            (151, [width - 262, PANEL_BOTTOM + 28, 60, 24]),
+            (106, [width - 196, PANEL_BOTTOM + 20, 82, 34]),
+            (107, [width - 110, PANEL_BOTTOM + 20, 82, 34]),
         ]);
         let action = (width - 56 - 32) / 3;
         for (i, id) in [103, 104, 105].iter().enumerate() {

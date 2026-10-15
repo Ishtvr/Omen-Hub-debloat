@@ -132,6 +132,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let status = ProfileStore::user_data()?;
             return omen_platform::run_fan_service(
                 &omen_platform::inventory(),
+                || store.fan_max(),
                 || store.active_fan_curve(),
                 |s| {
                     let _ = status.save_fan_status(s);

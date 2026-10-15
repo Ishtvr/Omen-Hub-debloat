@@ -83,10 +83,12 @@ fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
     .map_err(String::from)
 }
 
-/// Runs until the process ends. `load` returns the active shared curve
-/// (None: leave the BIOS in charge); `report` persists each status.
+/// Runs until the process ends. `max` is the dashboard quick switch (both
+/// fans at maximum); otherwise `load` returns the active shared curve (None:
+/// leave the BIOS in charge). `report` persists each status.
 pub fn run(
     inventory: &Inventory,
+    mut max: impl FnMut() -> bool,
     mut load: impl FnMut() -> Result<Option<Vec<FanPoint>>, String>,
     mut report: impl FnMut(&FanServiceStatus),
 ) -> Result<(), String> {
@@ -129,8 +131,10 @@ pub fn run(
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
+        let max = max();
         let curve = match load().and_then(|p| p.map(|p| curve_of(&p)).transpose()) {
-            Ok(Some(curve)) => curve,
+            Ok(curve) if max => curve,
+            Ok(Some(curve)) => Some(curve),
             Ok(None) => {
                 last_heartbeat = None;
                 report(&idle(
@@ -140,6 +144,7 @@ pub fn run(
                 std::thread::sleep(Duration::from_secs(5));
                 continue;
             }
+            Err(_) if max => None,
             Err(e) => {
                 last_heartbeat = None;
                 report(&idle(
@@ -176,12 +181,9 @@ pub fn run(
             ir_c,
             protection,
         );
-        let target = |t: Option<i32>| {
-            if full {
-                fan::MAX_LEVEL
-            } else {
-                fan::level(curve.target(t))
-            }
+        let target = |t: Option<i32>| match &curve {
+            Some(curve) if !full => fan::level(curve.target(t)),
+            _ => fan::MAX_LEVEL,
         };
         let cpu_t = cpu_c.map(|t| t.round() as i32);
         // The GPU fan follows the hotter of GPU and CPU when the GPU sleeps.
@@ -192,7 +194,13 @@ pub fn run(
             .map_err(|e| e.to_string())?;
         report(&FanServiceStatus {
             schema: 1,
-            state: if full { "full_cooling" } else { "curve" },
+            state: if full {
+                "full_cooling"
+            } else if max {
+                "max"
+            } else {
+                "curve"
+            },
             detail: String::new(),
             cpu_c,
             gpu_c,

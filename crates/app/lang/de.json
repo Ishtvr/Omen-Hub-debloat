@@ -397,5 +397,12 @@
   "windows.err.percent": "Prozentwert außerhalb 0…100",
   "fan.status.hub_running": "Original OMEN Hub läuft; er steuert die Lüfter.",
   "fan.status.no_curve": "Keine aktive Lüfterkurve; BIOS regelt.",
-  "fan.status.invalid_curve": "Lüfterkurve ungültig: {0}"
+  "fan.status.invalid_curve": "Lüfterkurve ungültig: {0}",
+  "fan.quick.label": "Lüfter",
+  "fan.quick.auto": "Auto",
+  "fan.quick.max": "Max",
+  "fan.quick.max_active": "Lüfter laufen mit Maximum.",
+  "fan.quick.auto_active": "Lüfter folgen der gespeicherten Kurve.",
+  "fan.quick.auto_bios": "Keine Lüfterkurve gespeichert; das BIOS regelt die Lüfter.",
+  "fan.quick.failed": "Lüfterschalter nicht übernommen: {0}"
 }

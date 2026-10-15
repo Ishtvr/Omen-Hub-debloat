@@ -140,8 +140,53 @@ fn load(id: Option<&str>) -> Result<View, String> {
         rows,
     })
 }
+/// The fan window edits only the shared fan curve the fan service follows;
+/// it is not stored as a performance profile.
+fn load_fans() -> Result<View, String> {
+    let store = ProfileStore::user_data()?;
+    let binding = Controller::new(false, None)?.context()?.binding;
+    let saved = store.active_fan_curve()?.map(Value::FanCurve);
+    let row = |kind: Kind| match Curve::fan(kind, saved.as_ref()) {
+        Ok(curve) => Row {
+            curve: Some(curve),
+            enabled: true,
+            source: tf(
+                "curve.fan_source",
+                &[
+                    &t(&format!("curve.kind.{kind:?}")),
+                    &t(if saved.is_some() {
+                        "curve.saved_curve"
+                    } else {
+                        "curve.template"
+                    }),
+                ],
+            ),
+        },
+        Err(error) => Row {
+            curve: None,
+            enabled: false,
+            source: error,
+        },
+    };
+    Ok(View {
+        profiles: vec![],
+        selected: None,
+        binding,
+        rows: [
+            Row {
+                curve: None,
+                enabled: false,
+                source: String::new(),
+            },
+            row(Kind::CpuFan),
+            row(Kind::GpuFan),
+        ],
+    })
+}
 enum Request {
     Load(Option<String>),
+    LoadFans,
+    SaveFans(Vec<omen_core::profiles::FanPoint>),
     Save {
         baseline: Box<Option<PerformanceProfile>>,
         binding: Box<DeviceBinding>,
@@ -162,6 +207,17 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
         let result = (|| -> Result<(View, String), String> {
             match request {
                 Request::Load(id) => Ok((load(id.as_deref())?, String::new())),
+                Request::LoadFans => Ok((load_fans()?, String::new())),
+                Request::SaveFans(points) => {
+                    let store = ProfileStore::user_data()?;
+                    store.save_active_fan_curve(&points)?;
+                    if !omen_platform::fan_service_installed() {
+                        crate::elevation::run(None, crate::elevation::Action::FanService, || {
+                            false
+                        })?;
+                    }
+                    Ok((load_fans()?, t("curve.fan_saved").into()))
+                }
                 Request::Save {
                     baseline,
                     binding,
@@ -1087,6 +1143,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         dispatch(s, Request::Load(id), t("curve.profile_loading"));
                     }
                     NEW | RELOAD if !discard(hwnd, s) => {}
+                    NEW | RELOAD if s.fans_merged => {
+                        dispatch(s, Request::LoadFans, t("curve.reloading"))
+                    }
                     NEW => dispatch(s, Request::Load(None), t("curve.templates_loading")),
                     RELOAD => dispatch(s, Request::Load(selected(s)), t("curve.reloading")),
                     GPU | CPU_FAN | GPU_FAN => {
@@ -1188,6 +1247,22 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                     close(hwnd);
                                 }
                                 Err(error) => text(c.status, &error),
+                            }
+                            return 0;
+                        }
+                        if s.fans_merged {
+                            let value = s.view.borrow().as_ref().and_then(|v| {
+                                shared_fan_rows(&v.rows)[1]
+                                    .curve
+                                    .as_ref()
+                                    .map(|c| c.value())
+                            });
+                            match value {
+                                Some(Ok(Value::FanCurve(points))) => {
+                                    dispatch(s, Request::SaveFans(points), t("curve.saving"))
+                                }
+                                Some(Err(error)) => report(hwnd, s, &error),
+                                _ => report(hwnd, s, t("curve.unavailable")),
                             }
                             return 0;
                         }
@@ -1455,7 +1530,12 @@ fn run_editor(
                 }
             }
             let thread = thread::spawn(move || worker(handle, requests, updates));
-            dispatch(&state, Request::Load(id), t("curve.reading"));
+            let request = if state.fans_merged {
+                Request::LoadFans
+            } else {
+                Request::Load(id)
+            };
+            dispatch(&state, request, t("curve.reading"));
             Some(thread)
         };
         ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });

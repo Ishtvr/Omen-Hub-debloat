@@ -389,6 +389,19 @@ impl ProfileStore {
         }
         Ok(())
     }
+    /// Dashboard quick switch: `true` runs both fans at maximum, `false`
+    /// follows the saved curve (or the BIOS without one).
+    pub fn save_fan_max(&self, max: bool) -> Result<(), String> {
+        atomic_json(
+            &self.root.join("fan-mode.json"),
+            &serde_json::json!({"schema": 1, "mode": if max { "max" } else { "auto" }}),
+        )
+    }
+    /// Absent or unreadable means Auto: the saved curve stays in charge.
+    pub fn fan_max(&self) -> bool {
+        read_json::<serde_json::Value>(&self.root.join("fan-mode.json"))
+            .is_ok_and(|v| v["schema"] == 1 && v["mode"] == "max")
+    }
     pub fn save_fan_status<T: Serialize>(&self, value: &T) -> Result<(), String> {
         atomic_json(&self.root.join("fan-service-status.json"), value)
     }

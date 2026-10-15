@@ -24,6 +24,9 @@ const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
+/// Fan quick switch on the Controls line: saved curve or both fans at maximum.
+const FAN_AUTO: usize = 106;
+const FAN_MAX: usize = 107;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
 /// Built-in modes (language keys) ahead of saved presets. Only Balanced and Unleashed have a
@@ -47,6 +50,7 @@ enum Request {
     Power,
     ApplyPreset(String),
     ApplyMode(HpMode),
+    FanMode(bool),
     Stop,
 }
 
@@ -65,6 +69,7 @@ struct State {
     mode_result: Arc<Mutex<Option<String>>>,
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
+    fan_max: Cell<bool>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -235,6 +240,31 @@ fn worker(
                     t("preset.applied").into()
                 } else {
                     t("mode.preset_failed").into()
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
+            Some(Request::FanMode(max)) => {
+                // The switch is a user file the elevated fan service reads; only
+                // its first installation needs Windows approval.
+                let result =
+                    omen_platform::profile_store::ProfileStore::user_data().and_then(|store| {
+                        store.save_fan_max(max)?;
+                        if !omen_platform::fan_service_installed() {
+                            crate::elevation::run(
+                                None,
+                                crate::elevation::Action::FanService,
+                                || false,
+                            )?;
+                        }
+                        Ok(store.active_fan_curve().ok().flatten().is_some())
+                    });
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) if max => t("fan.quick.max_active").into(),
+                    Ok(true) => t("fan.quick.auto_active").into(),
+                    Ok(false) => t("fan.quick.auto_bios").into(),
+                    Err(error) => tf("fan.quick.failed", &[&error]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -494,9 +524,17 @@ unsafe extern "system" fn window_proc(
             WM_DRAWITEM => {
                 let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
                 if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
-                    state
-                        .theme
-                        .button(item, state.theme.body, item.CtlID == GPU_PROFILES as u32);
+                    state.theme.button(
+                        item,
+                        state.theme.body,
+                        item.CtlID == GPU_PROFILES as u32
+                            || item.CtlID
+                                == if state.fan_max.get() {
+                                    FAN_MAX
+                                } else {
+                                    FAN_AUTO
+                                } as u32,
+                    );
                     1
                 } else {
                     DefWindowProcW(hwnd, message, wparam, lparam)
@@ -517,6 +555,15 @@ unsafe extern "system" fn window_proc(
                 if id == REFRESH {
                     reload_modes(hwnd, state);
                     let _ = state.tx.send(Request::Refresh);
+                }
+                if (id == FAN_AUTO || id == FAN_MAX) && (wparam >> 16) as u32 == BN_CLICKED {
+                    let max = id == FAN_MAX;
+                    if state.fan_max.replace(max) != max {
+                        for button in [FAN_AUTO, FAN_MAX] {
+                            InvalidateRect(GetDlgItem(hwnd, button as i32), ptr::null(), 0);
+                        }
+                    }
+                    let _ = state.tx.send(Request::FanMode(max));
                 }
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
@@ -741,6 +788,9 @@ fn run_window(
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
         mode_status: RefCell::new(t("mode.bios_unreadable").into()),
+        fan_max: Cell::new(
+            omen_platform::profile_store::ProfileStore::user_data().is_ok_and(|s| s.fan_max()),
+        ),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
