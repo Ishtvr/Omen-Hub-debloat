@@ -332,7 +332,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         s.font,
                         GetFocus() == hwnd,
                         s.viewport.get(),
-                        s.hover.get(),
+                        readout(s),
                     );
                     BitBlt(dc, 0, 0, rect.right, rect.bottom, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, old);
@@ -344,7 +344,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         s.font,
                         GetFocus() == hwnd,
                         s.viewport.get(),
-                        s.hover.get(),
+                        readout(s),
                     );
                 }
                 if !bitmap.is_null() {
@@ -684,6 +684,15 @@ unsafe fn width(dc: HDC, value: &str) -> i32 {
     }
     size.cx
 }
+/// The readout box follows the dragged point (with its change since the
+/// mouse went down) or, otherwise, the hovered point.
+fn readout(s: &State) -> Option<(usize, Option<i32>)> {
+    if let Some(Drag::Point { start, .. }) = s.drag.borrow().as_ref() {
+        let selected = s.model.borrow().as_ref()?.selected;
+        return Some((selected, start.get(selected).map(|p| p.y)));
+    }
+    s.hover.get().map(|i| (i, None))
+}
 unsafe fn draw(
     dc: HDC,
     rect: RECT,
@@ -691,7 +700,7 @@ unsafe fn draw(
     font: HFONT,
     focus: bool,
     view: Option<Viewport>,
-    hover: Option<usize>,
+    readout: Option<(usize, Option<i32>)>,
 ) {
     // SAFETY: A living window or owned memory DC; every selected object is restored.
     unsafe {
@@ -799,11 +808,15 @@ unsafe fn draw(
                 SelectObject(dc, old);
                 DeleteObject(pen);
             }
-            if let Some(i) = hover.filter(|i| *i < curve.points.len()) {
+            if let Some((i, from)) = readout.filter(|(i, _)| *i < curve.points.len()) {
                 let point = curve.points[i];
                 let pos = g.screen(point);
                 let (x, y) = curve.kind.units();
-                let value = format!("{} {} · {} {}", point.x, x, point.y, y);
+                let mut value = format!("{} {} · {} {}", point.x, x, point.y, y);
+                // While dragging, show how far the point moved since mouse-down.
+                if let Some(from) = from {
+                    value.push_str(&format!(" · {:+} {}", point.y - from, y));
+                }
                 let size = width(dc, &value) + 20;
                 let left = (pos.x + 14).clamp(g.area.left, (g.area.right - size).max(g.area.left));
                 let top = (pos.y - 30).clamp(g.area.top, (g.area.bottom - 24).max(g.area.top));
