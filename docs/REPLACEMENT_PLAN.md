@@ -2,7 +2,7 @@
 
 Der Benutzer hat am 13. Oktober 2026 klargestellt: **Omen Hub++ soll den originalen Hub vollständig ersetzen.** Die Zielengine soll keine laufenden HP-Omen-Controller oder deren proprietäre RPC-Wrapper benötigen. Windows-, Firmware- und reguläre Gerätetreiber bleiben technische Plattformgrundlagen; ihre Entfernung ist kein Nachweis für einen vollständigen Ersatz.
 
-Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen vollständigen Ersatzbetrieb. NVIDIA-Takt-/Kurvensteuerung und begrenzte Vier-Zonen-Farben-/Modussteuerung sind am Referenzgerät mit Readback/Restore validiert. Herstellerdienste wurden nicht gestoppt und keine Treiber installiert. Der vorhandene Windows-/Firmwarepfad wurde mit weiterhin laufenden HP-Controllern geprüft.
+Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen vollständigen Ersatzbetrieb. NVIDIA-Takt-/Kurvensteuerung, begrenzte Vier-Zonen-Farben-/Modussteuerung und der manuelle Max-Fan-Override sind am Referenzgerät mit Readback/Restore und persistierter Recovery validiert. Herstellerdienste wurden nicht gestoppt und keine Treiber installiert. Der vorhandene Windows-/Firmwarepfad wurde mit weiterhin laufenden HP-Controllern geprüft.
 
 | Bereich | Eigener Weg | Stand / fehlender Nachweis |
 | --- | --- | --- |
@@ -14,13 +14,16 @@ Dieser Plan trennt den eigenen Diagnose-/Steuertransport vom noch unbewiesenen v
 | Tastatureffekte / RGB pro Taste | Fähigkeitsabhängig WMI oder eigener HID-Adapter | Get-/Set-/Persistenzunterschiede gefunden; kein vollständiger Restore-Vertrag für alle Varianten |
 | HP-Leistungsprofile / GPU-Leistungsrahmen | Modellbezogene BIOS-WMI-Engine | Statische Befunde und begrenzter Statusreader; keine Write-Freigabe |
 | Keep-alive / AC / Standby | Ein eigener Controller mit geprüftem Lifecycle | Reine Policy und Windows-Ereignisse vorhanden; Firmware-Heartbeat noch nicht ausgeführt/validiert |
-| Lüfter / Max-Fan | Modellbezogener EC-/WMI-Adapter | Kurvenpolicy vorhanden; Transport/Skalierung/Restore offen |
+| Lüfterzustand / Max-Fan | Eigener direkter BIOS-WMI-Adapter | GETs, manueller Override und vollständiger Readback/Original-Restore mit persistierter Recovery auf 8E35/F.13 qualifiziert; Netzbetrieb erforderlich, Startup gesperrt; maximale Nenndrehzahl und unabhängiger Lifecycle offen |
+| Eigene Lüfterkurven / BIOS-Automatik | Koordinierter modellbezogener Thermikcontroller | Kurvenentwürfe und Policy vorhanden; Leistungs-/Lüfterzuständigkeit, Modus-Readback/Restore, zusätzliche thermische Sensoranforderung und Grenzwerte noch nicht qualifiziert |
 | MUX / Displaymodi / Tastaturmakros | Eigene validierte Geräteadapter | Weitere Analyse erforderlich; bisher keine Steuerung |
-| Profilpersistenz / Tray / Autostart | Eigene lokale Konfiguration und Benutzer-App | Versionierte Profile, dauerhaftes Originaljournal und geschützter fester Anmeldungseinstieg implementiert; Task mit GPU-Profil geprüft, kein echter Reboot; Beleuchtungssettings nicht für Startup freigegeben |
+| Profilpersistenz / Tray / Autostart | Eigene lokale Konfiguration und Benutzer-App | Versionierte Profile, dauerhaftes Originaljournal und geschützter fester Anmeldungseinstieg implementiert; Task mit GPU-Profil geprüft, kein echter Reboot; Beleuchtungssettings und Max-Fan nicht für Startup freigegeben |
 
 ## Welche heutigen Aufgaben übernommen werden müssen
 
 Die HP-Hintergrundmodule enthalten mehr als die sichtbaren Schalter. Beleuchtung wird nach Profilwechseln oder Entsperren erneut angewendet; animierte Varianten reagieren auch auf Resume, Displayzustand und Hotkeys. Leistungskontrolle enthält Plattformbedingungen und Heartbeat-Verhalten. CPU/GPU-Verteilung und Thermik sind Teil dieser Bedingungen. Ein vollständiger Ersatz braucht diese belegten Abläufe in einer eigenen Engine, zusätzlich zu den einzelnen Gerätebefehlen.
+
+Die Hersteller-Softwarekurven koordinieren CPU-, GPU- und zusätzliche IR-/Oberflächensensoranforderungen, Glättung/Hysterese und modellabhängige Grenzen. Eigene CPU-/GPU-Entwürfe ersetzen diesen Sicherheitsweg noch nicht. Der qualifizierte Max-Fan-Schalter übernimmt weder diese Regelung noch den gekoppelten Leistungs-/BIOS-Lüftermodus; sein Aus-Zustand gibt nur den Override frei. Details: [FAN_CONTROL.md](FAN_CONTROL.md).
 
 Die relevante eigene Architektur besteht aus einem serialisierten Controller, einem Zustandsmodell und typisierten Plattformadaptern. Vor einem Apply werden Modell/BIOS, Capabilities, Versorgung und Originalzustand geprüft. Nach einem Apply wird tatsächlich gelesen; bei Teilfehlern wird der belegte Ausgangszustand wiederhergestellt. Resume und Geräteverlust invalidieren alte Handles und Zustandsannahmen. Normale Getter und ein als Heartbeat verwendeter, möglicherweise zustandswirksamer Aufruf werden getrennt behandelt.
 
@@ -37,5 +40,7 @@ Für privilegierte Funktionen kann ein eigener kleiner Controller im Dienst oder
 ## Nachweis für den späteren Umstieg
 
 Capabilities und klassischer Tastaturzustand sind auf 8E35/F.13 über den eigenen direkten Windows-WMI-Adapter gelesen. Farb-/Modustransaktionen mit vollständigem Rücklesen und Wiederherstellung, auch aus einem persistierten Journal in einem neuen Prozess, sind inzwischen gemessen. Es wurden keine HP-RPC-/SDK-Wrapper geladen; vorhandene HP-Dienste wurden jedoch nicht gestoppt. Entsperren, Helligkeitstasten und Power-Übergänge brauchen eigene Prüfungen. Erst ein separat geplanter Umstieg zeigt den Betrieb ohne ursprüngliche HP-Omen-Writer. Ein erfolgreich gesendeter Befehl oder eine geschlossene Herstelleroberfläche genügt dafür nicht.
+
+Seit 15. Oktober sind auch die festen Lüfter-GETs sowie manuelles Max-Fan-Ein, vollständiger Schalter-Readback und Original-Restore direkt über BIOS-WMI belegt. Ein neuer Prozess verwarf ein manipuliertes Tabellenbild und restaurierte anschließend aus dem dauerhaften Journal. Die kurzen Proben zeigen tatsächliches Hochlaufen, keine eingeschwungene maximale Nenndrehzahl oder Langzeitstabilität. HP-Controller blieben aktiv; Reboot, Standby/Resume, AC-Übergänge und Ersatzbetrieb ohne diese Writer bleiben für diesen Pfad offen. UI-Speicherung und UI-Smoke sind getrennte Metadatenprüfungen und kein weiterer Hardwarebeweis.
 
 Auswahl und Unterstützung anderer Boards bleiben explizit. Der vorhandene Hub-Code und ein generischer Modulname ersetzen keine Modellfreigabe. Details zum ersten Beleuchtungspfad stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md).

@@ -14,12 +14,17 @@ use windows::{
 use wmi::{IWbemClassWrapper, Variant, WMIConnection, WMIError, WMIResult};
 
 // Only fixed GET contracts observed in the installed manufacturer modules.
-enum Read {
+pub(super) enum Read {
     GpuStatus,
     SystemDesign,
     KeyboardCapability,
     KeyboardColors,
     KeyboardBrightness,
+    MaxFan,
+    FanSpeeds,
+    FanTypes,
+    FanTable,
+    SurfaceSensor,
 }
 
 struct ReadContract {
@@ -38,6 +43,11 @@ impl Read {
             Self::KeyboardCapability => (0x20008, 0x2B, &[], 4, "hpqBIOSInt4"),
             Self::KeyboardColors => (0x20009, 2, &[0], 128, "hpqBIOSInt128"),
             Self::KeyboardBrightness => (0x20009, 4, &[0], 128, "hpqBIOSInt128"),
+            Self::MaxFan => (0x20008, 0x26, &[0; 4], 4, "hpqBIOSInt4"),
+            Self::FanSpeeds => (0x20008, 0x2d, &[0; 4], 128, "hpqBIOSInt128"),
+            Self::FanTypes => (0x20008, 0x2c, &[0; 4], 128, "hpqBIOSInt128"),
+            Self::FanTable => (0x20008, 0x2f, &[0; 4], 128, "hpqBIOSInt128"),
+            Self::SurfaceSensor => (0x20008, 0x23, &[0; 4], 4, "hpqBIOSInt4"),
         };
         ReadContract {
             command,
@@ -49,13 +59,13 @@ impl Read {
     }
 }
 
-struct HpBios {
+pub(super) struct HpBios {
     connection: WMIConnection,
     path: String,
 }
 
 impl HpBios {
-    fn new(inventory: &Inventory) -> WMIResult<Self> {
+    pub(super) fn new(inventory: &Inventory) -> WMIResult<Self> {
         // Even read support is initially restricted to the investigated firmware.
         if inventory.manufacturer != "HP" || inventory.board != "8E35" || inventory.bios != "F.13" {
             return Err(WMIError::ConvertVariantError(
@@ -89,9 +99,20 @@ impl HpBios {
         Ok(Self { connection, path })
     }
 
-    fn get(&self, read: Read) -> WMIResult<(u32, Vec<u8>)> {
+    pub(super) fn get(&self, read: Read) -> WMIResult<(u32, Vec<u8>)> {
         let contract = read.contract();
         self.invoke(&contract, contract.input)
+    }
+    pub(super) fn set_max_fan(&self, enabled: bool) -> WMIResult<()> {
+        // OmenHsaClient.SetMaxFan: one-byte boolean, no mode/power payload.
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type: 0x27,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &[u8::from(enabled)]).map(|_| ())
     }
     fn set_colors(&self, colors: &[u8]) -> WMIResult<()> {
         if colors.len() != 128 {

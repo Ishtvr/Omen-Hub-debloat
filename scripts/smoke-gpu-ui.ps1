@@ -134,6 +134,31 @@ try {
     do { Start-Sleep -Milliseconds 100; $taskText = [OmenGpuUiSmoke]::Text($taskWindow) } while ($taskText -notmatch 'Profil gespeichert' -and (Get-Date) -lt $taskDeadline)
     $taskProfile = Get-Content -LiteralPath $taskCreated -Raw | ConvertFrom-Json
     if ($taskProfile.name -ne ($taskProfileName + ' curve') -or ((@($taskProfile.settings | Where-Object feature -eq 'gpu_vf_curve')[0].value | ConvertTo-Json -Depth 8 -Compress) -cne $taskExpectedCurve)) { throw 'Name-only editing changed the imported custom curve.' }
+    # Max-Fan is profile intent only. Save/reload must preserve the full custom
+    # curve, and a cooling override must never become eligible for logon apply.
+    $taskMax=[OmenGpuUiSmoke]::GetDlgItem($taskWindow,316)
+    if($taskMax-eq[IntPtr]::Zero-or-not[OmenGpuUiSmoke]::IsWindowEnabled($taskMax)){throw 'Qualified Max-Fan profile field is missing.'}
+    foreach($taskChoice in @(1,2,0)){
+        [void][OmenGpuUiSmoke]::Message($taskMax,0x014E,[uint64]$taskChoice)
+        [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]0x0001013C),[IntPtr]::Zero)
+        Start-Sleep -Milliseconds 100
+        if([OmenGpuUiSmoke]::IsWindowEnabled($taskApply)){throw 'Max-Fan draft did not gate Apply.'}
+        [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]303),[IntPtr]::Zero)
+        $taskDeadline=(Get-Date).AddSeconds(12)
+        do{Start-Sleep -Milliseconds 100;$taskText=[OmenGpuUiSmoke]::Text($taskWindow)}while($taskText-notmatch'Profil gespeichert'-and(Get-Date)-lt$taskDeadline)
+        $taskProfile=Get-Content -LiteralPath $taskCreated -Raw|ConvertFrom-Json
+        $taskMaxSetting=@($taskProfile.settings|Where-Object feature -eq 'max_fan')
+        if($taskChoice-eq0){if($taskMaxSetting.Count-ne0){throw 'Nicht aendern retained a Max-Fan write instruction.'}}
+        elseif($taskMaxSetting.Count-ne1-or$taskMaxSetting[0].value.kind-cne'boolean'-or$taskMaxSetting[0].value.value-ne($taskChoice-eq1)){throw 'Max-Fan boolean did not persist exactly.'}
+        if((@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value|ConvertTo-Json -Depth 8 -Compress)-cne$taskExpectedCurve){throw 'Max-Fan save changed the full custom GPU curve.'}
+        if($taskChoice-ne0-and[OmenGpuUiSmoke]::IsWindowEnabled([OmenGpuUiSmoke]::GetDlgItem($taskWindow,306))){throw 'Unqualified Max-Fan lifecycle enabled logon application.'}
+        [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]308),[IntPtr]::Zero)
+        Start-Sleep -Milliseconds 100
+        $taskDeadline=(Get-Date).AddSeconds(12)
+        while(-not[OmenGpuUiSmoke]::IsWindowEnabled($taskMax)-and(Get-Date)-lt$taskDeadline){Start-Sleep -Milliseconds 80}
+        $taskActual=[OmenGpuUiSmoke]::Message($taskMax,0x0147)
+        if($taskActual-ne$taskChoice){throw 'Max-Fan profile reload lost its choice.'}
+    }
     $taskAfter = (& $taskExe gpu-capabilities | Out-String | ConvertFrom-Json).gpu
     if ($taskBefore.core.Ok.current_mhz -ne $taskAfter.core.Ok.current_mhz -or $taskBefore.memory.Ok.current_mhz -ne $taskAfter.memory.Ok.current_mhz) { throw 'GPU offsets changed during a metadata-only test.' }
     $taskCurveAfter = & $taskExe gpu-curve-read | Out-String | ConvertFrom-Json
@@ -143,7 +168,7 @@ try {
     $taskText | Set-Content -LiteralPath (Join-Path $taskRepo '.local\gpu-ui-smoke-text.txt') -Encoding UTF8
     [void][OmenGpuUiSmoke]::PostMessage($taskWindow,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
     if (-not $taskProcess.WaitForExit(3000) -or $taskProcess.ExitCode -ne 0) { throw 'GPU editor did not close cleanly.' }
-    [pscustomobject]@{ measured_at=(Get-Date).ToString('o'); binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash; read_and_save=$true; curve_save=$true; custom_curve_preserved=$true; inline_validation=$true; apply_disabled_for_draft=$true; offsets_unchanged=$true; curve_unchanged=$true; hardware_writes=$false; clean_exit=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRepo '.local\gpu-ui-smoke.json') -Encoding UTF8
+    [pscustomobject]@{ measured_at=(Get-Date).ToString('o'); binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash; read_and_save=$true; curve_save=$true; custom_curve_preserved=$true; max_fan_metadata_roundtrip=$true;max_fan_startup_blocked=$true; inline_validation=$true; apply_disabled_for_draft=$true; offsets_unchanged=$true; curve_unchanged=$true; hardware_writes=$false; clean_exit=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRepo '.local\gpu-ui-smoke.json') -Encoding UTF8
     'Native GPU editor, truthful support labels, inline validation, save-only persistence, draft gating and clean exit passed; GPU offsets unchanged.'
 } finally {
     $taskProcess.Refresh()

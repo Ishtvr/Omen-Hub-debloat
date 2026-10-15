@@ -38,6 +38,7 @@ const CURVE: usize = 312;
 const VOLTAGE: usize = 313;
 const FREQUENCY: usize = 314;
 const CURVE_EDITOR: usize = 315;
+const MAX_FAN: usize = 316;
 pub(crate) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -62,6 +63,8 @@ struct View {
     curve_ready: bool,
     curve: Result<VfState, String>,
     applicable: bool,
+    startup_applicable: bool,
+    max_fan_supported: bool,
     startup: String,
     blockers: String,
 }
@@ -88,6 +91,10 @@ fn load(id: Option<&str>) -> Result<View, String> {
         .as_ref()
         .map(|p| transaction::plan(p, &mut controller, false));
     let applicable = plan.as_ref().is_some_and(|p| p.applicable);
+    let startup_applicable = selected
+        .as_ref()
+        .is_some_and(|p| transaction::plan(p, &mut controller, true).applicable);
+    let max_fan_supported = controller.capability(Feature::MaxFan).access == Access::ReadWrite;
     let blockers = plan.map_or(String::new(), |p| {
         p.blockers
             .iter()
@@ -113,6 +120,8 @@ fn load(id: Option<&str>) -> Result<View, String> {
         curve_ready,
         curve,
         applicable,
+        startup_applicable,
+        max_fan_supported,
         startup,
         blockers,
     })
@@ -124,6 +133,7 @@ enum Request {
         name: String,
         graphics: Setting,
         memory: i64,
+        max_fan: Option<bool>,
     },
     Action {
         id: Option<String>,
@@ -172,6 +182,7 @@ fn worker(hwnd: usize, receiver: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     name,
                     graphics,
                     memory,
+                    max_fan,
                 } => {
                     let store = ProfileStore::user_data()?;
                     let mut profile = if let Some(id) = id {
@@ -195,6 +206,7 @@ fn worker(hwnd: usize, receiver: mpsc::Receiver<Request>, updates: mpsc::Sender<
                             Feature::GpuCoreOffsetMhz
                                 | Feature::GpuVfCurve
                                 | Feature::GpuMemoryOffsetMhz
+                                | Feature::MaxFan
                         )
                     });
                     profile.settings.push(graphics);
@@ -202,6 +214,12 @@ fn worker(hwnd: usize, receiver: mpsc::Receiver<Request>, updates: mpsc::Sender<
                         feature: Feature::GpuMemoryOffsetMhz,
                         value: Value::Integer(memory),
                     });
+                    if let Some(enabled) = max_fan {
+                        profile.settings.push(Setting {
+                            feature: Feature::MaxFan,
+                            value: Value::Boolean(enabled),
+                        });
+                    }
                     store.save(&profile)?;
                     selected = Some(profile.id);
                     status =
@@ -253,6 +271,7 @@ struct Controls {
     voltage: HWND,
     frequency: HWND,
     curve_hint: HWND,
+    max_fan: HWND,
     current: HWND,
     limits: HWND,
     status: HWND,
@@ -314,6 +333,10 @@ fn enabled(state: &State) {
         for handle in [c.profiles, c.new, c.refresh, c.restore, c.disable] {
             EnableWindow(handle, (!state.busy.get()) as i32);
         }
+        EnableWindow(
+            c.max_fan,
+            (view.as_ref().is_some_and(|v| v.max_fan_supported) && !state.busy.get()) as i32,
+        );
         for handle in [c.name, c.memory, c.save] {
             EnableWindow(handle, (ready && !state.busy.get()) as i32);
         }
@@ -331,7 +354,10 @@ fn enabled(state: &State) {
         );
         EnableWindow(
             c.startup,
-            (applicable && saved && !state.dirty.get() && !state.busy.get()) as i32,
+            (view.as_ref().is_some_and(|v| v.startup_applicable)
+                && saved
+                && !state.dirty.get()
+                && !state.busy.get()) as i32,
         );
     }
 }
@@ -422,6 +448,26 @@ fn show(state: &State, view: View, status: &str) {
             })
             .or(actual[index].map(i64::from));
         text(handle, &value.map_or(String::new(), |v| v.to_string()));
+    }
+    let max_index = view
+        .selected
+        .as_ref()
+        .and_then(|p| {
+            p.settings.iter().find_map(|s| {
+                if s.feature == Feature::MaxFan {
+                    if let Value::Boolean(v) = s.value {
+                        Some(if v { 1 } else { 2 })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or(0);
+    unsafe {
+        SendMessageW(c.max_fan, CB_SETCURSEL, max_index, 0);
     }
     let stored_curve = view.selected.as_ref().and_then(|p| {
         p.settings.iter().find_map(|s| {
@@ -605,6 +651,12 @@ fn save_request(state: &State) -> Result<Request, String> {
         name,
         graphics,
         memory,
+        max_fan: match unsafe { SendMessageW(c.max_fan, CB_GETCURSEL, 0, 0) } {
+            0 => None,
+            1 => Some(true),
+            2 => Some(false),
+            _ => return Err("Max-Fan-Auswahl ist ungültig.".into()),
+        },
     })
 }
 
@@ -675,8 +727,30 @@ unsafe extern "system" fn procedure(
                     "STATIC",
                     "GPU & eigene Profile",
                     0,
-                    [20, 18, 720, 28],
+                    [20, 18, 350, 28],
                 );
+                control(
+                    hwnd,
+                    state.theme.small,
+                    0,
+                    "STATIC",
+                    "Max-Fan im Profil",
+                    0,
+                    [405, 20, 175, 24],
+                );
+                let max_fan = control(
+                    hwnd,
+                    f,
+                    MAX_FAN,
+                    "COMBOBOX",
+                    "",
+                    WS_TABSTOP | CBS_DROPDOWNLIST as u32,
+                    [590, 14, 140, 200],
+                );
+                for label in ["Nicht ändern", "Ein", "Aus"] {
+                    SendMessageW(max_fan, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
+                }
+                SendMessageW(max_fan, CB_SETCURSEL, 0, 0);
                 let current = control(
                     hwnd,
                     f,
@@ -921,6 +995,7 @@ unsafe extern "system" fn procedure(
                     voltage,
                     frequency,
                     curve_hint,
+                    max_fan,
                     current,
                     limits,
                     status,
@@ -990,7 +1065,7 @@ unsafe extern "system" fn procedure(
                     return 0;
                 }
                 if (matches!(id, NAME | CORE | MEMORY | FREQUENCY) && notification == EN_CHANGE)
-                    || (id == VOLTAGE && notification == CBN_SELCHANGE)
+                    || (matches!(id, VOLTAGE | MAX_FAN) && notification == CBN_SELCHANGE)
                     || (id == CURVE && notification == BN_CLICKED)
                 {
                     state.dirty.set(true);
@@ -1001,7 +1076,11 @@ unsafe extern "system" fn procedure(
                     if let Some(c) = state.controls.get() {
                         text(
                             c.status,
-                            "Ungespeicherte Änderungen. Zum Anwenden zuerst speichern.",
+                            if id == MAX_FAN {
+                                "Max-Fan ist eine Profilvorgabe. Aus hebt nur den Override auf, keine Automatik-Auswahl. Zum Anwenden zuerst speichern."
+                            } else {
+                                "Ungespeicherte Änderungen. Zum Anwenden zuerst speichern."
+                            },
                         );
                     }
                     return 0;

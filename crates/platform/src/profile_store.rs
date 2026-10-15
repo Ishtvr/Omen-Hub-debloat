@@ -18,7 +18,7 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 pub fn profile_digest(profile: &PerformanceProfile) -> Result<String, String> {
     profile.validate()?;
     let bytes = serde_json::to_vec(profile).map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ pub struct ProfileStore {
 /// A scoped qualification must not discard the last user transaction/approval.
 pub struct JournalCheckpoint {
     root: PathBuf,
-    previous: Option<JournalFile<serde_json::Value>>,
+    previous: Option<Vec<u8>>,
 }
 impl ProfileStore {
     pub fn user_data() -> Result<Self, String> {
@@ -77,15 +77,20 @@ impl ProfileStore {
             .try_exists()
             .map_err(|e| e.to_string())?
         {
-            let file: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
-            let bytes = serde_json::to_vec(&file).map_err(|e| e.to_string())?;
+            let bytes = read_bytes(&self.journal_path())?;
+            let file: JournalFile<serde_json::Value> =
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            if file.pending || file.schema != 1 {
+                return Err("Changed/pending checkpoint journal".into());
+            }
+            file.transaction.validate()?;
             let path = self
                 .root
                 .join("control-history")
-                .join(format!("{:x}.json", Sha256::digest(bytes)));
+                .join(format!("{:x}.json", Sha256::digest(&bytes)));
             fs::create_dir_all(self.root.join("control-history")).map_err(|e| e.to_string())?;
-            atomic_json(&path, &file)?;
-            Some(file)
+            atomic_bytes(&path, &bytes)?;
+            Some(bytes)
         } else {
             None
         };
@@ -117,7 +122,7 @@ impl ProfileStore {
             );
         }
         if let Some(previous) = checkpoint.previous {
-            atomic_json(&self.journal_path(), &previous)?;
+            atomic_bytes(&self.journal_path(), &previous)?;
         }
         Ok(())
     }
@@ -382,7 +387,7 @@ impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
     }
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
+fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut data = Vec::new();
     file.take(MAX_FILE_BYTES + 1)
@@ -391,12 +396,18 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     if data.len() as u64 > MAX_FILE_BYTES {
         return Err("Profile/control file exceeds 1 MiB".into());
     }
-    serde_json::from_slice(&data).map_err(|e| format!("{}: {e}", path.display()))
+    Ok(data)
+}
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
+    serde_json::from_slice(&read_bytes(path)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let mut data = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
     data.push(b'\n');
+    atomic_bytes(path, &data)
+}
+fn atomic_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
     if data.len() as u64 > MAX_FILE_BYTES {
         return Err("Profile/control file exceeds 1 MiB".into());
     }
@@ -412,7 +423,7 @@ pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), St
             .create_new(true)
             .open(&temp)
             .map_err(|e| e.to_string())?;
-        file.write_all(&data).map_err(|e| e.to_string())?;
+        file.write_all(data).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
         replace(&temp, path)
@@ -539,6 +550,11 @@ mod tests {
         finish(store, Completion::Applied);
         store.enable_startup(&original.id).unwrap();
         let startup = serde_json::to_value(store.startup().unwrap()).unwrap();
+        let original_bytes = fs::read(store.journal_path()).unwrap();
+        let mut noncanonical = b"  ".to_vec();
+        noncanonical.extend_from_slice(&original_bytes);
+        noncanonical.extend_from_slice(b"\n\n");
+        fs::write(store.journal_path(), &noncanonical).unwrap();
         let checkpoint = store.checkpoint_completed_journal().unwrap();
         let mut trial_profile = profile();
         trial_profile.id = "trial".into();
@@ -553,6 +569,7 @@ mod tests {
                 &trial.profile_digest,
             )
             .unwrap();
+        assert_eq!(fs::read(store.journal_path()).unwrap(), noncanonical);
         assert_eq!(store.last_transaction::<Value>().unwrap(), original_tx);
         assert_eq!(
             serde_json::to_value(store.startup().unwrap()).unwrap(),

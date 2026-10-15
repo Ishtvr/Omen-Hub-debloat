@@ -74,10 +74,18 @@ Am **14. Oktober** folgten begrenzte eigene RGB-SETs und der exakte eigene-Farbe
 
 Ausführliche eigene Schnittstellenbeobachtungen und Quellenhashes: [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Die Benutzerpräzisierung zum vollständigen Ersatz samt notwendigen Hintergrundaufgaben steht in [REPLACEMENT_PLAN.md](REPLACEMENT_PLAN.md).
 
+## Lüfterpfad — 15. Oktober 2026
+
+Die statische Managed-Analyse trennt jetzt den unabhängigen **Max-Fan-Override** vom gekoppelten Leistungs-/Lüftermodus. Max-Fan liest mit **0x20008/0x26**, vier Nullbytes Input und vier Outputbytes; SET **0x27** verwendet dagegen genau ein Bool-Byte Input und vier Outputbytes. Der eigene feste Transport ist auf 8E35/F.13 zusätzlich durch Tabelle/Topologie und vollständige reservierte Schalterbytes begrenzt. ON-/gehaltener Readback-/Original-OFF-Restore und später eine separate persistierte Recovery sind real bestätigt. Quellenhashes und präzise Bedingungen: [FAN_CONTROL.md](FAN_CONTROL.md), Messungen: [VALIDATION.md](VALIDATION.md).
+
+Drehzahlen **0x2D**, Topologie **0x2C** und Tabelle **0x2F** liefern jeweils 128 Bytes. CPU/GPU werden in 100-RPM-Firmwareeinheiten beobachtet; unbekannte Sentinelwerte werden nicht als positive RPM ausgegeben. Tabellenbyte 1 ist im Herstellerparser uninterpretiert und wird nicht als Zeilenzahl verwendet. Selektor 0 von **0x23** bleibt ein roher Zusatzsensorbefund. Der eigene reine Tabellen-Paarungshelfer ist keine Freigabe eines Softwarekurven-SETs.
+
+**0x1A** ändert Leistung und BIOS-Lüfterzuständigkeit gemeinsam; die alte Oberfläche für Quiet/Normal/Turbo darf daher nicht als isolierter Fan-Setter nachgebaut werden. Der ursprüngliche Softwarekurvenablauf koordiniert CPU-, GPU- und zusätzliche IR-/Oberflächenanforderung einschließlich Glättung, Hysterese und Modellgrenzen. Vollständiger Modus-Readback/Restore, Zusatzsensorbedeutung und unabhängige Lifecycle-Sicherheit bleiben offen. Level-SET **0x2E** und Heartbeat **0x10** wurden nicht ausgeführt. Max-Fan qualifiziert diese anderen Pfade nicht mit.
+
 ## Nächste Untersuchung
 
 1. HSA/CAP-RPC, `GetNumOfFan` und `ExecuteBiosWmiCommand` bis zum nativen Transport verfolgen.
-2. Plattformkonfiguration für Board 8E35 und BIOS F.13 bestimmen: Fan Control, cTGP/PPAB, Dynamic Boost, Netzteilstatus und thermische Grenzen.
+2. Die inzwischen gelesene Lüfterzuordnung/-tabelle durch einen vollständigen gekoppelten Modus-Readback und Restore ergänzen; Zusatzsensor 0 und CPU-/GPU-/IR-Sicherheitsgrenzen qualifizieren. cTGP/PPAB, Dynamic Boost und ihre Wirkung bleiben getrennte Untersuchungen.
 3. Lesende, begrenzte Get-Operationen separat integrieren und Rückgabecodes/Längen validieren.
 4. Gaming-Hub-Zustände und GPU-Watt unter kontrollierter Last vergleichen. Gleiche Versorgung und Kühlung verwenden; CPU-Leistung und Akkudrain mit erfassen.
 5. Erst mit belegter Modellspezifikation Apply/Readback/Restore und Keep-Alive implementieren.

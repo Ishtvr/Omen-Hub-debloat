@@ -43,6 +43,7 @@ pub fn handles(command: &str) -> bool {
     matches!(
         command,
         "gpu-capabilities"
+            | "fan-validate-max"
             | "keyboard-validate-colors"
             | "keyboard-validate-lighting"
             | "keyboard-ui-read"
@@ -159,6 +160,40 @@ fn run_inner(args: &[String]) -> Result<(), String> {
     }
     let mut store = ProfileStore::user_data()?;
     match args.first().map(String::as_str) {
+        Some("fan-validate-max") if args.len() == 1 => {
+            let _lease = ControlLease::acquire()?;
+            if store.pending()? {
+                return Err("Pending recovery blocks the fixed max-fan trial".into());
+            }
+            let mut controller = Controller::new(false, None)?;
+            let before = controller.fan_report()?;
+            let checkpoint = store.checkpoint_completed_journal()?;
+            let result = controller.validate_max_fan(&mut store);
+            let after = controller.fan_report();
+            let final_check = after.as_ref().map_err(|e| e.clone()).and_then(|r| {
+                if r.max_fan == before.max_fan
+                    && r.table_sha256 == before.table_sha256
+                    && r.topology == before.topology
+                {
+                    Ok(())
+                } else {
+                    Err("Final max-fan original/layout differs".into())
+                }
+            });
+            if result.is_ok() && final_check.is_ok() {
+                let completed = store.last_transaction::<RestoreState>()?;
+                store.restore_completed_trial_checkpoint(
+                    checkpoint,
+                    "max-fan-validation",
+                    &completed.profile_digest,
+                )?;
+            }
+            print(
+                &serde_json::json!({"before":before,"transaction":result,"observations":controller.fan_validation_observations(),"after":after,"final_check":final_check,"scope":"Fixed maximum cooling ON only, then original flag restore; no software fan levels, performance, power or voltage SET"}),
+            )?;
+            result.map(|_| ())?;
+            final_check
+        }
         Some("keyboard-validate-colors" | "keyboard-validate-lighting") if args.len() == 1 => {
             let _lease = ControlLease::acquire()?;
             if store.pending()? {

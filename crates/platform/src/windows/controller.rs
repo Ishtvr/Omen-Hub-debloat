@@ -30,10 +30,17 @@ const KEYBOARD_COLOR_WRITE_VERIFIED: bool = true;
 // 2026-10-14 02:48 CEST, build5E5926A8...: coupled RGB plus64->E4,
 // exact complete readback,64/original RGB restore, GPU controls unchanged.
 const KEYBOARD_MODE_WRITE_VERIFIED: bool = true;
+// 2026-10-15 fixed ON/held-readback/OFF restore, build063CF16D...;
+// full flag restored, GPU controls/power and production metadata unchanged.
+// Startup and software curves remain unqualified.
+const MAX_FAN_WRITE_VERIFIED: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "adapter", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RestoreState {
+    HpMaxFan {
+        state: super::cooling::MaxFanImage,
+    },
     HpKeyboardColors {
         state: KeyboardState,
     },
@@ -65,6 +72,10 @@ pub struct Controller {
     keyboard_calibration: Option<Vec<[u8; 3]>>,
     keyboard_target: Option<KeyboardState>,
     keyboard_mode_calibration: Option<Choice>,
+    fan: Option<super::cooling::FanControl>,
+    fan_target: Option<omen_core::cooling::MaxFanState>,
+    fan_calibration: bool,
+    fan_observations: Vec<super::cooling::FanReport>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -128,6 +139,10 @@ impl Controller {
             keyboard_calibration: None,
             keyboard_target: None,
             keyboard_mode_calibration: None,
+            fan: None,
+            fan_target: None,
+            fan_calibration: false,
+            fan_observations: vec![],
         })
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
@@ -152,6 +167,47 @@ impl Controller {
     }
     pub fn keyboard_state(&mut self) -> Result<KeyboardState, String> {
         self.keyboard()?.read()
+    }
+    fn fan(&mut self) -> Result<&super::cooling::FanControl, String> {
+        if self.fan.is_none() {
+            self.fan = Some(super::cooling::FanControl::new(&self.inventory)?);
+        }
+        self.fan.as_ref().ok_or("Missing fan connection".into())
+    }
+    pub fn fan_report(&mut self) -> Result<super::cooling::FanReport, String> {
+        self.fan()?.report()
+    }
+    pub fn fan_validation_observations(&self) -> &[super::cooling::FanReport] {
+        &self.fan_observations
+    }
+    pub fn validate_max_fan(
+        &mut self,
+        journal: &mut impl Journal<RestoreState>,
+    ) -> Result<Applied, String> {
+        let before = self.fan()?.capture()?;
+        if before.state.enabled {
+            return Err("Fixed qualification requires Max-Fan OFF; it never lowers existing maximum cooling".into());
+        }
+        let profile = PerformanceProfile {
+            schema: PROFILE_SCHEMA,
+            id: "max-fan-validation".into(),
+            name: "Fixed max-fan ON/restore qualification".into(),
+            binding: self.context()?.binding.for_settings(&[]),
+            settings: vec![Setting {
+                feature: Feature::MaxFan,
+                value: Value::Boolean(true),
+            }],
+        };
+        let digest = crate::profile_store::profile_digest(&profile)?;
+        self.fan_calibration = true;
+        self.fan_observations.clear();
+        let result = transaction::trial(&profile, &digest, self, journal);
+        self.fan_calibration = false;
+        let result = result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+        if self.fan()?.capture()? != before {
+            return Err("Complete original Max-Fan flag did not restore".into());
+        }
+        Ok(result)
     }
     pub fn validate_keyboard_lighting(
         &mut self,
@@ -555,6 +611,21 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if feature == Feature::MaxFan {
+            // Capabilities describe qualified board support. Permission, live
+            // table/opaque state and durable originals are checked at capture,
+            // for every setting before the transaction dispatches its first SET.
+            if self.inventory.manufacturer != "HP"
+                || self.inventory.board != "8E35"
+                || self.inventory.bios != "F.13"
+            {
+                return Capability::unsupported(
+                    feature,
+                    "Max-Fan is qualified only on HP8E35/F.13",
+                );
+            }
+            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac:true,startup_safe:false};
+        }
         if feature == Feature::KeyboardEffect {
             return match self.keyboard_state() {
                 Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe:false},
@@ -688,6 +759,9 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if feature == Feature::MaxFan {
+            return Ok(Value::Boolean(self.fan()?.capture()?.state.enabled));
+        }
         if uses_keyboard(feature) {
             return keyboard_value(feature, &self.keyboard_state()?);
         }
@@ -700,6 +774,16 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if feature == Feature::MaxFan {
+            let state = self.fan()?.capture()?;
+            let saved = Captured {
+                feature,
+                value: Value::Boolean(state.state.enabled),
+                restore: RestoreState::HpMaxFan { state },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if uses_keyboard(feature) {
             let state = self.keyboard_state()?;
             let saved = Captured {
@@ -764,6 +848,29 @@ impl Backend for Controller {
     fn restore(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Restore state was not captured by this controller session".into());
+        }
+        if let RestoreState::HpMaxFan { state } = &saved.restore {
+            if saved.feature != Feature::MaxFan
+                || saved.value != Value::Boolean(state.state.enabled)
+            {
+                return Err("Max-fan restore feature/value differs".into());
+            }
+            state.state.validate_restore()?;
+            let current = self.fan()?.capture()?;
+            let mut owned = state.clone();
+            owned.state = self
+                .fan_target
+                .clone()
+                .unwrap_or_else(|| state.state.clone());
+            if current != *state && current != owned {
+                return Err("Fan state changed outside the captured transaction".into());
+            }
+            self.fan()?.program(&current, state.state.enabled)?;
+            if self.fan()?.capture()? != *state {
+                return Err("Complete max-fan original differs after restore".into());
+            }
+            self.fan_target = Some(state.state.clone());
+            return Ok(());
         }
         if let RestoreState::HpKeyboardColors { state } = &saved.restore {
             if !uses_keyboard(saved.feature) || saved.value != keyboard_value(saved.feature, state)?
@@ -845,6 +952,23 @@ impl Backend for Controller {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Control verification image is not owned by this session".into());
         }
+        if let RestoreState::HpMaxFan { state } = &saved.restore {
+            if saved.feature != Feature::MaxFan
+                || saved.value != Value::Boolean(state.state.enabled)
+            {
+                return Err("Max-fan capture differs".into());
+            }
+            let current = self.fan()?.capture()?;
+            let mut owned = state.clone();
+            owned.state = self
+                .fan_target
+                .clone()
+                .unwrap_or_else(|| state.state.clone());
+            if current != *state && current != owned {
+                return Err("Max-fan controls differ from original/owned target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpKeyboardColors { state } = &saved.restore {
             let actual = self.keyboard_state()?;
             if actual != *state && self.keyboard_target.as_ref() != Some(&actual) {
@@ -862,7 +986,7 @@ impl Backend for Controller {
             RestoreState::NvidiaVfCurve {
                 state, core_offset, ..
             } => (core_offset, Some(state), None),
-            RestoreState::HpKeyboardColors { .. } => unreachable!(),
+            RestoreState::HpKeyboardColors { .. } | RestoreState::HpMaxFan { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -912,6 +1036,32 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if setting.feature == Feature::MaxFan {
+            let Value::Boolean(enabled) = setting.value else {
+                return Err("Max-fan target is not boolean".into());
+            };
+            let saved = self
+                .captured
+                .get(&Feature::MaxFan)
+                .ok_or("No max-fan capture")?;
+            let RestoreState::HpMaxFan { state } = &saved.restore else {
+                return Err("Wrong max-fan adapter".into());
+            };
+            let mut target = state.clone();
+            target.state = state.state.target(enabled)?;
+            if self.fan()?.capture()? != target {
+                return Err("Complete max-fan target readback differs".into());
+            }
+            if self.fan_calibration {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                let report = self.fan_report()?;
+                if report.max_fan != target.state {
+                    return Err("Max-fan flag did not remain set during the fixed trial".into());
+                }
+                self.fan_observations.push(report);
+            }
+            return Ok(setting.value.clone());
+        }
         if uses_keyboard(setting.feature) {
             let expected = self
                 .keyboard_target
@@ -997,6 +1147,26 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::HpMaxFan { state } = &saved.restore {
+                if saved.feature != Feature::MaxFan
+                    || requested.feature != Feature::MaxFan
+                    || saved.value != Value::Boolean(state.state.enabled)
+                {
+                    return Err("Persisted max-fan feature/value differs".into());
+                }
+                state.state.validate_restore()?;
+                let Value::Boolean(enabled) = requested.value else {
+                    return Err("Persisted max-fan target is not boolean".into());
+                };
+                let mut target = state.clone();
+                target.state = state.state.target(enabled)?;
+                let current = self.fan()?.capture()?;
+                if current != *state && current != target {
+                    return Err("Persisted max-fan identity/opaque state differs".into());
+                }
+                self.fan_target = Some(target.state);
+                continue;
+            }
             if let RestoreState::HpKeyboardColors { state } = &saved.restore {
                 if !uses_keyboard(saved.feature)
                     || requested.feature != saved.feature
@@ -1233,6 +1403,34 @@ impl Backend for Controller {
             || (capability.requires_ac && context.ac_connected != Some(true))
         {
             return Err(capability.reason);
+        }
+        if setting.feature == Feature::MaxFan {
+            let Value::Boolean(enabled) = setting.value else {
+                return Err("Max-fan target requires a boolean".into());
+            };
+            if self.fan_calibration && !enabled {
+                return Err("Qualification only enables maximum cooling".into());
+            }
+            let saved = self
+                .captured
+                .get(&Feature::MaxFan)
+                .ok_or("Missing durable max-fan original")?
+                .clone();
+            let RestoreState::HpMaxFan { state } = &saved.restore else {
+                return Err("Wrong max-fan adapter".into());
+            };
+            let current = self.fan()?.capture()?;
+            let mut owned = state.clone();
+            owned.state = self
+                .fan_target
+                .clone()
+                .unwrap_or_else(|| state.state.clone());
+            if current != *state && current != owned {
+                return Err("Max-fan controls changed outside this transaction".into());
+            }
+            self.fan_target = Some(state.state.target(enabled)?);
+            self.fan()?.program(&current, enabled)?;
+            return Ok(());
         }
         if setting.feature == Feature::KeyboardEffect {
             let Value::Choice(mode) = setting.value else {

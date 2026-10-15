@@ -14,7 +14,7 @@ Schreibsupport gilt derzeit ausschließlich für HP-Board **8E35**, BIOS **F.13*
 6. **Gesamtes Profil anwenden …** wird erst nach Save und erfolgreicher Prüfung verfügbar. Die Aktion überträgt das gesamte ausgewählte Profil, also auch darin enthaltene GPU-Settings. Ein fester UAC-Child prüft das Profil erneut, speichert die Originale vor dem ersten SET dauerhaft und kontrolliert den vollständigen Zielzustand per Readback.
 7. **Original wiederherstellen …** ist verfügbar, wenn das letzte aufgezeichnete Originalbild Beleuchtungssettings enthält und zu der ausgewählten Profil-ID gehört. Der erhöhte Child prüft diese Zuordnung nochmals. Restore stellt die gesamte aufgezeichnete Profiltransaktion wieder her, einschließlich gegebenenfalls enthaltener GPU-Settings, und deaktiviert die Anmeldungsauswahl.
 
-Ein gespeichertes Profil mit nicht unterstützten CPU-, Windows-, Lüfter-, MUX- oder Unleashed-Settings bleibt als Ganzes nicht anwendbar. Die Beleuchtungsaktion überspringt solche Settings nicht. Änderungen am Entwurf sperren Apply bis zum erneuten Save und Check. Eine noch offene Recovery sperrt ein weiteres Apply.
+Ein gespeichertes Profil mit nicht unterstützten CPU-, Windows-, Lüfterkurven-, MUX- oder Unleashed-Settings bleibt als Ganzes nicht anwendbar. Die Beleuchtungsaktion überspringt solche Settings nicht. Der getrennte manuelle Max-Fan-Override ist auf dem Referenzgerät qualifiziert und kann Teil einer solchen Gesamttransaktion sein; er bleibt wie Beleuchtung für Startup gesperrt. Änderungen am Entwurf sperren Apply bis zum erneuten Save und Check. Eine noch offene Recovery sperrt ein weiteres Apply.
 
 ## Herkunft und Fehlerzustände
 
