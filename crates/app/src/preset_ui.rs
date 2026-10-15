@@ -1055,7 +1055,9 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 0
             }
             WM_MOUSEWHEEL => {
-                scroll(hwnd, state, -((w >> 16) as u16 as i16 as i32) / 120 * 108);
+                // Precision touchpads send deltas below WHEEL_DELTA (120); scale
+                // before dividing so they still scroll.
+                scroll(hwnd, state, -((w >> 16) as u16 as i16 as i32) * 108 / 120);
                 0
             }
             WM_DRAWITEM => {
@@ -1473,6 +1475,16 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                         Update::View(view, message) => display(hwnd, state, *view, &message),
                         Update::Error(error) => {
                             state.busy.set(false);
+                            // The auto checkbox toggled itself before the request;
+                            // a failed or cancelled change must not stay ticked.
+                            set_checked(
+                                GetDlgItem(hwnd, STARTUP as i32),
+                                state
+                                    .view
+                                    .borrow()
+                                    .as_ref()
+                                    .is_some_and(|v| v.startup_enabled),
+                            );
                             status(hwnd, state, &error, true);
                             enable(hwnd, state);
                         }

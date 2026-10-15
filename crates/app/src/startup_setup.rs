@@ -22,7 +22,13 @@ pub fn ensure_current_installation() -> Result<(), String> {
     let quoted = source
         .to_str()
         .ok_or("Executable path is not Unicode")?
-        .replace('\'', "''");
+        // PowerShell also ends single-quoted strings at U+2018..U+201B.
+        .chars()
+        .flat_map(|c| {
+            let quote = matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}');
+            std::iter::repeat_n(c, if quote { 2 } else { 1 })
+        })
+        .collect::<String>();
     let script = format!(
         "& {{\n{}\n}} -Mode Install -SourceBinary '{}'",
         include_str!(concat!(

@@ -296,6 +296,28 @@ struct State {
     draft: bool,
     draft_result: RefCell<Option<Value>>,
 }
+fn discard(hwnd: HWND, s: &State) -> bool {
+    !s.dirty.get()
+        || unsafe {
+            MessageBoxW(
+                hwnd,
+                wide("Ungespeicherte Änderungen verwerfen?").as_ptr(),
+                wide("Kurvenprofil wechseln").as_ptr(),
+                MB_YESNO | MB_ICONQUESTION,
+            )
+        } == IDYES
+}
+/// Re-enable a disabled owner first; otherwise Windows activates another
+/// application's window when this owned editor is destroyed.
+unsafe fn close(hwnd: HWND) {
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER);
+        if !owner.is_null() {
+            EnableWindow(owner, 1);
+        }
+        DestroyWindow(hwnd);
+    }
+}
 fn selected(s: &State) -> Option<String> {
     s.view
         .borrow()
@@ -932,6 +954,17 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     return 0;
                 }
                 match id {
+                    SELECT if code == CBN_SELCHANGE && !discard(hwnd, s) => {
+                        // Keep the selector on the retained draft's profile.
+                        let view = s.view.borrow();
+                        let current = view.as_ref().map_or(0, |v| {
+                            v.selected
+                                .as_ref()
+                                .and_then(|p| v.profiles.iter().position(|q| q.id == p.id))
+                                .map_or(0, |i| i + 1)
+                        });
+                        SendMessageW(c.profiles, CB_SETCURSEL, current, 0);
+                    }
                     SELECT if code == CBN_SELCHANGE => {
                         let i = SendMessageW(c.profiles, CB_GETCURSEL, 0, 0);
                         let id = s
@@ -944,6 +977,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             .map(|p| p.id.clone());
                         dispatch(s, Request::Load(id), "Profil wird geladen …");
                     }
+                    NEW | RELOAD if !discard(hwnd, s) => {}
                     NEW => dispatch(
                         s,
                         Request::Load(None),
@@ -1050,7 +1084,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             {
                                 Ok(value) => {
                                     *s.draft_result.borrow_mut() = Some(value);
-                                    DestroyWindow(hwnd);
+                                    close(hwnd);
                                 }
                                 Err(error) => text(c.status, &error),
                             }
@@ -1078,7 +1112,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         }
                     }
                     OPEN if s.draft => {
-                        DestroyWindow(hwnd);
+                        close(hwnd);
                     }
                     OPEN if !s.dirty.get() => {
                         if let Some(id) = selected(s) {
@@ -1099,7 +1133,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 0
             }
             WM_CLOSE => {
-                DestroyWindow(hwnd);
+                if s.draft || discard(hwnd, s) {
+                    close(hwnd);
+                }
                 0
             }
             WM_DESTROY => {

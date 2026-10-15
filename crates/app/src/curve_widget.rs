@@ -52,6 +52,8 @@ struct State {
     hover: Cell<Option<usize>>,
     error: RefCell<String>,
     ownership: Rc<Cell<u8>>,
+    /// Partial wheel delta: high-resolution devices send fractions of 120.
+    wheel: Cell<i32>,
 }
 impl Drop for State {
     fn drop(&mut self) {
@@ -480,24 +482,30 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     return 0;
                 }
                 let keys = modifiers(s, w & 0xffff);
-                let inward = (w >> 16) as u16 as i16 > 0;
+                // One zoom/pan step per WHEEL_DELTA, not per message.
+                let delta = s.wheel.get() + i32::from((w >> 16) as u16 as i16);
+                s.wheel.set(delta % 120);
+                let steps = delta / 120;
+                let inward = steps > 0;
                 let (x, y) = coordinate(l);
                 let mut pos = POINT { x, y };
                 ScreenToClient(hwnd, &mut pos);
-                if keys.shift {
-                    if let Some(c) = s.model.borrow().as_ref() {
-                        let mut v = s.viewport.get().unwrap_or_else(|| Viewport::fit(c));
-                        v.pan(c, if inward { -1 } else { 1 });
-                        s.viewport.set(Some(v));
+                for _ in 0..steps.unsigned_abs() {
+                    if keys.shift {
+                        if let Some(c) = s.model.borrow().as_ref() {
+                            let mut v = s.viewport.get().unwrap_or_else(|| Viewport::fit(c));
+                            v.pan(c, if inward { -1 } else { 1 });
+                            s.viewport.set(Some(v));
+                        }
+                        refresh(hwnd);
+                    } else {
+                        let at = s
+                            .model
+                            .borrow()
+                            .as_ref()
+                            .map(|c| geometry(hwnd, c).data(pos.x, pos.y));
+                        zoom(hwnd, keys.ctrl, inward, at);
                     }
-                    refresh(hwnd);
-                } else {
-                    let at = s
-                        .model
-                        .borrow()
-                        .as_ref()
-                        .map(|c| geometry(hwnd, c).data(pos.x, pos.y));
-                    zoom(hwnd, keys.ctrl, inward, at);
                 }
                 0
             }
@@ -627,6 +635,7 @@ pub fn create(parent: HWND, id: usize, _font: HFONT) -> Result<HWND, String> {
             hover: Cell::new(None),
             error: RefCell::new(String::new()),
             ownership: ownership.clone(),
+            wheel: Cell::new(0),
         }));
         let hwnd = CreateWindowExW(
             0,
