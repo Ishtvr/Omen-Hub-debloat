@@ -66,6 +66,16 @@ fn preview_size(args: &[String], offset: usize) -> Result<Option<[i32; 2]>, Stri
     }
 }
 fn run() -> Result<(), String> {
+    // GDI scaling renders text and shapes at the monitor resolution while the
+    // fixed-pixel layouts stay in 96-DPI units. Without it, Windows stretches
+    // the bitmap and text looks blurred at 125 % and above.
+    #[cfg(windows)]
+    // SAFETY: Called once before any window exists; failure keeps the default.
+    unsafe {
+        windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED,
+        );
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
     if args.is_empty() || args == ["--tray"] {

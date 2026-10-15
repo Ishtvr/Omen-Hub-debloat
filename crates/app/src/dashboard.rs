@@ -30,27 +30,13 @@ unsafe fn metric(hwnd: HWND, id: i32, t: &Theme, value: Option<String>) {
     }
 }
 pub fn cpu_detail(s: &Snapshot) -> String {
+    // Measured values speak for themselves; only states that need attention
+    // get a line.
     match &s.cpu_hardware_status {
-        CpuHardwareStatus::Off => {
-            "CPU-Hardwaresensoren nicht aktiviert.\r\nZum Lesen Windows-Freigabe erteilen.".into()
-        }
+        CpuHardwareStatus::Off => "CPU-Sensoren nicht aktiv. Aktualisieren startet sie.".into(),
         CpuHardwareStatus::Starting => "Windows-Freigabe wird angefordert …".into(),
-        CpuHardwareStatus::Paused => "Sensoren pausiert. Neue Messbasis beim Öffnen.".into(),
+        CpuHardwareStatus::Paused | CpuHardwareStatus::Active => String::new(),
         CpuHardwareStatus::Error(e) => crate::ui::cpu_error_message(e).into(),
-        CpuHardwareStatus::Active => {
-            let interval = s
-                .cpu
-                .as_ref()
-                .and_then(|c| c.hardware.as_ref())
-                .and_then(|h| h.power_interval_ms)
-                .map_or("Energie-Baseline · Leistung wird gemessen".into(), |ms| {
-                    format!(
-                        "Mittelwert über {:.2} s · Temperatur: Tctl",
-                        ms as f64 / 1000.0
-                    )
-                });
-            format!("{interval}\r\nQuelle: CPU-Energiezähler und Tctl über PawnIO.")
-        }
     }
 }
 pub unsafe fn create(hwnd: HWND, t: &Theme) {
@@ -99,14 +85,6 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             (134, "Temperatur", t.body, true, true),
             (135, "Nicht verfügbar", t.body, true, false),
             (136, "GPU-Takt: Nicht verfügbar", t.body, true, false),
-            (137, "Treiberlimits werden gelesen …", t.small, true, true),
-            (
-                138,
-                "Die Treiberobergrenze ist keine erreichte Dauerleistung.",
-                t.small,
-                true,
-                true,
-            ),
             (140, "CPU", t.heading, true, false),
             (139, "CPU wird erkannt …", t.small, true, true),
             (147, "CPU-Paketleistung", t.body, true, true),
@@ -114,33 +92,14 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             (148, "CPU-Temperatur (Tctl)", t.body, true, true),
             (142, "Nicht verfügbar", t.body, true, false),
             (144, "Auslastung: Wird gemessen", t.body, true, false),
-            (
-                145,
-                "Windows-Takt: Nicht verfügbar · kein Boost-/Effektivtakt",
-                t.small,
-                true,
-                true,
-            ),
-            (
-                146,
-                "CPU-Hardwaresensoren nicht aktiviert.",
-                t.small,
-                true,
-                true,
-            ),
+            (145, "Windows-Takt: Nicht verfügbar", t.small, true, true),
+            (146, "", t.small, true, true),
             (150, "Steuerung", t.heading, false, false),
             (160, "System", t.heading, false, false),
             (161, "Leistungsmodus", t.body, false, false),
             (
                 181,
                 "Balanced (Default): noch nicht verfügbar.",
-                t.small,
-                false,
-                true,
-            ),
-            (
-                162,
-                "Schließen: Tray. Tray-Menü: Beenden.",
                 t.small,
                 false,
                 true,
@@ -155,15 +114,6 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
             WS_TABSTOP,
             t.body,
             false,
-            false,
-        );
-        control(
-            106,
-            "BUTTON",
-            "CPU-Sensoren …",
-            WS_TABSTOP,
-            t.body,
-            true,
             false,
         );
         control(
@@ -222,12 +172,13 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
         layout(hwnd);
     }
 }
+/// Lower edge of the GPU and CPU panels, shared by layout and painting.
+const PANEL_BOTTOM: i32 = 380;
 pub unsafe fn layout(hwnd: HWND) {
     unsafe {
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
         let width = r.right;
-        let h = r.bottom;
         let margin = 28;
         let gap = 20;
         let panel = (width - 2 * margin - gap) / 2;
@@ -257,28 +208,25 @@ pub unsafe fn layout(hwnd: HWND) {
             ]);
         }
         boxes.extend([
-            (136, [margin + 24, 300, content, 24]),
-            (137, [margin + 24, 331, content, 24]),
-            (138, [margin + 24, 360, content, 46]),
-            (144, [right + 24, 284, content, 24]),
-            (145, [right + 24, 310, content, 22]),
-            (146, [right + 24, 339, content, 38]),
-            (106, [right + 24, 383, content, 32]),
-            (150, [28, 446, width - 56, 30]),
+            (136, [margin + 24, 290, content, 24]),
+            (144, [right + 24, 290, content, 24]),
+            (145, [right + 24, 318, content, 22]),
+            (146, [right + 24, 344, content, 26]),
+            (150, [28, PANEL_BOTTOM + 24, width - 56, 30]),
         ]);
         let action = (width - 56 - 32) / 3;
         for (i, id) in [103, 104, 105].iter().enumerate() {
             let x = 28 + i as i32 * (action + 16);
-            boxes.push((*id, [x, 487, action, 44]));
+            boxes.push((*id, [x, PANEL_BOTTOM + 65, action, 44]));
         }
-        let bottom = (h - 180).max(578);
+        // Content stays top-aligned; a taller window only adds space below it.
+        let bottom = PANEL_BOTTOM + 150;
         boxes.extend([
             (160, [28, bottom, panel, 28]),
             (180, [28, bottom + 35, panel - 8, 74]),
             (161, [right, bottom, panel, 28]),
             (102, [right, bottom + 34, panel, 220]),
             (181, [right, bottom + 78, panel, 44]),
-            (162, [28, h - 29, width - 56, 22]),
         ]);
         for (id, b) in boxes {
             MoveWindow(GetDlgItem(hwnd, id), b[0], b[1], b[2], b[3], 1);
@@ -304,7 +252,7 @@ pub unsafe fn paint(hwnd: HWND, t: &Theme, dc: HDC) {
         );
         let previous = SelectObject(dc, pen);
         for x in [28, 48 + panel] {
-            RoundRect(dc, x, 108, x + panel, 429, 24, 24);
+            RoundRect(dc, x, 108, x + panel, PANEL_BOTTOM, 24, 24);
         }
         SelectObject(dc, old);
         SelectObject(dc, previous);
@@ -338,16 +286,6 @@ pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
                 "GPU-Takt: {}",
                 gpu.and_then(|g| g.clock_mhz)
                     .map_or("Nicht verfügbar".into(), |v| format!("{v} MHz"))
-            ),
-        );
-        let limit = |v: Option<f64>| v.map_or("unbekannt".into(), |v| format!("{v:.0} W"));
-        text(
-            hwnd,
-            137,
-            &format!(
-                "Standardlimit: {} · Treiberobergrenze: {}",
-                limit(gpu.and_then(|g| g.default_limit_w)),
-                limit(gpu.and_then(|g| g.maximum_limit_w))
             ),
         );
         text(
@@ -393,7 +331,7 @@ pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
             hwnd,
             145,
             &format!(
-                "Windows-Takt: {} · kein Boost-/Effektivtakt",
+                "Windows-Takt: {}",
                 cpu.and_then(|c| c.windows_clock_mhz)
                     .map_or("Nicht verfügbar".into(), |v| format!("{v} MHz"))
             ),

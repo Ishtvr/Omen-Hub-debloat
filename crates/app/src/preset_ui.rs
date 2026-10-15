@@ -50,6 +50,7 @@ const FIELD_BASE: usize = 2000;
 const PANE: usize = 710;
 const STATUS: i32 = 711;
 const FIELD_STRIDE: usize = 64;
+const FIELD_HEIGHT: i32 = 36;
 const CLASS: &str = "OmenHubPPPresetEditor";
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
 struct View {
@@ -845,11 +846,28 @@ unsafe fn layout(hwnd: HWND, state: &State) {
         let h = r.bottom;
         ui::place(GetDlgItem(hwnd, 730), 28, 20, w - 56, 40);
         ui::place(GetDlgItem(hwnd, TAB as i32), 28, 72, 174, 36);
-        ui::place(GetDlgItem(hwnd, 731), 28, 125, 270, 22);
-        ui::place(GetDlgItem(hwnd, SELECT as i32), 28, 150, 268, 320);
-        ui::place(GetDlgItem(hwnd, NEW as i32), 308, 150, 112, 34);
-        ui::place(GetDlgItem(hwnd, 732), 444, 125, w - 472, 22);
-        ui::place(GetDlgItem(hwnd, NAME as i32), 444, 150, w - 472, 34);
+        // Preset, Neu and Name share one column width and field height.
+        let column = (w - 56 - 2 * 16) / 3;
+        let [select, new, name] = [0, 1, 2].map(|i| 28 + i * (column + 16));
+        ui::place(GetDlgItem(hwnd, 731), select, 125, column, 22);
+        let combo = GetDlgItem(hwnd, SELECT as i32);
+        ui::place(combo, select, 150, column, 320);
+        // The closed selection field excludes its 3 px frame on each side.
+        SendMessageW(
+            combo,
+            CB_SETITEMHEIGHT,
+            usize::MAX,
+            (FIELD_HEIGHT - 6) as isize,
+        );
+        ui::place(GetDlgItem(hwnd, NEW as i32), new, 150, column, FIELD_HEIGHT);
+        ui::place(GetDlgItem(hwnd, 732), name, 125, column, 22);
+        ui::place(
+            GetDlgItem(hwnd, NAME as i32),
+            name,
+            150,
+            column,
+            FIELD_HEIGHT,
+        );
         ui::place(state.pane.get(), 28, 208, w - 56, h - 348);
         ui::place(GetDlgItem(hwnd, STARTUP as i32), 28, h - 115, 360, 30);
         ui::place(GetDlgItem(hwnd, STATUS), 28, h - 67, w - 470, 48);

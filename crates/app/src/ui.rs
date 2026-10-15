@@ -23,7 +23,6 @@ const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
-const CPU_SENSORS: usize = 106;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
 
@@ -34,7 +33,6 @@ enum Request {
     Suspend,
     Resume,
     Power,
-    CpuSensors,
     ApplyPreset(String),
     Stop,
 }
@@ -45,7 +43,6 @@ struct State {
     details: Cell<HWND>,
     profile: Cell<HWND>,
     preview: Cell<HWND>,
-    cpu_sensor: Cell<HWND>,
     tray: Cell<bool>,
     taskbar_message: u32,
     theme: crate::theme::Theme,
@@ -78,7 +75,7 @@ pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
     {
         "Treiber-/Modulversion nicht freigegeben. Passende Version von Omen Hub++ verwenden."
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:") && detail.contains("1223") {
-        "CPU-Sensorfreigabe abgebrochen. Zum Aktivieren erneut CPU-Sensoren … wählen."
+        "CPU-Sensorfreigabe abgebrochen. Aktualisieren fragt erneut."
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:")
         || detail.starts_with("CPU driver access requires")
     {
@@ -93,9 +90,9 @@ pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
         || detail.contains("timed out")
         || detail.contains("request pipe closed")
     {
-        "CPU-Verbindung unterbrochen. Sensoren erneut aktivieren."
+        "CPU-Verbindung unterbrochen. Aktualisieren startet sie neu."
     } else {
-        "CPU-Messung unterbrochen; alte Werte verworfen. Sensoren erneut aktivieren."
+        "CPU-Messung unterbrochen; alte Werte verworfen. Aktualisieren startet sie neu."
     }
 }
 fn cpu_failed(snapshot: &mut Snapshot, detail: String) {
@@ -114,6 +111,7 @@ fn worker(
     shared: Arc<Mutex<Option<Snapshot>>>,
     initially_visible: bool,
     mode_result: Arc<Mutex<Option<String>>>,
+    mut start_cpu_reader: bool,
 ) {
     let mut snapshot = Snapshot {
         inventory: crate::inventory::read(),
@@ -182,6 +180,25 @@ fn worker(
         snapshot.power = omen_platform::power_status();
         snapshot.cpu_reader_pid = hardware.as_ref().map(|r| r.process_id());
         publish(&snapshot);
+        // CPU values need no separate switch: the first visible dashboard
+        // requests the session helper once. A cancelled or failed request is
+        // retried only through Aktualisieren, never in a prompt loop.
+        if start_cpu_reader && hardware.is_none() && visible && !suspended {
+            start_cpu_reader = false;
+            snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
+            publish(&snapshot);
+            match crate::cpu_sensor_bridge::CpuSensorBridge::start() {
+                Ok(reader) => {
+                    hardware = Some(reader);
+                    cpu = None;
+                    continue;
+                }
+                Err(e) => {
+                    cpu_failed(&mut snapshot, e);
+                    publish(&snapshot);
+                }
+            }
+        }
         let request = if visible && !suspended {
             match rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(request) => Some(request),
@@ -200,20 +217,6 @@ fn worker(
         );
         match request {
             Some(Request::Stop) => break,
-            Some(Request::CpuSensors) => {
-                if hardware.is_some() {
-                    hardware = None;
-                    snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-                } else if visible && !suspended {
-                    snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
-                    publish(&snapshot);
-                    match crate::cpu_sensor_bridge::CpuSensorBridge::start() {
-                        Ok(reader) => hardware = Some(reader),
-                        Err(e) => cpu_failed(&mut snapshot, e),
-                    }
-                }
-                cpu = None;
-            }
             Some(Request::ApplyPreset(id)) => {
                 let result =
                     crate::elevation::run(Some(&id), crate::elevation::Action::Apply, || false);
@@ -241,6 +244,7 @@ fn worker(
             }
             Some(Request::Refresh) => {
                 cpu = None;
+                start_cpu_reader = hardware.is_none();
                 snapshot.inventory = crate::inventory::read();
                 nvidia = None;
                 reopen_at = Instant::now();
@@ -360,27 +364,6 @@ unsafe fn redraw(state: &State) {
         if let Some(snapshot) = snapshot {
             let hwnd = GetParent(state.details.get());
             crate::dashboard::update(hwnd, &state.theme, &snapshot);
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-            EnableWindow(
-                state.cpu_sensor.get(),
-                (!matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting)) as i32,
-            );
-            SetWindowTextW(
-                state.cpu_sensor.get(),
-                wide(
-                    if matches!(
-                        snapshot.cpu_hardware_status,
-                        CpuHardwareStatus::Active | CpuHardwareStatus::Paused
-                    ) {
-                        "CPU-Sensoren aus"
-                    } else if matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting) {
-                        "Windows-Freigabe …"
-                    } else {
-                        "CPU-Sensoren …"
-                    },
-                )
-                .as_ptr(),
-            );
         }
     }
 }
@@ -394,7 +377,6 @@ unsafe fn show_dashboard(hwnd: HWND, state: &State) {
             state.details.set(GetDlgItem(hwnd, 180));
             state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
             state.preview.set(GetDlgItem(hwnd, 181));
-            state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
             reload_modes(hwnd, state);
             redraw(state);
         }
@@ -416,7 +398,6 @@ unsafe fn hide_dashboard(hwnd: HWND, state: &State) {
         state.details.set(ptr::null_mut());
         state.profile.set(ptr::null_mut());
         state.preview.set(ptr::null_mut());
-        state.cpu_sensor.set(ptr::null_mut());
     }
 }
 
@@ -459,13 +440,11 @@ unsafe extern "system" fn window_proc(
                 state.details.set(GetDlgItem(hwnd, 180));
                 state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
                 state.preview.set(GetDlgItem(hwnd, 181));
-                state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
                 reload_modes(hwnd, state);
                 if [
                     state.details.get(),
                     state.profile.get(),
                     state.preview.get(),
-                    state.cpu_sensor.get(),
                 ]
                 .iter()
                 .any(|h| h.is_null())
@@ -506,7 +485,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 960, y: 790 };
+                info.ptMinTrackSize = POINT { x: 960, y: 700 };
                 0
             }
             WM_COMMAND => {
@@ -519,9 +498,6 @@ unsafe extern "system" fn window_proc(
                 if id == REFRESH {
                     reload_modes(hwnd, state);
                     let _ = state.tx.send(Request::Refresh);
-                }
-                if id == CPU_SENSORS {
-                    let _ = state.tx.send(Request::CpuSensors);
                 }
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
@@ -704,13 +680,13 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None, [1140, 820])
+    run_window(start_in_tray, None, [1140, 730])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path), [1140, 820])
+    run_window(false, Some(path), [1140, 730])
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
-    if size[0] < 960 || size[1] < 790 || size[0] > 2000 || size[1] > 1400 {
+    if size[0] < 960 || size[1] < 700 || size[0] > 2000 || size[1] > 1400 {
         return Err("Preview size outside dashboard bounds".into());
     }
     run_window(false, Some(path), size)
@@ -728,7 +704,6 @@ fn run_window(
         details: Cell::new(ptr::null_mut()),
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
-        cpu_sensor: Cell::new(ptr::null_mut()),
         tray: Cell::new(false),
         taskbar_message: 0,
         theme: crate::theme::Theme::new(),
@@ -742,7 +717,6 @@ fn run_window(
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
     unsafe {
-        SetProcessDPIAware();
         let instance = GetModuleHandleW(ptr::null());
         let class_name = wide("OmenHubPlusPlusWindow");
         let class = WNDCLASSW {
@@ -782,8 +756,18 @@ fn run_window(
         let initially_visible = !start_in_tray || !state.tray.get();
         let worker_hwnd = hwnd as usize;
         let mode_result = state.mode_result.clone();
-        let worker =
-            thread::spawn(move || worker(worker_hwnd, rx, shared, initially_visible, mode_result));
+        // Previews never request Windows approval.
+        let auto_cpu = preview.is_none();
+        let worker = thread::spawn(move || {
+            worker(
+                worker_hwnd,
+                rx,
+                shared,
+                initially_visible,
+                mode_result,
+                auto_cpu,
+            )
+        });
         let power_registration = RegisterPowerSettingNotification(
             hwnd,
             &GUID_ACDC_POWER_SOURCE,
@@ -859,47 +843,21 @@ mod tests {
             )
             .contains("abgebrochen")
         );
-        assert!(cpu_error_message("CPU reader disconnected").contains("erneut aktivieren"));
+        assert!(cpu_error_message("CPU reader disconnected").contains("Aktualisieren"));
     }
     #[test]
-    fn cpu_status_distinguishes_energy_baseline_and_mean_with_tctl_provenance() {
-        let hardware = omen_core::CpuHardwareSample {
-            schema: 1,
-            source: omen_core::CpuHardwareSource::PawnioAmdRapl,
-            temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
-            package_power_w: Some(55.0),
-            temperature_c: Some(82.0),
-            power_interval_ms: Some(1100),
-            warnings: vec![],
-        };
+    fn cpu_status_line_is_empty_while_measuring_and_explains_other_states() {
         let mut snapshot = Snapshot {
-            cpu: Some(omen_core::CpuSample {
-                windows_clock_mhz: Some(2400),
-                package_power_w: hardware.package_power_w,
-                temperature_c: hardware.temperature_c,
-                hardware: Some(hardware),
-                ..Default::default()
-            }),
+            cpu: Some(omen_core::CpuSample::default()),
             cpu_hardware_status: CpuHardwareStatus::Active,
             ..Default::default()
         };
-        let report = crate::dashboard::cpu_detail(&snapshot);
-        assert!(report.contains("Mittelwert über 1.10 s"));
-        assert!(report.contains("Temperatur: Tctl"));
-        assert!(report.contains("Quelle: CPU-Energiezähler und Tctl über PawnIO"));
-        snapshot
-            .cpu
-            .as_mut()
-            .unwrap()
-            .hardware
-            .as_mut()
-            .unwrap()
-            .power_interval_ms = None;
-        let baseline = crate::dashboard::cpu_detail(&snapshot);
-        assert!(baseline.contains("Energie-Baseline"));
-        assert!(!baseline.contains("Mittelwert über"));
-        snapshot.cpu = Some(omen_core::CpuSample::default());
+        assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Paused;
+        assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
         snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-        assert!(crate::dashboard::cpu_detail(&snapshot).contains("nicht aktiviert"));
+        assert!(crate::dashboard::cpu_detail(&snapshot).contains("Aktualisieren"));
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
+        assert!(crate::dashboard::cpu_detail(&snapshot).contains("Windows-Freigabe"));
     }
 }

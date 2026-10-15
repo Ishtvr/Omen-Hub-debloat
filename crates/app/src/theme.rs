@@ -318,6 +318,7 @@ unsafe fn font(height: i32, weight: i32) -> HFONT {
         let mut f: LOGFONTW = std::mem::zeroed();
         f.lfHeight = -height;
         f.lfWeight = weight;
+        f.lfQuality = CLEARTYPE_QUALITY;
         for (a, b) in f.lfFaceName.iter_mut().zip(wide("Segoe UI")) {
             *a = b;
         }
