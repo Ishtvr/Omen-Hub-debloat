@@ -80,7 +80,7 @@ pub fn error(hwnd: HWND) -> String {
 }
 pub fn set(hwnd: HWND, model: Option<Curve>) {
     if let Some(s) = unsafe { state(hwnd) } {
-        s.viewport.set(model.as_ref().map(Viewport::fit));
+        s.viewport.set(model.as_ref().map(Viewport::initial));
         *s.drag.borrow_mut() = None;
         s.hover.set(None);
         *s.model.borrow_mut() = model;
