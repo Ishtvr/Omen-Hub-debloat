@@ -201,6 +201,62 @@ fn deliver_result(hwnd: HWND, result: Result<bool, String>) {
         }
     }
 }
+/// Fan curves: right-click adds a point on free space or deletes the clicked one.
+fn fan_menu(hwnd: HWND, l: LPARAM) {
+    let Some(s) = (unsafe { state(hwnd) }) else {
+        return;
+    };
+    finish_drag(hwnd, true);
+    let (x, y) = coordinate(l);
+    let target = {
+        let model = s.model.borrow();
+        let Some(c) = model.as_ref().filter(|c| c.kind != Kind::Gpu) else {
+            return;
+        };
+        let g = geometry(hwnd, c);
+        if let Some(i) = nearest(g, c, x, y) {
+            Err(i)
+        } else if (g.area.left..=g.area.right).contains(&x)
+            && (g.area.top..=g.area.bottom).contains(&y)
+        {
+            Ok(g.data(x, y))
+        } else {
+            return;
+        }
+    };
+    const ADD: usize = 1;
+    const DELETE: usize = 2;
+    let chosen = unsafe {
+        let menu = CreatePopupMenu();
+        let (id, label) = match target {
+            Ok(_) => (ADD, "Neuen Punkt hinzufügen"),
+            Err(_) => (DELETE, "Punkt löschen"),
+        };
+        AppendMenuW(menu, MF_STRING, id, wide(label).as_ptr());
+        let mut point = POINT { x, y };
+        ClientToScreen(hwnd, &mut point);
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            0,
+            hwnd,
+            ptr::null(),
+        ) as usize;
+        DestroyMenu(menu);
+        chosen
+    };
+    let result = match (chosen, target) {
+        (ADD, Ok(at)) => mutate(hwnd, |c| c.insert_at(at).map(|_| true)),
+        (DELETE, Err(i)) => mutate(hwnd, |c| {
+            c.select(i, false);
+            c.remove().map(|_| true)
+        }),
+        _ => return,
+    };
+    deliver_result(hwnd, result);
+}
 fn modifiers(s: &State, mouse: usize) -> Modifiers {
     let keys = s.modifiers.get();
     Modifiers {
@@ -466,6 +522,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             }
             WM_CAPTURECHANGED => {
                 finish_drag(hwnd, false);
+                0
+            }
+            WM_RBUTTONUP => {
+                fan_menu(hwnd, l);
                 0
             }
             WM_LBUTTONDBLCLK => {
@@ -782,10 +842,20 @@ unsafe fn draw(
                 SelectObject(dc, old);
                 DeleteObject(pen);
             }
+            // Fan curves draw only the current line; the loaded line would linger
+            // behind added or removed points.
+            let reference: &[DataPoint] = if curve.kind == Kind::Gpu {
+                curve.reference()
+            } else {
+                &[]
+            };
             for (nodes, color, style) in [
-                (curve.reference(), REFERENCE, PS_DOT),
+                (reference, REFERENCE, PS_DOT),
                 (&curve.points[..], DRAFT, PS_SOLID),
             ] {
+                if nodes.is_empty() {
+                    continue;
+                }
                 let points = nodes.iter().map(|p| g.screen(*p)).collect::<Vec<_>>();
                 let pen = CreatePen(style, 1, color);
                 let old = SelectObject(dc, pen);
@@ -902,7 +972,11 @@ unsafe fn draw(
                 dc,
                 g.area.left,
                 rect.bottom - 21,
-                "Quadrate: Entwurf   ·   Gepunktet: beim Laden",
+                if curve.kind == Kind::Gpu {
+                    "Quadrate: Entwurf   ·   Gepunktet: beim Laden"
+                } else {
+                    "Rechtsklick: Punkt hinzufügen oder löschen   ·   Entf: ausgewählten Punkt löschen"
+                },
             );
         } else {
             label(

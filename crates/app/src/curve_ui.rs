@@ -61,6 +61,7 @@ const FIT: usize = 525;
 const HELP: usize = 526;
 const FOCUS: usize = 527;
 const KINDS: [Kind; 3] = [Kind::Gpu, Kind::CpuFan, Kind::GpuFan];
+const FAN_TITLE: &str = "Omen Hub++ – Lüfterkurve (CPU + GPU)";
 #[derive(Clone)]
 struct Row {
     curve: Option<Curve>,
@@ -482,9 +483,31 @@ fn mode(s: &State, index: usize, capture: bool) {
     plot::set(c.canvas, row.curve.clone());
     sync(s);
 }
+/// Shows a message in the status line, or as a box in the fan window, which
+/// has no status line.
+fn report(hwnd: HWND, s: &State, message: &str) {
+    if s.fans_merged {
+        unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(message).as_ptr(),
+                wide("Lüfterkurve").as_ptr(),
+                MB_OK | MB_ICONWARNING,
+            );
+        }
+    } else if let Some(c) = s.controls.get() {
+        text(c.status, message);
+    }
+}
 fn dirty(s: &State) {
     s.dirty.set(true);
     if let Some(c) = s.controls.get() {
+        if s.fans_merged {
+            text(
+                unsafe { GetParent(c.canvas) },
+                &format!("{FAN_TITLE} · ungespeichert"),
+            );
+        }
         text(
             c.status,
             if s.draft {
@@ -513,7 +536,7 @@ fn edit(s: &State, action: impl FnOnce(&mut Curve) -> Result<bool, String>) {
             }
             sync(s);
         }
-        Err(e) => text(c.status, &e),
+        Err(e) => report(unsafe { GetParent(c.canvas) }, s, &e),
     }
 }
 fn dispatch(s: &State, request: Request, status: &str) {
@@ -536,6 +559,9 @@ fn show(s: &State, mut view: View, status: &str) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    if s.fans_merged {
+        text(unsafe { GetParent(c.canvas) }, FAN_TITLE);
+    }
     if s.fans_merged && !view.rows[1].enabled && view.rows[2].enabled {
         // A profile with only a GPU fan curve opens with that curve as the shared one.
         if let Some(curve) = view.rows[2]
@@ -632,8 +658,11 @@ fn layout(hwnd: HWND, s: &State) {
         unsafe {
             ShowWindow(c.open, SW_SHOW);
             ShowWindow(c.help, if s.draft { SW_SHOW } else { SW_HIDE });
+            // The fan window has no status line; errors use a message box.
+            ShowWindow(c.status, if s.fans_merged { SW_HIDE } else { SW_SHOW });
+            let chart_bottom = if s.fans_merged { 70 } else { 104 };
             for (handle, b) in [
-                (c.canvas, [8, 8, w - 16, h - 104]),
+                (c.canvas, [8, 8, w - 16, h - chart_bottom]),
                 (c.status, [20, h - 92, w - 40, 30]),
                 (c.save, [20, h - 54, 150, 36]),
                 (c.undo, [182, h - 54, 150, 36]),
@@ -968,9 +997,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         Update::View(v, status) => show(s, *v, &status),
                         Update::Error(e) => {
                             s.busy.set(false);
-                            if let Some(c) = s.controls.get() {
-                                text(c.status, &e);
-                            }
+                            report(hwnd, s, &e);
                             enabled(s);
                         }
                     }
@@ -981,7 +1008,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 if let Some(c) = s.controls.get() {
                     if l == c.canvas as isize {
                         if w == 2 {
-                            text(c.status, &plot::error(c.canvas));
+                            report(hwnd, s, &plot::error(c.canvas));
                         } else {
                             if w == 1 {
                                 if let Some(v) = s.view.borrow_mut().as_mut() {
@@ -1368,7 +1395,7 @@ fn run_editor(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
             wide(match fans {
-                Some(true) => "Omen Hub++ – Lüfterkurve (CPU + GPU)",
+                Some(true) => FAN_TITLE,
                 Some(false) => "Omen Hub++ – GPU-Leistungskurve",
                 None => "Omen Hub++ – GPU- und Lüfterkurven",
             })
