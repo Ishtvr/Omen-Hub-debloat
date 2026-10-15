@@ -149,6 +149,33 @@ impl HpBios {
         };
         self.invoke(&contract, &[raw, 0, 0, 0]).map(|_| ())
     }
+    /// `PerformanceControlHelper.SetSwFanControlLevel`: CPU and GPU fan levels in
+    /// 100-RPM units at bytes 0 and 1 of a 128-byte buffer (`0x2E`).
+    pub(super) fn set_fan_levels(&self, cpu: u8, gpu: u8) -> WMIResult<()> {
+        let mut bytes = [0u8; 128];
+        bytes[0] = cpu;
+        bytes[1] = gpu;
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type: 0x2E,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &bytes).map(|_| ())
+    }
+    /// `OmenHsaClient.GetNumOfFan` (`0x10`): the Hub's 30-second heartbeat. Byte 1
+    /// carries BIOS protection flags (bit 0 over-current, bit 1 over-temperature).
+    pub(super) fn heartbeat(&self) -> WMIResult<u8> {
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type: 0x10,
+            input: &[0; 4],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, contract.input).map(|(_, b)| b[1])
+    }
     /// The three fixed 4-byte performance-mode SETs used by the Hub (0x1A,
     /// 0x22, 0x29). The caller passes only a type from `omen_core::hp_mode`.
     fn set_mode_payload(&self, command_type: u32, bytes: [u8; 4]) -> WMIResult<()> {

@@ -353,6 +353,53 @@ impl ProfileStore {
             Ok(None)
         }
     }
+    /// The shared fan curve the background fan service follows. Absent means
+    /// the BIOS keeps automatic fan control.
+    pub fn save_active_fan_curve(
+        &self,
+        points: &[omen_core::profiles::FanPoint],
+    ) -> Result<(), String> {
+        omen_core::profiles::Setting {
+            feature: omen_core::features::Feature::CpuFanCurve,
+            value: omen_core::profiles::Value::FanCurve(points.to_vec()),
+        }
+        .validate()?;
+        atomic_json(
+            &self.root.join("active-fan-curve.json"),
+            &serde_json::json!({"schema": 1, "points": points}),
+        )
+    }
+    pub fn active_fan_curve(&self) -> Result<Option<Vec<omen_core::profiles::FanPoint>>, String> {
+        let path = self.root.join("active-fan-curve.json");
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        let value: serde_json::Value = read_json(&path)?;
+        if value["schema"] != 1 {
+            return Err("Unknown fan curve schema".into());
+        }
+        serde_json::from_value(value["points"].clone())
+            .map(Some)
+            .map_err(|e| e.to_string())
+    }
+    pub fn clear_active_fan_curve(&self) -> Result<(), String> {
+        let path = self.root.join("active-fan-curve.json");
+        if path.try_exists().map_err(|e| e.to_string())? {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    pub fn save_fan_status<T: Serialize>(&self, value: &T) -> Result<(), String> {
+        atomic_json(&self.root.join("fan-service-status.json"), value)
+    }
+    pub fn fan_status(&self) -> Result<Option<serde_json::Value>, String> {
+        let path = self.root.join("fan-service-status.json");
+        if path.try_exists().map_err(|e| e.to_string())? {
+            read_json(&path).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {

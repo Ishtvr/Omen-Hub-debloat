@@ -4,6 +4,7 @@ mod cooling;
 mod cpu;
 mod cpu_hardware;
 mod cpu_tuning;
+mod fan_service;
 mod gpu;
 mod hp;
 mod lighting;
@@ -19,6 +20,7 @@ pub use controller::{Controller, RestoreState};
 pub use cooling::{FanReport, MaxFanImage, read_hp_fans};
 pub use cpu::Cpu;
 pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
+pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
 pub use hp::{
     HpModeReport, apply_hp_mode, read_hp_gpu_status, read_hp_graphics_mode, read_hp_keyboard_state,
