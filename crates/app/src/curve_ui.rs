@@ -6,7 +6,7 @@ use crate::{
 use omen_core::{
     curve_editor::{Curve, Kind, Point},
     features::Feature,
-    profiles::{DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting},
+    profiles::{DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
     transaction::Backend,
 };
 use omen_platform::{Controller, profile_store::ProfileStore};
@@ -293,6 +293,8 @@ struct State {
     background: Cell<HBRUSH>,
     surface: Cell<HBRUSH>,
     theme: crate::theme::Theme,
+    draft: bool,
+    draft_result: RefCell<Option<Value>>,
 }
 fn selected(s: &State) -> Option<String> {
     s.view
@@ -391,7 +393,7 @@ fn enabled(s: &State) {
         EnableWindow(c.save, (view.is_some() && !s.busy.get()) as i32);
         EnableWindow(
             c.open,
-            (selected(s).is_some() && !s.dirty.get() && !s.busy.get()) as i32,
+            (s.draft || (selected(s).is_some() && !s.dirty.get() && !s.busy.get())) as i32,
         );
     }
 }
@@ -448,7 +450,11 @@ fn dirty(s: &State) {
     if let Some(c) = s.controls.get() {
         text(
             c.status,
-            "Ungespeicherter Entwurf. Ziehen und Tastatur ändern nur die Kurve; Speichern ändert keine Hardware.",
+            if s.draft {
+                "Kurvenentwurf geändert · Im Preset speichern."
+            } else {
+                "Ungespeicherter Entwurf. Ziehen und Tastatur ändern nur die Kurve; Speichern ändert keine Hardware."
+            },
         );
     }
     enabled(s);
@@ -581,17 +587,38 @@ fn layout(hwnd: HWND, s: &State) {
         {
             boxes.push((*handle, [20 + slot as i32 * 155, 14, 150, 28]));
         }
+        if s.draft {
+            unsafe {
+                ShowWindow(c.open, SW_SHOW);
+            }
+            boxes.push((c.open, [180, 14, 140, 30]));
+        }
         unsafe {
             for (handle, b) in boxes {
                 MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
             }
         }
-        text(c.focus, "Profil / Werte …");
+        text(
+            c.focus,
+            if s.draft {
+                "Werte …"
+            } else {
+                "Profil / Werte …"
+            },
+        );
         return;
     }
-    text(c.focus, "Diagrammansicht");
-    let plot_height = (h - 417).max(200);
-    let bottom = 202 + plot_height;
+    text(
+        c.focus,
+        if s.draft {
+            "Diagramm"
+        } else {
+            "Diagrammansicht"
+        },
+    );
+    let plot_top = if s.draft { 128 } else { 202 };
+    let plot_height = (h - if s.draft { 343 } else { 417 }).max(200);
+    let bottom = plot_top + plot_height;
     let mut boxes = vec![
         (c.profiles, [20, 54, 290, 240]),
         (c.name, [326, 54, w - 510, 32]),
@@ -604,7 +631,7 @@ fn layout(hwnd: HWND, s: &State) {
         (c.focus, [w - 155, 14, 135, 30]),
         (c.include, [580, 104, w - 600, 28]),
         (c.source, [20, 142, w - 40, 50]),
-        (c.canvas, [20, 202, w - 40, plot_height]),
+        (c.canvas, [20, plot_top, w - 40, plot_height]),
         (c.points, [20, bottom + 12, w - 40, 240]),
         (c.xlabel, [20, bottom + 55, 176, 28]),
         (c.x, [200, bottom + 52, 100, 32]),
@@ -640,14 +667,32 @@ fn layout(hwnd: HWND, s: &State) {
         if s.mode.get() != 0 {
             MoveWindow(c.reset, 340, bottom + 96, 180, 34, 1);
         }
+        if s.draft {
+            for handle in [c.profiles, c.name, c.new, c.reload, c.include] {
+                ShowWindow(handle, SW_HIDE);
+            }
+            for handle in c.modes {
+                ShowWindow(handle, SW_HIDE);
+            }
+            MoveWindow(c.save, 20, 14, 150, 34, 1);
+            MoveWindow(c.undo, 186, 14, 125, 30, 1);
+            MoveWindow(c.redo, 325, 14, 135, 30, 1);
+            MoveWindow(c.source, 20, 54, w - 40, 50, 1);
+        }
     }
 }
-fn help(hwnd: HWND) {
+fn help(hwnd: HWND, draft: bool) {
     let message = "GPU-Kurve\r\nZiehen: Punkt oder ausgewählten Bereich vertikal verschieben.\r\nShift + Punkt ziehen: geladene Ausgangskurve/Auswahl verschieben.\r\nAlt + Punkt ziehen: aktuellen Entwurf/Auswahl gleichmäßig verschieben.\r\nStrg + Punkt ziehen: Kurve um den gegenüberliegenden Randpunkt neigen.\r\nShift + Ziehen im freien Diagramm: Spannungsbereich auswählen.\r\nShift + Links/Rechts: Auswahl erweitern. Strg + A: alle Punkte.\r\nShift + Enter: Auswahl abflachen; ohne Auswahl Plateau ab dem Punkt.\r\nEsc oder Doppelklick: Auswahl aufheben; Esc beim Ziehen: abbrechen.\r\n\r\nGemeinsame Bedienung\r\nLinks/Rechts: Punkt wählen. Oben/Unten: 1 MHz bzw. 1 %.\r\nStrg + Oben/Unten: 10 Schritte. Enter: Zahlenfeld bearbeiten.\r\nStrg + Z: Rückgängig. Strg + Y / Strg + Shift + Z: Wiederholen.\r\nStrg + D: geladenen Entwurf zurücksetzen. Strg + S: Profil speichern.\r\nMausrad oder +/−: Spannung/Temperatur zoomen. Strg: Y-Achse.\r\nShift + Mausrad: horizontal verschieben. Strg + 0: ganze Kurve.\r\n\r\nLüfter\r\nStrg + Links/Rechts: Temperatur bearbeiten. Shift: größere Schritte.\r\nEinfg/Entf: Punkt hinzufügen/entfernen. Separate CPU-/GPU-Kurven.\r\n\r\nSpeichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.\r\nLüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner sind noch nicht verfügbar.";
+    let message = if draft {
+        message.replace("Strg + S: Profil speichern.", "Strg + S: Kurve in den Preset-Entwurf übernehmen.")
+            .replace("Speichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.", "Übernehmen ändert nur den Preset-Entwurf. Erst dort speichern und ausdrücklich anwenden.")
+    } else {
+        message.to_string()
+    };
     unsafe {
         MessageBoxW(
             hwnd,
-            wide(message).as_ptr(),
+            wide(&message).as_ptr(),
             wide("Kurveneditor – Tastenkürzel").as_ptr(),
             MB_OK | MB_ICONINFORMATION,
         );
@@ -876,6 +921,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 if s.rendering.get() || s.busy.get() {
                     return 0;
                 }
+                if s.draft && matches!(id, NAME | SELECT | NEW | RELOAD | INCLUDE) {
+                    return 0;
+                }
                 let Some(c) = s.controls.get() else {
                     return 0;
                 };
@@ -930,7 +978,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             0,
                         );
                     }
-                    HELP => help(hwnd),
+                    HELP => help(hwnd, s.draft),
                     FOCUS => {
                         s.graph_only.set(!s.graph_only.get());
                         layout(hwnd, s);
@@ -995,6 +1043,19 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }),
                     SAVE => {
                         sync(s);
+                        if s.draft {
+                            match plot::curve(c.canvas)
+                                .ok_or_else(|| "GPU-Kurve nicht verfügbar.".to_string())
+                                .and_then(|curve| curve.value())
+                            {
+                                Ok(value) => {
+                                    *s.draft_result.borrow_mut() = Some(value);
+                                    DestroyWindow(hwnd);
+                                }
+                                Err(error) => text(c.status, &error),
+                            }
+                            return 0;
+                        }
                         let view = s.view.borrow();
                         if let Some(v) = view.as_ref() {
                             match input(c.name) {
@@ -1015,6 +1076,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                 Err(e) => text(c.status, &e),
                             }
                         }
+                    }
+                    OPEN if s.draft => {
+                        DestroyWindow(hwnd);
                     }
                     OPEN if !s.dirty.get() => {
                         if let Some(id) = selected(s) {
@@ -1047,6 +1111,28 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
 }
 pub fn preview(kind: &str, path: &Path) -> Result<(), String> {
+    if matches!(kind, "gpu-draft" | "gpu-draft-small" | "gpu-draft-controls") {
+        let view = load(None)?;
+        let curve = view.rows[0]
+            .curve
+            .clone()
+            .ok_or_else(|| view.rows[0].source.clone())?;
+        let small = kind == "gpu-draft-small";
+        return run_editor(
+            None,
+            Some(Preview {
+                path: path.into(),
+                mode: 0,
+                regular: kind == "gpu-draft-controls",
+                width: if small { 960 } else { 1380 },
+                height: if small { 710 } else { 940 },
+                example: false,
+            }),
+            Some(false),
+            Some((ptr::null_mut(), curve, view.binding)),
+        )
+        .map(|_| ());
+    }
     let preview = match kind {
         "gpu-window" | "gpu-example" => Some((0, false, 1380, 940)),
         "gpu-small" => Some((0, false, 960, 710)),
@@ -1100,11 +1186,31 @@ pub fn run_gpu(id: Option<String>) -> Result<(), String> {
 pub fn run_fans(id: Option<String>) -> Result<(), String> {
     run_window(id, None, Some(true))
 }
+/// Edit an owned, validated curve in memory. No profile file or hardware write;
+/// the caller decides when to save the surrounding preset.
+pub fn edit_gpu_draft(
+    owner: HWND,
+    curve: Curve,
+    binding: DeviceBinding,
+) -> Result<Option<Value>, String> {
+    if curve.kind != Kind::Gpu {
+        return Err("GPU-Kurve erwartet.".into());
+    }
+    run_editor(None, None, Some(false), Some((owner, curve, binding)))
+}
 fn run_window(
     id: Option<String>,
     preview: Option<Preview>,
     fans: Option<bool>,
 ) -> Result<(), String> {
+    run_editor(id, preview, fans, None).map(|_| ())
+}
+fn run_editor(
+    id: Option<String>,
+    preview: Option<Preview>,
+    fans: Option<bool>,
+    draft: Option<(HWND, Curve, DeviceBinding)>,
+) -> Result<Option<Value>, String> {
     if let Some(id) = &id {
         omen_core::profiles::validate_id(id)?;
     }
@@ -1133,6 +1239,8 @@ fn run_window(
         graph_only: Cell::new(preview.as_ref().is_none_or(|p| !p.regular)),
         background: Cell::new(unsafe { CreateSolidBrush(plot::BACKGROUND) }),
         surface: Cell::new(unsafe { CreateSolidBrush(plot::SURFACE) }),
+        draft: draft.is_some(),
+        draft_result: RefCell::new(None),
     });
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
@@ -1142,8 +1250,10 @@ fn run_window(
         registration.hInstance = instance;
         registration.lpszClassName = class.as_ptr();
         registration.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
-        registration.hbrBackground = state.background.get();
-        if RegisterClassW(&registration) == 0 {
+        // Every instance paints its own client. No class brush may outlive the
+        // first modal editor, which can be reopened in the same preset process.
+        registration.hbrBackground = ptr::null_mut();
+        if RegisterClassW(&registration) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let hwnd = CreateWindowExW(
@@ -1160,7 +1270,7 @@ fn run_window(
             CW_USEDEFAULT,
             preview.as_ref().map_or(1380, |p| p.width),
             preview.as_ref().map_or(940, |p| p.height),
-            ptr::null_mut(),
+            draft.as_ref().map_or(ptr::null_mut(), |d| d.0),
             ptr::null_mut(),
             instance,
             (&*state as *const State).cast(),
@@ -1176,9 +1286,43 @@ fn run_window(
             (&dark as *const i32).cast(),
             size_of::<i32>() as u32,
         );
-        let thread = thread::spawn(move || worker(handle, requests, updates));
+        let thread = if let Some((_, curve, binding)) = draft {
+            let rows = std::array::from_fn(|i| {
+                Row {
+                curve: if i == 0 { Some(curve.clone()) } else { None },
+                enabled: i == 0,
+                source: "GPU-Spannungsanker sind fest. Übernehmen ändert nur den Preset-Entwurf; keine Hardwareänderung.".into(),
+            }
+            });
+            show(
+                &state,
+                View {
+                    profiles: vec![],
+                    selected: None,
+                    binding,
+                    rows,
+                },
+                "Kurvenentwurf · Speichern erfolgt im Preset.",
+            );
+            if let Some(c) = state.controls.get() {
+                text(c.save, "Übernehmen");
+                text(c.open, "Abbrechen");
+            }
+            if preview.is_some() {
+                PostMessageW(hwnd, UPDATE, 0, 0);
+            }
+            None
+        } else {
+            let thread = thread::spawn(move || worker(handle, requests, updates));
+            dispatch(&state, Request::Load(id), "Kurven werden gelesen …");
+            Some(thread)
+        };
         ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });
-        dispatch(&state, Request::Load(id), "Kurven werden gelesen …");
+        if state.draft {
+            if let Some(c) = state.controls.get() {
+                SetFocus(c.canvas);
+            }
+        }
         let mut msg: MSG = std::mem::zeroed();
         let mut preview_error = None;
         let result = loop {
@@ -1191,7 +1335,7 @@ fn run_window(
                 continue;
             }
             if msg.message == WM_KEYDOWN && msg.wParam == 0x70 {
-                help(hwnd);
+                help(hwnd, state.draft);
                 continue;
             }
             if IsDialogMessageW(hwnd, &msg) == 0 {
@@ -1243,7 +1387,7 @@ fn run_window(
             }
         };
         let _ = state.tx.send(Request::Stop);
-        if thread.is_finished() {
+        if let Some(thread) = thread.filter(|thread| thread.is_finished()) {
             let _ = thread.join();
         }
         if !state.font.get().is_null() {
@@ -1256,7 +1400,7 @@ fn run_window(
         } else if result < 0 {
             Err(std::io::Error::last_os_error().to_string())
         } else {
-            Ok(())
+            Ok(state.draft_result.borrow().clone())
         }
     }
 }

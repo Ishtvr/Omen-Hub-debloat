@@ -1,6 +1,6 @@
 # Native GPU- und Lüfterkurven
 
-Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet nur die GPU-Kurve des gespeicherten Presets (`gpu-curve-ui [profil-id]`). Der kombinierte CLI-Einstieg `curve-ui [profil-id]` bleibt kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
+Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet einen eigenen Chart auf dem aktuellen Preset-Entwurf, auch ohne Namen oder vorheriges Save. Übernehmen gibt die Kurve an das Preset zurück; Abbrechen verwirft diese Bearbeitung. Beide schreiben weder Profil-Datei noch Hardware. Der eigenständige gespeicherte GPU-Editor (`gpu-curve-ui [profil-id]`) und der kombinierte CLI-Einstieg (`curve-ui [profil-id]`) bleiben kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
 
 Standardmäßig öffnet sich die dunkle **Diagrammansicht** mit großer Kurve, Kurvenauswahl, Speichern, Rückgängig/Wiederholen, Hilfe und Zoom. **Profil / Werte …** öffnet Profilauswahl, Namen, Punktauswahl und Zahlenfelder; **Diagrammansicht** wechselt zurück. Enter im Diagramm öffnet diese Ansicht und fokussiert den Y-Wert des ausgewählten Punkts.
 

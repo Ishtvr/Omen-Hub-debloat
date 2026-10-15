@@ -330,6 +330,30 @@ Das 50-MB-Traybudget ist in dieser Stichprobe eingehalten. Kein Working-Set-Trim
 
 Die technischen Workflows stehen in [CUSTOM_PRESETS.md](CUSTOM_PRESETS.md) und [KEYBOARD_UI.md](KEYBOARD_UI.md). Private Raw-/Probe-Dateien, Ghidra-Projekt und Captures bleiben ignoriert; versioniert werden Originalcode und diese kompakten Befunde.
 
+## Bereinigtes GPU-Menü und V/F-Chart aus Preset-Entwürfen — 15. Oktober, 21:59…22:04 CEST
+
+Finaler Release: **2055168 Bytes**, SHA-256 **`E55DB62F434ABD80259E1DFB6C20CB49404CFBB0511EC3EF94266748F2BB6567`**. **87 Workspace-Tests (66 Core / 18 Platform / 3 App)**, Formatcheck, Clippy über alle Targets ohne Warnungen und Release-Build bestehen. Die sechs neuen CPU-/Windows-Features des vorigen Builds bleiben im 91-Schlüssel-Schema; dieser Fix erweitert keine Hardwarefreigabe.
+
+Die frische lesende GPU-Prüfung auf 8E35/F.13 / RTX 5070 Laptop / 617.14 bestätigt V/F, VRAM-Offset und den bereits qualifizierten Max-Fan-Pfad. Der globale Core-Offset ist bei der derzeit aktiven nicht uniformen V/F-Kurve gesperrt, obwohl NVML den globalen Wert 0 meldet; er bleibt als grundsätzlich qualifizierte Funktion mit **V/F-Kurve aktiv** erhalten. Direkte GPU-/VRAM-Spannung und Spannungslimit, Power-/Temperatur-/Locked-Clock-/cTGP-/Dynamic-Boost-/HP-Modusregler sowie der FPS-Platzhalter wurden aus der GPU-Gruppe entfernt. Dies beschreibt die fehlende nutzbare Implementierung auf dem geprüften Gerät und behauptet keine generelle Hardware-Unmöglichkeit auf allen Notebooks.
+
+Die Chartursache war die Bedingung **gespeichertes und unverändertes Preset**: Das Anhaken von V/F machte den Entwurf dirty und deaktivierte Bearbeiten; ohne gespeicherte ID startete auch der bisherige Child-Pfad nicht. Der neue eigene Editor verwendet dasselbe vollständige native Kurvenmodell im Speicher, ohne Datei-/Hardwareworker. **Übernehmen** gibt die Kurve an den bestehenden Preset-Entwurf zurück, **Abbrechen** verwirft nur diese Chartbearbeitung. Das Besitzerfenster ist währenddessen gesperrt; nach Rückkehr bleiben Name und andere Entwurfswerte erhalten. Erst der ausdrückliche Parent-Save persistiert. Wiederholtes Öffnen benötigt keinen neuen Prozess und verliert den ursprünglichen Preset-Message-Loop nicht.
+
+| Finaler nativer Test | Tatsächlicher Nachweis |
+| --- | --- |
+| `smoke-preset-curve-ui.ps1`, 21:59:57 | Chart über das echte Control bei neuem unbenanntem Preset öffnen; erste Frequenz als Metadatum ändern und abbrechen; danach ursprünglicher Entwurf erhalten |
+| Derselbe Test | V/F anhaken und anderes dirty Feld ändern; Chart bleibt verfügbar. Kurvenänderung übernehmen, erneut öffnen und alle 127 Punkte behalten. Name/VRAM bleiben gleich, vor Parent-Save entsteht keine Profil-Datei |
+| Derselbe Test | Ein bereits gespeichertes Preset mit dirty Namen öffnet/abbricht ebenfalls ohne Dateischreiben. Parent-Save speichert Kurve/VRAM exakt |
+| Derselbe Test | Alle zwölf entfernten Alt-Schlüssel laden, beim Öffnen Datei hashgleich behalten, erst bei Save bereinigen; vollständige Kurve und versteckte Beleuchtungswerte erhalten |
+| `smoke-presets-ui.ps1`, 21:59:59 | Exakte W/mW, konfliktprüfender Merge, A→B→Nein-Identität, archiviertes Delete, gesperrtes unsupported Apply/Startup und unveränderte Hardwaremetadaten |
+| `smoke-curves-ui.ps1`, 22:00:04 | Bestehende Maus-/Tastatur-/Shift-/Bereichsgesten, feste Spannungsanker, History/Zoom und getrennte Lüfterentwürfe im eigenständigen Editor |
+| `smoke-controls-navigation.ps1`, 22:00:05 | Default-/Custom-Dropdown, getrennte GPU-/Fan-Einstiege, Scrollseiten/Thumb-Drag und sauberer Exit |
+
+Alle vier Tests bestehen mit dem finalen Hash. Programmierte GPU-Indizes, Spannungsanker und Deltas sowie Performance-/Beleuchtungsjournal und Startup-Dateien blieben beim neuen Draft-Test unverändert. Es wurde kein GPU-/Power-/Voltage-Setter, Max-Fan-Apply, Dienststopp oder Treiber-/Firmwareeingriff ausgeführt. Teständerungen betrafen nur eigene temporäre Profile; die alten Benutzervorgaben werden erst bei deren ausdrücklichem Save bereinigt.
+
+Die fünf finalen gültigen Produktions-Clientrenders unter `.impeccable/review/gpu-controls-fix/` wurden in begrenzten Batches geöffnet: GPU-Gruppe **1084×861 / 904×681**, Chart **1364×901 / 944×671**, numerischer Draft-Editor **1364×901**. Ein unabhängiger frischer Impeccable-Finish-Reviewer gab **ship**, ohne materielle Fixes, für diese Ansichten und gesampelte Quell-/Testbelege. Dies ist keine unabhängige Hardwareprüfung oder vollständige Titlebar-/DPI-/Barrierefreiheitszertifizierung. Das bestehende Theme wurde erhalten, kein HTML/CSS-Detektor für den nativen Build ausgeführt.
+
+Eine neue **30-Sekunden-Kalt-Trayprobe um 22:04:08 CEST** derselben Binary ergab **13,13 MiB Working Set / 2,19 MiB Private Memory**, verborgen, antwortend und **0 s CPU-Zuwachs nach den ersten fünf Sekunden**. Kein Working-Set-Trim. Das ist eine Kaltprobe ohne freigegebenen CPU-Helper; die frühere kombinierte **27,30-MB**-Messung gehört ausdrücklich zur älteren 505B-Binary und wird nicht auf diesen Build übertragen. Eine bereits laufende alte Instanz wurde nur nach Nachweis des verborgenen Hauptfensters ohne Editor/Dialog und ohne offenes Hardwarejournal über ihre eigene Exit-Aktion beendet. Nach Paketierung und Prüfung wurde die aktualisierte App wieder im Tray gestartet. Keine sichtbare Bearbeitung wurde geschlossen.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.

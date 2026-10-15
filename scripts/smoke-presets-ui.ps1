@@ -51,7 +51,7 @@ public static class OmenPresetSmoke {
 '@
 }
 function Read-Json {param([string[]]$ArgsList);$taskRaw=& $taskExe @ArgsList|Out-String;if($LASTEXITCODE-ne0){throw $taskRaw};$taskRaw|ConvertFrom-Json}
-function Wait-Ready {param([IntPtr]$Window,[string]$Pattern='Preset geladen.|Preset gespeichert.|Preset benennen|gewählte Einstellungen')
+function Wait-Ready {param([IntPtr]$Window,[string]$Pattern='Preset geladen.|Preset gespeichert.|Preset benennen|gewählte Einstellungen|entfernte GPU-Optionen')
  $taskUntil=(Get-Date).AddSeconds(15)
  do{ $taskText=[OmenPresetSmoke]::Caption([OmenPresetSmoke]::Control($Window,711));if($taskText-match$Pattern-and[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($Window,704))){return $taskText};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskUntil)
  throw ('Missing preset state: '+$Pattern+' / '+$taskText)
@@ -127,8 +127,8 @@ try{
  @($taskFresh.settings|Where-Object feature -eq 'keyboard_colors')[0].value.value[0][0]=22
  [IO.File]::WriteAllText($taskFile,($taskFresh|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
  Click $taskWindow 1202
- Set-Included $taskWindow 20 $true
- [OmenPresetSmoke]::SetWindowText([OmenPresetSmoke]::Control($taskWindow,3281),'45,125')
+ Set-Included $taskWindow 9 $true
+ [OmenPresetSmoke]::SetWindowText([OmenPresetSmoke]::Control($taskWindow,2577),'45,125')
  Click $taskWindow 704
  $null=Wait-Ready $taskWindow 'Preset gespeichert.'
  $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json

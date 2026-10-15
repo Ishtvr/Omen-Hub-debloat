@@ -23,22 +23,27 @@ pub struct Field {
     pub label: &'static str,
     pub seed: i64,
 }
+/// Legacy keys remain readable, but the preset UI must not advertise controls
+/// without a qualified laptop adapter. Explicit Save removes old instructions.
+pub const REMOVED_GPU_OPTIONS: &[F] = &[
+    F::GpuVoltageOffsetMv,
+    F::GpuMemoryVoltageOffsetMv,
+    F::GpuVoltageLimitMv,
+    F::GpuPowerLimitMw,
+    F::GpuTemperatureLimitC,
+    F::GpuCoreClockLimitMhz,
+    F::GpuMemoryClockLimitMhz,
+    F::GpuFrameRateLimit,
+    F::GpuCustomTgp,
+    F::GpuUnleashed,
+    F::GpuDynamicBoost,
+    F::OmenPerformanceMode,
+];
 pub fn fields() -> Vec<Field> {
     let rows = &[
         (F::GpuCoreOffsetMhz, 0, "GPU-Takt-Offset", 0),
         (F::GpuMemoryOffsetMhz, 0, "VRAM-Takt-Offset", 0),
         (F::GpuVfCurve, 0, "GPU-Leistungskurve", 0),
-        (F::GpuUnleashed, 0, "Dynamic Boost", 0),
-        (F::GpuPowerLimitMw, 0, "GPU-Leistungslimit", 80000),
-        (F::GpuTemperatureLimitC, 0, "GPU-Temperaturlimit", 87),
-        (F::GpuVoltageOffsetMv, 0, "GPU-Spannungs-Offset", 0),
-        (F::GpuMemoryVoltageOffsetMv, 0, "VRAM-Spannungs-Offset", 0),
-        (F::GpuVoltageLimitMv, 0, "GPU-Spannungslimit", 900),
-        (F::GpuCoreClockLimitMhz, 0, "GPU-Taktlimit", 2000),
-        (F::GpuMemoryClockLimitMhz, 0, "VRAM-Taktlimit", 7000),
-        (F::GpuFrameRateLimit, 0, "Bildratenlimit", 60),
-        (F::GpuCustomTgp, 0, "Eigener GPU-Leistungsrahmen", 0),
-        (F::OmenPerformanceMode, 0, "Leistungsmodus", 0),
         (F::MaxFan, 0, "Maximale Lüfterdrehzahl", 0),
         (F::CpuTemperatureLimitC, 1, "CPU-Temperaturlimit", 95),
         (

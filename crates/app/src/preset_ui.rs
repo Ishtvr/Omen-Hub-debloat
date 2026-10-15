@@ -7,6 +7,7 @@ use crate::{
     theme,
 };
 use omen_core::{
+    curve_editor::Curve,
     features::{Feature, ValueKind},
     preset,
     profiles::{CoreDelta, DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
@@ -28,7 +29,9 @@ use windows_sys::Win32::{
         Controls::{
             BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETLIMITTEXT, ODS_FOCUS, ODS_SELECTED,
         },
-        Input::KeyboardAndMouse::{EnableWindow, GetFocus, ReleaseCapture, SetCapture},
+        Input::KeyboardAndMouse::{
+            EnableWindow, GetFocus, ReleaseCapture, SetActiveWindow, SetCapture,
+        },
         WindowsAndMessaging::*,
     },
 };
@@ -54,7 +57,9 @@ struct View {
     selected: Option<PerformanceProfile>,
     binding: DeviceBinding,
     capabilities: BTreeMap<Feature, bool>,
-    curve: Option<Value>,
+    curve: Result<omen_core::vf::VfState, String>,
+    removed_gpu_options: usize,
+    core_curve_conflict: bool,
     pending: bool,
     applicable: bool,
     blockers: usize,
@@ -75,7 +80,19 @@ fn load(id: Option<&str>) -> Result<View, String> {
             )
         })
         .collect();
-    let curve = controller.gpu_curve().and_then(|v| v.value()).ok();
+    let curve = controller.gpu_curve();
+    let core_curve_conflict = curve.as_ref().is_ok_and(|curve| {
+        curve
+            .nodes
+            .first()
+            .is_some_and(|first| curve.nodes.iter().any(|p| p.delta_khz != first.delta_khz))
+    });
+    let removed_gpu_options = selected.as_ref().map_or(0, |p| {
+        p.settings
+            .iter()
+            .filter(|s| preset_fields::REMOVED_GPU_OPTIONS.contains(&s.feature))
+            .count()
+    });
     let plan = selected
         .as_ref()
         .map(|p| transaction::plan(p, &mut controller, false));
@@ -99,6 +116,8 @@ fn load(id: Option<&str>) -> Result<View, String> {
         binding: controller.context()?.binding,
         capabilities,
         curve,
+        removed_gpu_options,
+        core_curve_conflict,
         pending: store.pending()?,
         applicable: plan.as_ref().is_some_and(|p| p.applicable),
         blockers: plan.map_or(0, |p| p.blockers.len()),
@@ -259,7 +278,6 @@ struct State {
     closing: Cell<bool>,
     curve: RefCell<Option<Value>>,
     preview: Option<PathBuf>,
-    refresh_on_activate: Cell<bool>,
 }
 fn checked(handle: HWND) -> bool {
     unsafe { SendMessageW(handle, BM_GETCHECK, 0, 0) == BST_CHECKED as isize }
@@ -336,7 +354,10 @@ fn enable(hwnd: HWND, state: &State) {
                     EnableWindow(*h, included as i32);
                 }
                 Editor::Curve(h) => {
-                    EnableWindow(*h, (ready && saved && !state.dirty.get()) as i32);
+                    EnableWindow(
+                        *h,
+                        (ready && view.as_ref().is_some_and(|v| v.curve.is_ok())) as i32,
+                    );
                 }
                 Editor::PerCore(items) => {
                     for (_, _, _, h) in items {
@@ -522,7 +543,12 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
                 .find(|s| s.feature == Feature::GpuVfCurve)
                 .map(|s| s.value.clone())
         })
-        .or_else(|| view.curve.clone());
+        .or_else(|| {
+            view.curve
+                .as_ref()
+                .ok()
+                .and_then(|curve| curve.value().ok())
+        });
     for row in state.rows.borrow().iter() {
         let stored = view.selected.as_ref().and_then(|p| {
             p.settings
@@ -576,7 +602,9 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         }
         text(
             row.note,
-            if view.capabilities.get(&row.field.feature) == Some(&true) {
+            if row.field.feature == Feature::GpuCoreOffsetMhz && view.core_curve_conflict {
+                "V/F-Kurve aktiv"
+            } else if view.capabilities.get(&row.field.feature) == Some(&true) {
                 ""
             } else {
                 "Noch nicht verfügbar"
@@ -585,6 +613,11 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
     }
     let summary = if view.pending {
         "Unvollständige Änderung: Originalzustand wiederherstellen.".into()
+    } else if view.removed_gpu_options > 0 {
+        format!(
+            "{} entfernte GPU-Optionen. Speichern bereinigt dieses Preset.",
+            view.removed_gpu_options
+        )
     } else if view.startup_enabled && !view.startup_valid {
         "Windows-Start ist ungültig: deaktivieren, Preset anwenden und erneut aktivieren.".into()
     } else if view.blockers > 0 {
@@ -692,6 +725,17 @@ fn collect(state: &State) -> Result<SaveData, String> {
             .validate()?;
         }
         edits.push((row.field.feature, value));
+    }
+    // Explicit Save retires obsolete instructions from older presets. Other
+    // hidden settings remain untouched, and merge still rejects concurrent edits.
+    if let Some(profile) = &view.selected {
+        edits.extend(
+            profile
+                .settings
+                .iter()
+                .filter(|s| preset_fields::REMOVED_GPU_OPTIONS.contains(&s.feature))
+                .map(|s| (s.feature, None)),
+        );
     }
     Ok(SaveData {
         baseline: view.selected.clone(),
@@ -1055,6 +1099,86 @@ fn dirty(hwnd: HWND, state: &State) {
     status(hwnd, state, "Ungespeicherte Änderungen.", false);
     enable(hwnd, state);
 }
+fn edit_gpu_curve(hwnd: HWND, state: &State) {
+    let draft = (|| {
+        let view = state.view.borrow();
+        let view = view.as_ref().ok_or("Preset wird noch geladen.")?;
+        let curve = Curve::gpu(view.curve.clone()?, state.curve.borrow().as_ref())?;
+        Ok::<_, String>((curve, view.binding.clone()))
+    })();
+    let (curve, binding) = match draft {
+        Ok(draft) => draft,
+        Err(error) => {
+            status(hwnd, state, &error, true);
+            return;
+        }
+    };
+    // Keep the parent draft stable while the owned chart has protected focus.
+    // The curve editor receives only an in-memory model, never a profile writer.
+    state.busy.set(true);
+    unsafe {
+        EnableWindow(hwnd, 0);
+    }
+    let result = crate::curve_ui::edit_gpu_draft(hwnd, curve, binding);
+    unsafe {
+        EnableWindow(hwnd, 1);
+    }
+    state.busy.set(false);
+    match result {
+        Ok(Some(value)) => {
+            *state.curve.borrow_mut() = Some(value);
+            for row in state.rows.borrow().iter() {
+                match row.field.feature {
+                    Feature::GpuVfCurve => {
+                        set_checked(row.check, true);
+                        row.edited.set(true);
+                    }
+                    Feature::GpuCoreOffsetMhz => {
+                        set_checked(row.check, false);
+                        row.edited.set(true);
+                    }
+                    _ => {}
+                }
+            }
+            dirty(hwnd, state);
+            status(
+                hwnd,
+                state,
+                "Kurve übernommen. Preset noch nicht gespeichert.",
+                false,
+            );
+        }
+        Ok(None) => status(
+            hwnd,
+            state,
+            if state.dirty.get() {
+                "Kurvenänderungen verworfen. Preset-Entwurf bleibt ungespeichert."
+            } else {
+                "Kurvenbearbeitung verworfen."
+            },
+            false,
+        ),
+        Err(error) => status(hwnd, state, &error, true),
+    }
+    enable(hwnd, state);
+    unsafe {
+        if state.closing.get() {
+            DestroyWindow(hwnd);
+        } else {
+            SetActiveWindow(hwnd);
+            if let Some(row) = state
+                .rows
+                .borrow()
+                .iter()
+                .find(|row| row.field.feature == Feature::GpuVfCurve)
+            {
+                if let Editor::Curve(button) = row.editor {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(button);
+                }
+            }
+        }
+    }
+}
 fn discard(hwnd: HWND, state: &State) -> bool {
     !state.dirty.get()
         || unsafe {
@@ -1210,21 +1334,6 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 SendMessageW(state.pane.get(), m, w, l);
                 0
             }
-            WM_ACTIVATE => {
-                if w & 0xffff != WA_INACTIVE as usize
-                    && state.refresh_on_activate.replace(false)
-                    && !state.busy.get()
-                    && !state.dirty.get()
-                {
-                    dispatch(
-                        hwnd,
-                        state,
-                        Request::Load(selected(state)),
-                        "Preset wird aktualisiert …",
-                    );
-                }
-                0
-            }
             WM_COMMAND => {
                 let id = w & 0xffff;
                 let notification = (w >> 16) & 0xffff;
@@ -1242,22 +1351,16 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 if id >= FIELD_BASE {
                     let index = (id - FIELD_BASE) / FIELD_STRIDE;
                     let offset = (id - FIELD_BASE) % FIELD_STRIDE;
+                    let is_curve = state
+                        .rows
+                        .borrow()
+                        .get(index)
+                        .is_some_and(|row| matches!(row.editor, Editor::Curve(_)));
+                    if is_curve && offset == 1 && notification == BN_CLICKED as usize {
+                        edit_gpu_curve(hwnd, state);
+                        return 0;
+                    }
                     if let Some(row) = state.rows.borrow().get(index) {
-                        if offset == 1
-                            && notification == BN_CLICKED as usize
-                            && matches!(row.editor, Editor::Curve(_))
-                        {
-                            if let Some(id) = selected(state) {
-                                let exe = std::env::current_exe();
-                                if let Ok(exe) = exe {
-                                    let _ = std::process::Command::new(exe)
-                                        .args(["gpu-curve-ui", &id])
-                                        .spawn();
-                                    state.refresh_on_activate.set(true);
-                                }
-                            }
-                            return 0;
-                        }
                         if notification == EN_CHANGE as usize
                             || notification == CBN_SELCHANGE as usize
                             || (offset == 0 && notification == BN_CLICKED as usize)
@@ -1455,7 +1558,6 @@ fn run_window(
         closing: Cell::new(false),
         curve: RefCell::new(None),
         preview,
-        refresh_on_activate: Cell::new(false),
     });
     unsafe {
         ui::register(CLASS, Some(procedure))?;
