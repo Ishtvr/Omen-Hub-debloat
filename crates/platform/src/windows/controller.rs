@@ -789,6 +789,9 @@ impl Backend for Controller {
         }
         if uses_keyboard(feature) {
             let state = self.keyboard_state()?;
+            // A setting equal to its original is never written; the captured
+            // complete state is then this transaction's verified target.
+            self.keyboard_target = Some(state.clone());
             let saved = Captured {
                 feature,
                 value: keyboard_value(feature, &state)?,
@@ -1152,7 +1155,13 @@ impl Backend for Controller {
         if transaction.requested.iter().any(|s| uses_nvidia(s.feature)) {
             self.qualifies()?;
         }
-        if !transaction.binding.matches(&self.context()?.binding) {
+        // Same rule as plan/apply/recover: an incidental NVIDIA identity in a
+        // non-GPU transaction is not checked (and the GPU is not opened).
+        if !transaction
+            .binding
+            .for_settings(&transaction.requested)
+            .matches(&self.context()?.binding)
+        {
             return Err("Recovery device binding differs".into());
         }
         // Validate every image/current value before arming any restore. A user or
