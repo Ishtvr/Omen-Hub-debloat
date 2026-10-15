@@ -2,6 +2,8 @@
 #requires -Version 5.1
 param([string]$Executable='')
 $ErrorActionPreference='Stop'
+# UI labels below are German; pin the app language so the checks stay stable.
+$env:OMEN_HUB_LANG = 'de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
 $taskExe=if($Executable){(Resolve-Path -LiteralPath $Executable).Path}else{Join-Path $taskRepo 'dist\Omen Hub++.exe'}
 $taskName='Curve draft '+[Guid]::NewGuid().ToString('N')

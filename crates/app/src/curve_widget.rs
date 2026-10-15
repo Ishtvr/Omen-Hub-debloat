@@ -1,4 +1,5 @@
 //! Reusable native GDI curve canvas. Every edit changes a draft only.
+use crate::i18n::{t, tf};
 use omen_core::{
     curve_editor::{Curve, DragMode, Kind, Point as DataPoint},
     curve_input::{self, Key, Modifiers},
@@ -91,10 +92,10 @@ pub fn mutate(
     hwnd: HWND,
     action: impl FnOnce(&mut Curve) -> Result<bool, String>,
 ) -> Result<bool, String> {
-    let s = unsafe { state(hwnd) }.ok_or("Kurvenansicht fehlt.")?;
+    let s = unsafe { state(hwnd) }.ok_or(t("widget.missing"))?;
     let result = {
         let mut model = s.model.borrow_mut();
-        action(model.as_mut().ok_or("Kurve noch nicht verfügbar.")?)
+        action(model.as_mut().ok_or(t("widget.not_ready"))?)
     };
     if result.is_ok() {
         refresh(hwnd);
@@ -102,20 +103,33 @@ pub fn mutate(
     result
 }
 fn refresh(hwnd: HWND) {
-    let caption = curve(hwnd).map_or("Kurve nicht verfügbar".into(), |c| {
+    let caption = curve(hwnd).map_or(t("widget.unavailable").into(), |c| {
         let p = c.points[c.selected];
         let (x, y) = c.kind.units();
-        let view=unsafe {state(hwnd)}.and_then(|s|s.viewport.get()).map_or(String::new(),|v|format!(" Ansicht: {}–{} {}, {}–{} {}.",v.lo.x,v.hi.x,x,v.lo.y,v.hi.y,y));
-        let selection = c.selection().map_or(String::new(), |(a,b)| format!(" Auswahl: {}–{} {} ({} Punkte).",c.points[a].x,c.points[b].x,x,b-a+1));
-        format!(
-            "{}: Punkt {} von {}, {} {}, {} {}.{}{} Shift + Ziehen verschiebt Kurve/Auswahl. Strg + Z: Rückgängig.",
-            c.kind.title(),
-            c.selected + 1,
-            c.points.len(),
-            p.x,
-            x,
-            p.y,
-            y,selection,view
+        let view = unsafe { state(hwnd) }
+            .and_then(|s| s.viewport.get())
+            .map_or(String::new(), |v| {
+                tf("widget.view", &[&v.lo.x, &v.hi.x, &x, &v.lo.y, &v.hi.y, &y])
+            });
+        let selection = c.selection().map_or(String::new(), |(a, b)| {
+            tf(
+                "widget.range",
+                &[&c.points[a].x, &c.points[b].x, &x, &(b - a + 1)],
+            )
+        });
+        tf(
+            "widget.caption",
+            &[
+                &t(&format!("curve.kind.{:?}", c.kind)),
+                &(c.selected + 1),
+                &c.points.len(),
+                &p.x,
+                &x,
+                &p.y,
+                &y,
+                &selection,
+                &view,
+            ],
         )
     });
     // SAFETY: Our native control copies the bounded terminated caption.
@@ -229,8 +243,8 @@ fn fan_menu(hwnd: HWND, l: LPARAM) {
     let chosen = unsafe {
         let menu = CreatePopupMenu();
         let (id, label) = match target {
-            Ok(_) => (ADD, "Neuen Punkt hinzufügen"),
-            Err(_) => (DELETE, "Punkt löschen"),
+            Ok(_) => (ADD, t("widget.add_point")),
+            Err(_) => (DELETE, t("widget.delete_point")),
         };
         AppendMenuW(menu, MF_STRING, id, wide(label).as_ptr());
         let mut point = POINT { x, y };
@@ -715,7 +729,7 @@ pub fn create(parent: HWND, id: usize, _font: HFONT) -> Result<HWND, String> {
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Kurvenansicht").as_ptr(),
+            wide(t("widget.name")).as_ptr(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0,
             0,
@@ -944,14 +958,14 @@ unsafe fn draw(
             }
             let (x, y) = curve.kind.units();
             let ylabel = if curve.kind == Kind::Gpu {
-                "Taktrate, MHz"
+                t("widget.y_clock")
             } else {
-                "Lüfterwert, %"
+                t("widget.y_fan")
             };
             let xlabel = if curve.kind == Kind::Gpu {
-                "Spannung, mV"
+                t("widget.x_voltage")
             } else {
-                "Temperatur, °C"
+                t("widget.x_temperature")
             };
             label(dc, g.area.left, 10, ylabel);
             label(
@@ -961,30 +975,22 @@ unsafe fn draw(
                 xlabel,
             );
             let selection = curve.selection().map_or(String::new(), |(a, b)| {
-                format!(" · Auswahl: {} Punkte", b - a + 1)
+                tf("widget.selection", &[&(b - a + 1)])
             });
-            let point = format!(
-                "Ausgewählt: {} {} · {} {}{}",
-                node.x, x, node.y, y, selection
-            );
+            let point = tf("widget.selected", &[&node.x, &x, &node.y, &y, &selection]);
             label(dc, g.area.right - width(dc, &point), 10, &point);
             label(
                 dc,
                 g.area.left,
                 rect.bottom - 21,
                 if curve.kind == Kind::Gpu {
-                    "Quadrate: Entwurf   ·   Gepunktet: beim Laden"
+                    t("widget.gpu_legend")
                 } else {
-                    "Rechtsklick: Punkt hinzufügen oder löschen   ·   Entf: ausgewählten Punkt löschen"
+                    t("widget.fan_legend")
                 },
             );
         } else {
-            label(
-                dc,
-                24,
-                30,
-                "Kurve nicht verfügbar. Lüfter-Entwürfe können weiterhin bearbeitet werden.",
-            );
+            label(dc, 24, 30, t("widget.unavailable_long"));
         }
         if focus {
             let mut r = rect;
@@ -1084,12 +1090,12 @@ pub fn render_window(hwnd: HWND, path: &Path) -> Result<(), String> {
 }
 fn bitmap(path: &Path, w: i32, h: i32, paint: impl FnOnce(HDC, RECT)) -> Result<(), String> {
     if !(1..=4096).contains(&w) || !(1..=4096).contains(&h) {
-        return Err("Ungültige Render-Größe.".into());
+        return Err(t("widget.render_size").into());
     }
     unsafe {
         let dc = CreateCompatibleDC(ptr::null_mut());
         if dc.is_null() {
-            return Err("Kein Render-Kontext verfügbar.".into());
+            return Err(t("widget.render_context").into());
         }
         let mut info: BITMAPINFO = std::mem::zeroed();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
@@ -1101,7 +1107,7 @@ fn bitmap(path: &Path, w: i32, h: i32, paint: impl FnOnce(HDC, RECT)) -> Result<
         let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
         if bitmap.is_null() || bits.is_null() {
             DeleteDC(dc);
-            return Err("Render-Bitmap fehlt.".into());
+            return Err(t("widget.render_bitmap").into());
         }
         let old = SelectObject(dc, bitmap);
         paint(

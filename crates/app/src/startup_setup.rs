@@ -1,5 +1,6 @@
 //! One-time local logon setup from this exact executable, after explicit UAC.
 //! The fixed script is compiled in; no downloaded/user-supplied command runs.
+use crate::i18n::{t, tf};
 use std::{os::windows::process::CommandExt, path::PathBuf};
 use windows_sys::Win32::{
     System::SystemInformation::GetSystemDirectoryW, UI::Shell::IsUserAnAdmin,
@@ -26,17 +27,17 @@ pub fn ensure_fan_service() -> Result<(), String> {
     if omen_platform::fan_service_installed() {
         Ok(())
     } else {
-        Err("Lüfterdienst wurde nicht eingerichtet.".into())
+        Err(t("setup.fan_service_missing").into())
     }
 }
 fn run_installer(installer: &str) -> Result<(), String> {
     if unsafe { IsUserAnAdmin() } == 0 {
-        return Err("Windows-Freigabe für den Anmeldestart erforderlich.".into());
+        return Err(t("setup.admin_required").into());
     }
     let mut system = [0u16; 32768];
     let count = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
     if count == 0 || count >= system.len() {
-        return Err("Windows-Systemordner nicht verfügbar.".into());
+        return Err(t("setup.system_dir").into());
     }
     let shell = PathBuf::from(String::from_utf16(&system[..count]).map_err(|e| e.to_string())?)
         .join("WindowsPowerShell/v1.0/powershell.exe");
@@ -65,12 +66,12 @@ fn run_installer(installer: &str) -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(format!(
-            "Einrichtung fehlgeschlagen: {}",
-            String::from_utf8_lossy(&output.stderr)
+        return Err(tf(
+            "setup.failed",
+            &[&String::from_utf8_lossy(&output.stderr)
                 .chars()
                 .take(1200)
-                .collect::<String>()
+                .collect::<String>()],
         ));
     }
     Ok(())

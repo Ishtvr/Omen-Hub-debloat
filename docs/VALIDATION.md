@@ -372,6 +372,12 @@ Die vier neuen Produktions-Clientbilder unter `.impeccable/review/cpu-windows-se
 
 Die alten Debug-/Hardware- und Speichermessungen weiter oben behalten ihre eigenen Build-Hashes; eine neue CPU-Helper-/Warm-Tray-Messung oder eine 115-W-Leistungsprobe wurde nicht ausgeführt. Die Regressionen schreiben nur eigene temporäre Profildateien, keine CPU/APU-/GPU-Power-/Voltage-Werte. Keine Dienste, Treiber oder Firmware wurden geändert.
 
+## STAPM/Slow, Info-Erklärungen und Sprachdateien — 16. Oktober 2026, 01:07…01:40 CEST
+
+Vom Nutzer freigegeben („Dann mach die STAPM/Fast/Slow settings“). Einmalige Messung mit Windows-Freigabe: RSMU `0xCB` (50 W) wurde angenommen, keine PM-Zelle änderte sich; die Nachricht wurde wieder entfernt. HP `0x29` `[50, 50, FF, FF]` senkte Zelle 0 (80 → 50 W) und Zelle 4 (55 → 50 W). Das erste Zurücksetzen mit `[80, 55]` vertauschte die Werte (Zelle 0 = 55, Zelle 4 = 80) und bewies die Byte-Zuordnung Slow/STAPM; `[55, 80]` stellte 80/55 W exakt wieder her (Rücklesen 01:09). Der Preset-Adapter für STAPM/Slow schreibt beide Bytes, behält das jeweils andere Limit auf dem gelesenen Wert, liest die Zelle zurück und stellt beim Restore den erfassten Wert her. Eine Anwendung über ein Preset unter Last ist noch nicht getestet.
+
+Jede Preset-Einstellung hat ein rundes **i**; ein Klick zeigt Name und Erklärung. Alle sichtbaren Texte stehen in `crates/app/lang/de.json` und `en.json`; Meldungen aus core/platform reisen als Marker und werden in der App übersetzt (docs/LOCALIZATION.md). Tests prüfen gleiche Schlüssel in beiden Sprachen, jeden im Code verwendeten Schlüssel und Name/Erklärung jeder Einstellung. Vorschauen in Deutsch und Englisch (Dashboard, Limits-Gruppe) wurden gerendert und geprüft.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.

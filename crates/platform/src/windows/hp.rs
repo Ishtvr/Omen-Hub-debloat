@@ -178,7 +178,7 @@ impl HpBios {
     }
     /// The three fixed 4-byte performance-mode SETs used by the Hub (0x1A,
     /// 0x22, 0x29). The caller passes only a type from `omen_core::hp_mode`.
-    fn set_mode_payload(&self, command_type: u32, bytes: [u8; 4]) -> WMIResult<()> {
+    pub(super) fn set_mode_payload(&self, command_type: u32, bytes: [u8; 4]) -> WMIResult<()> {
         use omen_core::hp_mode::{GPU_POWER_TYPE, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
         if ![THERMAL_MODE_TYPE, GPU_POWER_TYPE, POWER_LIMITS_TYPE].contains(&command_type) {
             return Err(WMIError::ConvertVariantError(
@@ -526,9 +526,9 @@ pub fn apply_hp_mode(
         if after.custom_tgp_enabled != plan.expect_custom_tgp
             || after.ppab_enabled != plan.expect_ppab
         {
-            return Err(format!(
-                "GPU-Readback passt nicht: cTGP {} / Dynamic Boost {}",
-                after.custom_tgp_enabled, after.ppab_enabled
+            return Err(omen_core::message::msg(
+                "gpu.err.readback",
+                &[&after.custom_tgp_enabled, &after.ppab_enabled],
             ));
         }
         Ok(after)
@@ -544,8 +544,10 @@ pub fn apply_hp_mode(
             let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw)
                 .and_then(|balanced| send(&balanced));
             Err(match fallback {
-                Ok(_) => format!("{error}; Balanced wiederhergestellt"),
-                Err(again) => format!("{error}; Balanced-Rückfall fehlgeschlagen: {again}"),
+                Ok(_) => omen_core::message::msg("mode.err.balanced_restored", &[&error]),
+                Err(again) => {
+                    omen_core::message::msg("mode.err.fallback_failed", &[&error, &again])
+                }
             })
         }
         Err(error) => Err(error),

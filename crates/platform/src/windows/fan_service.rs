@@ -124,7 +124,7 @@ pub fn run(
             last_heartbeat = None;
             report(&idle(
                 "waiting_for_hub",
-                "Original OMEN Hub läuft; er steuert die Lüfter.".into(),
+                omen_core::message::msg("fan.status.hub_running", &[]),
             ));
             std::thread::sleep(Duration::from_secs(10));
             continue;
@@ -135,14 +135,17 @@ pub fn run(
                 last_heartbeat = None;
                 report(&idle(
                     "bios",
-                    "Keine aktive Lüfterkurve; BIOS regelt.".into(),
+                    omen_core::message::msg("fan.status.no_curve", &[]),
                 ));
                 std::thread::sleep(Duration::from_secs(5));
                 continue;
             }
             Err(e) => {
                 last_heartbeat = None;
-                report(&idle("bios", format!("Lüfterkurve ungültig: {e}")));
+                report(&idle(
+                    "bios",
+                    omen_core::message::msg("fan.status.invalid_curve", &[&e]),
+                ));
                 std::thread::sleep(Duration::from_secs(5));
                 continue;
             }

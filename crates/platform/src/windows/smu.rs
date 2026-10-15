@@ -75,6 +75,7 @@ pub fn module_present() -> bool {
 pub struct Smu {
     driver: Handle,
     pci: Handle,
+    inventory: Inventory,
 }
 
 struct PciLease<'a>(&'a Handle);
@@ -105,7 +106,7 @@ fn cells(bytes: &[u8]) -> Vec<u64> {
 impl Smu {
     pub fn new(inventory: &Inventory) -> Result<Self, String> {
         if MODULE.is_empty() {
-            return Err("Diese App-Version enthält keinen SMU-Adapter.".into());
+            return Err(omen_core::message::msg("cpu.err.no_smu_module", &[]));
         }
         if inventory.manufacturer != "HP"
             || inventory.board != "8E35"
@@ -153,6 +154,7 @@ impl Smu {
         let smu = Self {
             driver,
             pci: Handle(pci),
+            inventory: inventory.clone(),
         };
         // The module itself refuses unknown CPUs; double-check its decision.
         let name = smu.call("ioctl_get_code_name", &[], 1)?;
@@ -160,6 +162,11 @@ impl Smu {
             return Err("SMU module did not recognise this CPU".into());
         }
         Ok(smu)
+    }
+    /// The HP BIOS interface for limits the SMU exposes only through the Hub
+    /// command (STAPM and slow, measured 16 October 2026).
+    pub(super) fn hp(&self) -> Result<super::hp::HpBios, String> {
+        super::hp::HpBios::new(&self.inventory).map_err(|e| e.to_string())
     }
     fn call(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
         // SAFETY: Valid mutex handle; a bounded wait never blocks the app forever.

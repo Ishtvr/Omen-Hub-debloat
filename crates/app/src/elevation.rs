@@ -1,5 +1,8 @@
 //! Shared fixed-command UAC child bridge. No caller-defined executable/command.
-use crate::native_ui::{token, wide};
+use crate::{
+    i18n::{t, tf},
+    native_ui::{token, wide},
+};
 use omen_platform::profile_store::ProfileStore;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::{
@@ -43,11 +46,11 @@ pub fn run(
         ),
         Action::Apply => format!(
             "profile-ui-apply {} {nonce}",
-            id.ok_or("Zuerst ein Profil speichern.")?
+            id.ok_or(t("elevation.save_first"))?
         ),
         Action::Startup => format!(
             "profile-ui-startup-enable {} {nonce}",
-            id.ok_or("Zuerst ein Profil speichern.")?
+            id.ok_or(t("elevation.save_first"))?
         ),
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
         Action::FanService => format!("fan-service-install {nonce}"),
@@ -68,13 +71,13 @@ pub fn run(
     execute.nShow = SW_HIDE;
     // All strings, structure and process handle have explicit bounded lifetimes.
     if unsafe { ShellExecuteExW(&mut execute) } == 0 {
-        return Err(format!(
-            "Windows-Freigabe nicht erfolgt: {}",
-            std::io::Error::last_os_error()
+        return Err(tf(
+            "elevation.declined",
+            &[&std::io::Error::last_os_error()],
         ));
     }
     if execute.hProcess.is_null() {
-        return Err("Windows gab keinen Steuerprozess zurück.".into());
+        return Err(t("elevation.no_process").into());
     }
     let result = (|| {
         let deadline = Instant::now() + Duration::from_secs(45);
@@ -85,10 +88,10 @@ pub fn run(
                 _ => return Err(std::io::Error::last_os_error().to_string()),
             }
             if stopped() {
-                return Err("Fenster geschlossen; der Steuerprozess beendet Prüfung und Wiederherstellung selbst.".into());
+                return Err(t("elevation.window_closed").into());
             }
             if Instant::now() >= deadline {
-                return Err("Steuerprozess läuft noch. Sein Ergebnis prüfen, bevor eine weitere Aktion beginnt.".into());
+                return Err(t("elevation.still_running").into());
             }
         }
         let mut code = 1;
@@ -100,16 +103,13 @@ pub fn run(
             || record["nonce"].as_str() != Some(&nonce)
             || record["operation"].as_str() != Some(action.name())
         {
-            return Err("Kein passendes Ergebnisprotokoll vorhanden.".into());
+            return Err(t("elevation.no_record").into());
         }
         if code != 0 || record["result"].get("Err").is_some() {
-            return Err(format!(
-                "Steuerung fehlgeschlagen: {}",
-                record["result"]["Err"]
-            ));
+            return Err(tf("elevation.failed", &[&record["result"]["Err"]]));
         }
         if record["result"].get("Ok").is_none() {
-            return Err("Kein verifizierter Abschluss im Ergebnis.".into());
+            return Err(t("elevation.unverified").into());
         }
         Ok(record)
     })();

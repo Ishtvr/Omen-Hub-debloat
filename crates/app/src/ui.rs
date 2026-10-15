@@ -1,4 +1,5 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
+use crate::i18n::{t, tf};
 use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot, hp_mode::HpMode};
 use std::{
     cell::{Cell, RefCell},
@@ -25,20 +26,16 @@ const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
-/// Built-in modes ahead of saved presets. Only Balanced and Unleashed have a
+/// Built-in modes (language keys) ahead of saved presets. Only Balanced and Unleashed have a
 /// native HP adapter; the others stay listed but unavailable.
 const DEFAULT_MODES: [(&str, Option<HpMode>); 4] = [
-    ("Quiet", None),
-    ("Balanced", Some(HpMode::Balanced)),
-    ("Performance", None),
-    ("Unleashed", Some(HpMode::Unleashed)),
+    ("mode.quiet", None),
+    ("mode.balanced", Some(HpMode::Balanced)),
+    ("mode.performance", None),
+    ("mode.unleashed", Some(HpMode::Unleashed)),
 ];
-const IDLE_MODE_STATUS: &str = "BIOS-Modus nicht lesbar; Auswahl wendet ihn an.";
 fn unavailable(index: usize) -> String {
-    format!(
-        "{} (Default): noch nicht verfügbar.",
-        DEFAULT_MODES[index].0
-    )
+    tf("mode.unavailable", &[&t(DEFAULT_MODES[index].0)])
 }
 
 #[derive(Debug, Clone)]
@@ -75,40 +72,40 @@ fn wide(s: &str) -> Vec<u16> {
 }
 pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
     if detail.starts_with("This build has no staged signed CPU module") {
-        "Diese App-Version enthält keinen CPU-Sensoradapter. Vollständigen Build verwenden."
+        t("cpu_error.no_module")
     } else if detail.contains("qualified only")
         || detail.contains("family/model/stepping/package")
         || detail.contains("requires Windows x64")
     {
-        "CPU-Sensoren sind für dieses Gerät/BIOS nicht freigegeben. Geräteunterstützung prüfen."
+        t("cpu_error.unsupported")
     } else if detail.starts_with("PawnIO must already be installed and running") {
-        "PawnIO fehlt oder läuft nicht. Sensor-Voraussetzungen in der Anleitung prüfen."
+        t("cpu_error.pawnio_missing")
     } else if detail.contains("hash differs")
         || detail.contains("version/response differs")
         || detail.contains("Embedded CPU module differs")
         || detail.contains("Signed CPU module load")
         || detail.contains("driver path")
     {
-        "Treiber-/Modulversion nicht freigegeben. Passende Version von Omen Hub++ verwenden."
+        t("cpu_error.driver_version")
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:") && detail.contains("1223") {
-        "CPU-Sensorfreigabe abgebrochen. Aktualisieren fragt erneut."
+        t("cpu_error.cancelled")
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:")
         || detail.starts_with("CPU driver access requires")
     {
-        "Windows hat den CPU-Zugriff verweigert. Berechtigungen und PawnIO-Installation prüfen."
+        t("cpu_error.denied")
     } else if detail.contains("pipe peer")
         || detail.contains("server PID")
         || detail.contains("stale or unrelated")
     {
-        "CPU-Leseprozess konnte nicht sicher zugeordnet werden. App neu öffnen."
+        t("cpu_error.peer")
     } else if detail.contains("failed to connect")
         || detail.contains("disconnected")
         || detail.contains("timed out")
         || detail.contains("request pipe closed")
     {
-        "CPU-Verbindung unterbrochen. Aktualisieren startet sie neu."
+        t("cpu_error.disconnected")
     } else {
-        "CPU-Messung unterbrochen; alte Werte verworfen. Aktualisieren startet sie neu."
+        t("cpu_error.interrupted")
     }
 }
 fn cpu_failed(snapshot: &mut Snapshot, detail: String) {
@@ -179,9 +176,7 @@ fn worker(
                 // Do not reuse lost handles. A 30-second cooldown avoids a retry loop.
                 reopen_at = Instant::now() + Duration::from_secs(30);
                 snapshot.gpu = None;
-                snapshot
-                    .warnings
-                    .push("NVIDIA session lost; retrying after 30 seconds".into());
+                snapshot.warnings.push(t("warning.nvidia_lost").into());
             }
         } else if visible && !suspended {
             snapshot.gpu = None;
@@ -237,9 +232,9 @@ fn worker(
                 let result =
                     crate::elevation::run(Some(&id), crate::elevation::Action::Apply, || false);
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(if result.is_ok() {
-                    "Preset angewendet.".into()
+                    t("preset.applied").into()
                 } else {
-                    "Preset konnte nicht angewendet werden. Einstellungen unter Leistungsprofile prüfen.".into()
+                    t("mode.preset_failed").into()
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -249,12 +244,12 @@ fn worker(
                 let result =
                     crate::elevation::run(None, crate::elevation::Action::Mode(mode), || false);
                 let label = match mode {
-                    HpMode::Balanced => "Balanced",
-                    HpMode::Unleashed => "Unleashed",
+                    HpMode::Balanced => t("mode.balanced"),
+                    HpMode::Unleashed => t("mode.unleashed"),
                 };
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(_) => format!("{label} (Default) aktiv."),
-                    Err(error) => format!("{label} nicht angewendet: {error}"),
+                    Ok(_) => tf("mode.active", &[&label]),
+                    Err(error) => tf("mode.failed", &[&label, &error]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -318,7 +313,7 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                     state.profile.get(),
                     CB_ADDSTRING,
                     0,
-                    wide(&format!("{label} (Default)")).as_ptr() as isize,
+                    wide(&tf("mode.default_entry", &[&t(label)])).as_ptr() as isize,
                 );
             }
             let mut selected = state.preview_index.get().min(DEFAULT_MODES.len() - 1);
@@ -352,7 +347,7 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
         } else {
             SetWindowTextW(
                 GetDlgItem(hwnd, 181),
-                wide("Gespeicherte Presets konnten nicht geladen werden.").as_ptr(),
+                wide(t("mode.presets_unreadable")).as_ptr(),
             );
         }
     }
@@ -537,8 +532,7 @@ unsafe extern "system" fn window_proc(
                         Err(error) => {
                             SetWindowTextW(
                                 state.preview.get(),
-                                wide(&format!("Steuerung konnte nicht geöffnet werden: {error}"))
-                                    .as_ptr(),
+                                wide(&tf("main.open_failed", &[&error])).as_ptr(),
                             );
                         }
                     }
@@ -554,8 +548,8 @@ unsafe extern "system" fn window_proc(
                             state.profile.get(),
                             0,
                         );
-                        SetWindowTextW(state.preview.get(), wide("Windows-Freigabe …").as_ptr());
-                        *state.mode_status.borrow_mut() = "Windows-Freigabe …".into();
+                        SetWindowTextW(state.preview.get(), wide(t("common.uac")).as_ptr());
+                        *state.mode_status.borrow_mut() = t("common.uac").into();
                         let _ = state.tx.send(request);
                     };
                     if index >= DEFAULT_MODES.len() as isize {
@@ -610,7 +604,10 @@ unsafe extern "system" fn window_proc(
                 {
                     *state.mode_status.borrow_mut() = message.clone();
                     if !state.preview.get().is_null() {
-                        SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
+                        SetWindowTextW(
+                            state.preview.get(),
+                            wide(&crate::i18n::message(&message)).as_ptr(),
+                        );
                     }
                 }
                 0
@@ -654,9 +651,14 @@ unsafe extern "system" fn window_proc(
                             menu,
                             MF_STRING,
                             SHOW as usize,
-                            wide("Omen Hub++ öffnen").as_ptr(),
+                            wide(t("tray.open")).as_ptr(),
                         );
-                        AppendMenuW(menu, MF_STRING, EXIT as usize, wide("Beenden").as_ptr());
+                        AppendMenuW(
+                            menu,
+                            MF_STRING,
+                            EXIT as usize,
+                            wide(t("tray.exit")).as_ptr(),
+                        );
                         let mut point = POINT { x: 0, y: 0 };
                         GetCursorPos(&mut point);
                         SetForegroundWindow(hwnd);
@@ -713,7 +715,7 @@ pub fn preview(path: &std::path::Path) -> Result<(), String> {
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
     if size[0] < 960 || size[1] < 700 || size[0] > 2000 || size[1] > 1400 {
-        return Err("Preview size outside dashboard bounds".into());
+        return Err(t("error.preview_size").into());
     }
     run_window(false, Some(path), size)
 }
@@ -738,7 +740,7 @@ fn run_window(
         selected_custom: RefCell::new(None),
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
-        mode_status: RefCell::new(IDLE_MODE_STATUS.into()),
+        mode_status: RefCell::new(t("mode.bios_unreadable").into()),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
@@ -755,7 +757,7 @@ fn run_window(
             ..std::mem::zeroed()
         };
         if RegisterClassW(&class) == 0 {
-            return Err(format!("Window class: {}", std::io::Error::last_os_error()));
+            return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
         state.taskbar_message = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());
         let hwnd = CreateWindowExW(
@@ -774,10 +776,7 @@ fn run_window(
         );
         if hwnd.is_null() {
             UnregisterClassW(class_name.as_ptr(), instance);
-            return Err(format!(
-                "Window creation: {}",
-                std::io::Error::last_os_error()
-            ));
+            return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
         let initially_visible = !start_in_tray || !state.tray.get();
         let worker_hwnd = hwnd as usize;
@@ -811,7 +810,7 @@ fn run_window(
             if status == -1 {
                 let error = std::io::Error::last_os_error();
                 DestroyWindow(hwnd);
-                break Err(format!("Window messages: {error}"));
+                break Err(tf("error.window", &[&error]));
             }
             if IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);
@@ -853,23 +852,24 @@ mod tests {
         let missing = cpu_error_message(
             "This build has no staged signed CPU module; use scripts/prepare-cpu-module.ps1",
         );
-        assert!(missing.contains("Vollständigen Build"));
+        assert_eq!(missing, t("cpu_error.no_module"));
         assert!(!missing.contains("scripts/"));
         let unsupported =
             cpu_error_message("CPU sensors are qualified only for HP8E35/F.13/Ryzen9 8940HX");
-        assert!(unsupported.contains("Gerät/BIOS"));
-        assert!(!unsupported.contains("erneut"));
+        assert_eq!(unsupported, t("cpu_error.unsupported"));
         let driver =
             cpu_error_message("PawnIO driver hash differs from the measured 2.2.0 contract");
-        assert!(driver.contains("Treiber-/Modulversion"));
-        assert!(!driver.contains("erneut"));
-        assert!(
+        assert_eq!(driver, t("cpu_error.driver_version"));
+        assert_eq!(
             cpu_error_message(
                 "CPU-Sensorfreigabe nicht erfolgt: operation cancelled (os error 1223)"
-            )
-            .contains("abgebrochen")
+            ),
+            t("cpu_error.cancelled")
         );
-        assert!(cpu_error_message("CPU reader disconnected").contains("Aktualisieren"));
+        assert_eq!(
+            cpu_error_message("CPU reader disconnected"),
+            t("cpu_error.disconnected")
+        );
     }
     #[test]
     fn cpu_status_line_is_empty_while_measuring_and_explains_other_states() {
@@ -882,8 +882,11 @@ mod tests {
         snapshot.cpu_hardware_status = CpuHardwareStatus::Paused;
         assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
         snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-        assert!(crate::dashboard::cpu_detail(&snapshot).contains("Aktualisieren"));
+        assert_eq!(crate::dashboard::cpu_detail(&snapshot), t("dash.cpu_off"));
         snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
-        assert!(crate::dashboard::cpu_detail(&snapshot).contains("Windows-Freigabe"));
+        assert_eq!(
+            crate::dashboard::cpu_detail(&snapshot),
+            t("dash.cpu_starting")
+        );
     }
 }

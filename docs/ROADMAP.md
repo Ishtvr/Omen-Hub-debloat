@@ -54,7 +54,8 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [ ] Physische Undervolting-Wirkung und längere Stabilität unter Last messen; direkte GPU-/VRAM-Spannung nur mit eigenem belegtem Steuervertrag.
 - [ ] Zusätzliche Modelle, OEM-Power-/Voltage-/CPU-/Windows-Adapter jeweils mit eigener Gerätevalidierung.
 - [ ] Modellbezogener Heartbeat; keine universell angenommene 30-Sekunden-Schleife.
-- [ ] `libryzenadj` via dynamischer FFI: STAPM, Fast/Slow PPT, Temperatur; Familien-Support vorher prüfen.
+- [x] STAPM, Slow und Fast (PPT) mit Rücklesen und Restore: STAPM/Slow über HP `0x29`, Fast über RSMU `0x56` (gemessen 16. Oktober 2026, siehe models/8e35.md); `libryzenadj` ist dafür nicht nötig.
+- [x] Alle UI-Texte in Sprachdateien (de/en) mit Info-Erklärung je Einstellung, siehe LOCALIZATION.md.
 - [ ] Intel PL1/PL2 über einen geeigneten, signierten MSR-Backend; Privilegien/Driver-Support explizit.
 - [ ] Undervolting nur bei belegter CPU-/Firmware-Unterstützung, mit eigenen Grenzen und Readback.
 - [ ] NVAPI-Schreibfunktionen nur soweit öffentlich dokumentiert oder gesondert modellbezogen belegt.

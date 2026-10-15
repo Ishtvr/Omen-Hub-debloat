@@ -2,6 +2,7 @@
 //! in UI callbacks. Unsupported settings remain editable metadata, never writes.
 use crate::{
     elevation::{self, Action},
+    i18n::{t, tf},
     native_ui::{self as ui, text, wide},
     preset_fields::{self, Field, GROUPS, SECTIONS},
     theme,
@@ -51,6 +52,11 @@ const PANE: usize = 710;
 const STATUS: i32 = 711;
 const FIELD_STRIDE: usize = 64;
 const FIELD_HEIGHT: i32 = 36;
+/// Child-id offset of a row's info button inside its id block.
+const INFO_OFFSET: usize = FIELD_STRIDE - 1;
+/// Checkbox square and gap before its label, in window units.
+const CHECK_BOX: i32 = 28;
+const INFO_SIZE: i32 = 26;
 const CLASS: &str = "OmenHubPPPresetEditor";
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
 struct View {
@@ -195,28 +201,28 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     store.save(&profile)?;
                     Ok(Update::View(
                         Box::new(load(Some(&profile.id))?),
-                        "Preset gespeichert.".into(),
+                        t("preset.saved").into(),
                     ))
                 }
                 Request::Apply(id) => {
                     elevation::run(Some(&id), Action::Apply, || false)?;
                     Ok(Update::View(
                         Box::new(load(Some(&id))?),
-                        "Preset angewendet.".into(),
+                        t("preset.applied").into(),
                     ))
                 }
                 Request::Recover => {
                     elevation::run(None, Action::Restore, || false)?;
                     Ok(Update::View(
                         Box::new(load(None)?),
-                        "Originalzustand wiederhergestellt.".into(),
+                        t("preset.restored").into(),
                     ))
                 }
                 Request::Delete(id) => {
                     ProfileStore::user_data()?.delete(&id)?;
                     Ok(Update::View(
                         Box::new(load(None)?),
-                        "Preset gelöscht.".into(),
+                        t("preset.deleted").into(),
                     ))
                 }
                 Request::Startup(id, enabled) => {
@@ -228,9 +234,9 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     Ok(Update::View(
                         Box::new(load(Some(&id))?),
                         if enabled {
-                            "Windows-Start aktiviert."
+                            t("preset.startup_on")
                         } else {
-                            "Windows-Start deaktiviert."
+                            t("preset.startup_off")
                         }
                         .into(),
                     ))
@@ -256,6 +262,10 @@ enum Editor {
 struct Row {
     field: Field,
     check: HWND,
+    /// Round "i" button that explains the setting.
+    info: HWND,
+    /// Measured label width, so the info button sits right after the text.
+    label_width: i32,
     editor: Editor,
     note: HWND,
     edited: Cell<bool>,
@@ -326,9 +336,9 @@ fn enable(hwnd: HWND, state: &State) {
         text(
             GetDlgItem(hwnd, APPLY as i32),
             if pending {
-                "Wiederherstellen"
+                t("preset.restore_button")
             } else {
-                "Anwenden"
+                t("preset.apply_button")
             },
         );
         EnableWindow(
@@ -378,7 +388,7 @@ fn dispatch(hwnd: HWND, state: &State, request: Request, message: &str) {
     enable(hwnd, state);
     if state.tx.send(request).is_err() {
         state.busy.set(false);
-        status(hwnd, state, "Verbindung beendet. Fenster neu öffnen.", true);
+        status(hwnd, state, t("preset.connection_lost"), true);
         enable(hwnd, state);
     }
 }
@@ -397,9 +407,9 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
         for (index, field) in preset_fields::fields().into_iter().enumerate() {
             let id = FIELD_BASE + index * FIELD_STRIDE;
             let label = if field.unit().is_empty() {
-                field.label.to_string()
+                field.label().to_string()
             } else {
-                format!("{} ({})", field.label, field.unit())
+                format!("{} ({})", field.label(), field.unit())
             };
             let check = ui::control(
                 pane,
@@ -408,6 +418,15 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                 "BUTTON",
                 &label,
                 WS_TABSTOP | BS_AUTOCHECKBOX as u32 | BS_NOTIFY as u32,
+            );
+            let label_width = ui::text_width(pane, state.theme.body, &label);
+            let info = ui::control(
+                pane,
+                state.theme.small,
+                id + INFO_OFFSET,
+                "BUTTON",
+                "i",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
             );
             let editor = match field.feature.descriptor().value_kind {
                 ValueKind::Choice => {
@@ -438,7 +457,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                         "",
                         WS_TABSTOP | CBS_DROPDOWNLIST as u32,
                     );
-                    choices(h, &["Aus", "Ein"]);
+                    choices(h, &[t("common.off"), t("common.on")]);
                     Editor::Boolean(h)
                 }
                 ValueKind::VfCurve => Editor::Curve(ui::control(
@@ -446,7 +465,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                     state.theme.body,
                     id + 1,
                     "BUTTON",
-                    "Bearbeiten …",
+                    t("preset.edit_curve"),
                     WS_TABSTOP,
                 )),
                 ValueKind::PerCore => {
@@ -459,7 +478,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                                 state.theme.small,
                                 id + 2 + core * 2,
                                 "STATIC",
-                                &format!("CCD {} · Kern {}", ccd + 1, i + 1),
+                                &tf("preset.core_label", &[&(ccd + 1), &(i + 1)]),
                                 0,
                             );
                             let h = ui::control(
@@ -494,6 +513,8 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
             rows.push(Row {
                 field,
                 check,
+                info,
+                label_width,
                 editor,
                 note,
                 edited: Cell::new(false),
@@ -508,7 +529,7 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
     unsafe {
         let combo = GetDlgItem(hwnd, SELECT as i32);
         SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-        choices(combo, &["Neues Preset"]);
+        choices(combo, &[t("preset.new_entry")]);
         let mut index = 0;
         for (i, profile) in view.profiles.iter().enumerate() {
             SendMessageW(
@@ -530,9 +551,9 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         text(
             GetDlgItem(hwnd, STARTUP as i32),
             if view.startup_enabled && !view.startup_valid {
-                "Bei Windows-Start (Freigabe ungültig)"
+                t("preset.startup_invalid_label")
             } else {
-                "Bei Windows-Start aktivieren"
+                t("preset.startup_label")
             },
         );
     }
@@ -605,36 +626,30 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         text(
             row.note,
             if row.field.feature == Feature::GpuCoreOffsetMhz && view.core_curve_conflict {
-                "V/F-Kurve aktiv"
+                t("preset.note_curve_active")
             } else if view.capabilities.get(&row.field.feature) == Some(&true) {
                 ""
             } else {
-                "Noch nicht verfügbar"
+                t("preset.note_unavailable")
             },
         );
     }
     let summary = if view.pending {
-        "Unvollständige Änderung: Originalzustand wiederherstellen.".into()
+        t("preset.pending").into()
     } else if view.removed_options > 0 {
-        format!(
-            "{} entfernte Optionen. Speichern bereinigt dieses Preset.",
-            view.removed_options
-        )
+        tf("preset.removed_options", &[&view.removed_options])
     } else if view.startup_enabled && !view.startup_valid {
-        "Windows-Start ist ungültig: deaktivieren, Preset anwenden und erneut aktivieren.".into()
+        t("preset.startup_invalid").into()
     } else if view.blockers > 0 {
-        format!(
-            "{} {} gewählte Einstellungen noch nicht verfügbar.",
-            message, view.blockers
-        )
-        .trim()
-        .to_string()
+        format!("{message} {}", tf("preset.blockers", &[&view.blockers]))
+            .trim()
+            .to_string()
     } else if !message.is_empty() {
         message.to_string()
     } else if view.selected.is_none() {
-        "Preset benennen und gewünschte Optionen auswählen.".into()
+        t("preset.hint_new").into()
     } else {
-        "Preset geladen.".into()
+        t("preset.loaded").into()
     };
     *state.view.borrow_mut() = Some(view);
     state.dirty.set(false);
@@ -648,13 +663,13 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
 }
 fn collect(state: &State) -> Result<SaveData, String> {
     let view = state.view.borrow();
-    let view = view.as_ref().ok_or("Preset wird noch geladen.")?;
+    let view = view.as_ref().ok_or(t("preset.still_loading"))?;
     let hwnd = unsafe { GetParent(state.pane.get()) };
     let name = ui::value(unsafe { GetDlgItem(hwnd, NAME as i32) })
         .trim()
         .to_owned();
     if name.is_empty() {
-        return Err("Preset-Namen eingeben.".into());
+        return Err(t("preset.name_required").into());
     }
     let mut edits = vec![];
     for row in state.rows.borrow().iter() {
@@ -672,14 +687,14 @@ fn collect(state: &State) -> Result<SaveData, String> {
                                     .split([',', ';', ' '])
                                     .filter(|s| !s.is_empty())
                                     .map(|s| {
-                                        s.parse::<u8>().map_err(|_| "Gültige Core-Ratios eingeben.")
+                                        s.parse::<u8>().map_err(|_| t("preset.core_ratios_invalid"))
                                     })
                                     .collect::<Result<Vec<_>, _>>()?,
                             )
                         } else {
                             Value::Integer(
                                 preset::parse_number(&ui::value(*h), row.field.scale())
-                                    .map_err(|e| format!("{}: {e}", row.field.label))?,
+                                    .map_err(|e| format!("{}: {e}", row.field.label()))?,
                             )
                         }
                     }
@@ -689,19 +704,19 @@ fn collect(state: &State) -> Result<SaveData, String> {
                             *row.field
                                 .choices()
                                 .get(i as usize)
-                                .ok_or("Auswahl ungültig")?,
+                                .ok_or(t("preset.choice_invalid"))?,
                         )
                     }
                     Editor::Boolean(h) => match SendMessageW(*h, CB_GETCURSEL, 0, 0) {
                         0 => Value::Boolean(false),
                         1 => Value::Boolean(true),
-                        _ => return Err("Ein/Aus-Auswahl ungültig".into()),
+                        _ => return Err(t("preset.boolean_invalid").into()),
                     },
                     Editor::Curve(_) => state
                         .curve
                         .borrow()
                         .clone()
-                        .ok_or("GPU-Kurve konnte nicht gelesen werden.")?,
+                        .ok_or(t("preset.curve_unreadable"))?,
                     Editor::PerCore(items) => Value::PerCore(
                         items
                             .iter()
@@ -709,9 +724,9 @@ fn collect(state: &State) -> Result<SaveData, String> {
                                 Ok(CoreDelta {
                                     ccd: *ccd,
                                     core: *core,
-                                    steps: ui::value(*h).parse().map_err(
-                                        |_| "Gültige Curve-Optimizer-Schritte eingeben.",
-                                    )?,
+                                    steps: ui::value(*h)
+                                        .parse()
+                                        .map_err(|_| t("preset.co_steps_invalid"))?,
                                 })
                             })
                             .collect::<Result<Vec<_>, String>>()?,
@@ -776,9 +791,18 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
                 .filter(|r| r.field.group == group)
             {
                 show(row.check, expanded);
+                show(row.info, expanded);
                 show(row.note, expanded);
                 if expanded {
-                    ui::place(row.check, 16, y - scroll, w - 390, 32);
+                    let check = (CHECK_BOX + row.label_width + 6).min(w - 430);
+                    ui::place(row.check, 16, y - scroll, check, 32);
+                    ui::place(
+                        row.info,
+                        16 + check + 4,
+                        y - scroll + 3,
+                        INFO_SIZE,
+                        INFO_SIZE,
+                    );
                     ui::place(row.note, w - 370, y - scroll + 7, 156, 24);
                 }
                 match &row.editor {
@@ -928,6 +952,37 @@ unsafe fn paint_pane(hwnd: HWND, state: &State, dc: HDC) {
         }
     }
 }
+/// Round outlined "i" in the muted text colour; brighter when focused or pressed.
+unsafe fn info_draw(state: &State, item: &DRAWITEMSTRUCT) {
+    unsafe {
+        let r = item.rcItem;
+        ui::fill(item.hDC, &r, state.theme.bg());
+        let size = (r.right - r.left).min(r.bottom - r.top) - 4;
+        let left = r.left + (r.right - r.left - size) / 2;
+        let top = r.top + (r.bottom - r.top - size) / 2;
+        let color = if item.itemState & (ODS_SELECTED | ODS_FOCUS) != 0 {
+            state.theme.text()
+        } else {
+            state.theme.muted()
+        };
+        let pen = CreatePen(PS_SOLID, 2, color);
+        let old_pen = SelectObject(item.hDC, pen);
+        let old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+        Ellipse(item.hDC, left, top, left + size, top + size);
+        SelectObject(item.hDC, old_brush);
+        SelectObject(item.hDC, old_pen);
+        DeleteObject(pen);
+        let mut label = r;
+        ui::draw_text(
+            item.hDC,
+            state.theme.small,
+            &mut label,
+            "i",
+            color,
+            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+        );
+    }
+}
 unsafe fn group_draw(state: &State, item: &DRAWITEMSTRUCT) {
     unsafe {
         let group = item.CtlID as usize - GROUP_BASE;
@@ -950,7 +1005,7 @@ unsafe fn group_draw(state: &State, item: &DRAWITEMSTRUCT) {
             item.hDC,
             state.theme.body,
             &mut label,
-            GROUPS[group],
+            t(GROUPS[group]),
             state.theme.text(),
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
         );
@@ -1080,8 +1135,11 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
             }
             WM_DRAWITEM => {
                 let item = &*(l as *const DRAWITEMSTRUCT);
-                if (GROUP_BASE..GROUP_BASE + GROUPS.len()).contains(&(item.CtlID as usize)) {
+                let id = item.CtlID as usize;
+                if (GROUP_BASE..GROUP_BASE + GROUPS.len()).contains(&id) {
                     group_draw(state, item);
+                } else if id >= FIELD_BASE && (id - FIELD_BASE) % FIELD_STRIDE == INFO_OFFSET {
+                    info_draw(state, item);
                 } else {
                     state.theme.button(item, state.theme.body, false);
                 }
@@ -1115,15 +1173,28 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
         }
     }
 }
+/// Shows what a setting changes and what it does.
+fn explain(hwnd: HWND, state: &State, index: usize) {
+    if let Some(row) = state.rows.borrow().get(index) {
+        unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(row.field.info()).as_ptr(),
+                wide(row.field.label()).as_ptr(),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+    }
+}
 fn dirty(hwnd: HWND, state: &State) {
     state.dirty.set(true);
-    status(hwnd, state, "Ungespeicherte Änderungen.", false);
+    status(hwnd, state, t("preset.unsaved"), false);
     enable(hwnd, state);
 }
 fn edit_gpu_curve(hwnd: HWND, state: &State) {
     let draft = (|| {
         let view = state.view.borrow();
-        let view = view.as_ref().ok_or("Preset wird noch geladen.")?;
+        let view = view.as_ref().ok_or(t("preset.still_loading"))?;
         let curve = Curve::gpu(view.curve.clone()?, state.curve.borrow().as_ref())?;
         Ok::<_, String>((curve, view.binding.clone()))
     })();
@@ -1162,20 +1233,15 @@ fn edit_gpu_curve(hwnd: HWND, state: &State) {
                 }
             }
             dirty(hwnd, state);
-            status(
-                hwnd,
-                state,
-                "Kurve übernommen. Preset noch nicht gespeichert.",
-                false,
-            );
+            status(hwnd, state, t("preset.curve_taken"), false);
         }
         Ok(None) => status(
             hwnd,
             state,
             if state.dirty.get() {
-                "Kurvenänderungen verworfen. Preset-Entwurf bleibt ungespeichert."
+                t("preset.curve_discarded_dirty")
             } else {
-                "Kurvenbearbeitung verworfen."
+                t("preset.curve_discarded")
             },
             false,
         ),
@@ -1205,8 +1271,8 @@ fn discard(hwnd: HWND, state: &State) -> bool {
         || unsafe {
             MessageBoxW(
                 hwnd,
-                wide("Ungespeicherte Änderungen verwerfen?").as_ptr(),
-                wide("Preset wechseln").as_ptr(),
+                wide(t("preset.discard_question")).as_ptr(),
+                wide(t("preset.discard_title")).as_ptr(),
                 MB_YESNO | MB_ICONQUESTION,
             )
         } == IDYES
@@ -1231,24 +1297,31 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
         match m {
             WM_CREATE => {
                 state.theme.frame(hwnd);
-                ui::control(
-                    hwnd,
-                    state.theme.title,
-                    730,
-                    "STATIC",
-                    "Leistungsprofile",
-                    0,
-                );
+                ui::control(hwnd, state.theme.title, 730, "STATIC", t("preset.title"), 0);
                 ui::control(
                     hwnd,
                     state.theme.body,
                     TAB,
                     "BUTTON",
-                    "Custom Presets",
+                    t("preset.tab"),
                     WS_TABSTOP,
                 );
-                ui::control(hwnd, state.theme.small, 731, "STATIC", "Preset", 0);
-                ui::control(hwnd, state.theme.small, 732, "STATIC", "Name", 0);
+                ui::control(
+                    hwnd,
+                    state.theme.small,
+                    731,
+                    "STATIC",
+                    t("preset.preset_label"),
+                    0,
+                );
+                ui::control(
+                    hwnd,
+                    state.theme.small,
+                    732,
+                    "STATIC",
+                    t("preset.name_label"),
+                    0,
+                );
                 ui::control(
                     hwnd,
                     state.theme.body,
@@ -1257,7 +1330,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     "",
                     WS_TABSTOP | CBS_DROPDOWNLIST as u32,
                 );
-                ui::control(hwnd, state.theme.body, NEW, "BUTTON", "Neu", WS_TABSTOP);
+                ui::control(
+                    hwnd,
+                    state.theme.body,
+                    NEW,
+                    "BUTTON",
+                    t("preset.new"),
+                    WS_TABSTOP,
+                );
                 let name = ui::control(
                     hwnd,
                     state.theme.body,
@@ -1283,7 +1363,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 );
                 state.pane.set(pane);
                 for (section, (_, label)) in SECTIONS.iter().enumerate() {
-                    ui::control(pane, state.theme.heading, 720 + section, "STATIC", label, 0);
+                    ui::control(
+                        pane,
+                        state.theme.heading,
+                        720 + section,
+                        "STATIC",
+                        t(label),
+                        0,
+                    );
                 }
                 state.groups.set(std::array::from_fn(|i| {
                     ui::control(
@@ -1291,7 +1378,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                         state.theme.body,
                         GROUP_BASE + i,
                         "BUTTON",
-                        GROUPS[i],
+                        t(GROUPS[i]),
                         WS_TABSTOP | BS_OWNERDRAW as u32 | BS_NOTIFY as u32,
                     )
                 }));
@@ -1301,7 +1388,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     state.theme.body,
                     STARTUP,
                     "BUTTON",
-                    "Bei Windows-Start aktivieren",
+                    t("preset.startup_label"),
                     WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                 );
                 ui::control(
@@ -1309,13 +1396,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     state.theme.small,
                     STATUS as usize,
                     "STATIC",
-                    "Presets werden geladen …",
+                    t("preset.status_loading"),
                     0,
                 );
                 for (id, label) in [
-                    (APPLY, "Anwenden"),
-                    (SAVE, "Speichern"),
-                    (DELETE, "Löschen"),
+                    (APPLY, t("preset.apply_button")),
+                    (SAVE, t("preset.save")),
+                    (DELETE, t("preset.delete")),
                 ] {
                     ui::control(hwnd, state.theme.body, id, "BUTTON", label, WS_TABSTOP);
                 }
@@ -1352,6 +1439,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
             WM_COMMAND => {
                 let id = w & 0xffff;
                 let notification = (w >> 16) & 0xffff;
+                if id >= FIELD_BASE
+                    && (id - FIELD_BASE) % FIELD_STRIDE == INFO_OFFSET
+                    && notification == BN_CLICKED as usize
+                {
+                    explain(hwnd, state, (id - FIELD_BASE) / FIELD_STRIDE);
+                    return 0;
+                }
                 if state.rendering.get() || state.busy.get() {
                     return 0;
                 }
@@ -1420,7 +1514,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                             .as_ref()
                             .and_then(|v| v.profiles.get((i as usize).wrapping_sub(1)))
                             .map(|p| p.id.clone());
-                        dispatch(hwnd, state, Request::Load(id), "Preset wird geladen …");
+                        dispatch(hwnd, state, Request::Load(id), t("preset.loading"));
                     } else {
                         // CBN_SELCHANGE arrives after the native selector has
                         // moved. Keep its identity aligned with the retained
@@ -1442,7 +1536,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 match id {
                     NEW => {
                         if discard(hwnd, state) {
-                            dispatch(hwnd, state, Request::Load(None), "Neues Preset …");
+                            dispatch(hwnd, state, Request::Load(None), t("preset.new_loading"));
                         }
                     }
                     SAVE => match collect(state) {
@@ -1450,27 +1544,22 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                             hwnd,
                             state,
                             Request::Save(Box::new(data)),
-                            "Preset wird gespeichert …",
+                            t("preset.saving"),
                         ),
                         Err(e) => status(hwnd, state, &e, true),
                     },
                     APPLY => {
                         if state.view.borrow().as_ref().is_some_and(|v| v.pending) {
-                            dispatch(
-                                hwnd,
-                                state,
-                                Request::Recover,
-                                "Originalzustand wird wiederhergestellt …",
-                            );
+                            dispatch(hwnd, state, Request::Recover, t("preset.restoring"));
                         } else if !state.dirty.get() {
                             if let Some(id) = selected(state) {
-                                dispatch(hwnd, state, Request::Apply(id), "Windows-Freigabe …");
+                                dispatch(hwnd, state, Request::Apply(id), t("common.uac"));
                             }
                         }
                     }
                     DELETE => {
                         if let Some(id) = selected(state) {
-                            dispatch(hwnd, state, Request::Delete(id), "Preset wird gelöscht …");
+                            dispatch(hwnd, state, Request::Delete(id), t("preset.deleting"));
                         }
                     }
                     STARTUP => {
@@ -1479,7 +1568,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                                 hwnd,
                                 state,
                                 Request::Startup(id, checked(GetDlgItem(hwnd, STARTUP as i32))),
-                                "Windows-Start wird aktualisiert …",
+                                t("preset.startup_updating"),
                             );
                         }
                     }
@@ -1539,7 +1628,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
             WM_CLOSE => {
                 if state.busy.get() {
                     state.closing.set(true);
-                    status(hwnd, state, "Vorgang wird abgeschlossen …", false);
+                    status(hwnd, state, t("common.finishing"), false);
                 } else if state.preview.is_some() || discard(hwnd, state) {
                     DestroyWindow(hwnd);
                 }
@@ -1568,7 +1657,7 @@ fn run_window(
 ) -> Result<(), String> {
     let [width, height] = size.unwrap_or([1100, 900]);
     if !(920..=2560).contains(&width) || !(720..=1600).contains(&height) {
-        return Err("Preset preview dimensions outside supported capture bounds".into());
+        return Err(t("error.preview_size").into());
     }
     if let Some(id) = &id {
         omen_core::profiles::validate_id(id)?;
@@ -1604,7 +1693,7 @@ fn run_window(
         ui::register(PANE_CLASS, Some(pane_proc))?;
         let hwnd = ui::create(
             CLASS,
-            "Omen Hub++ – Leistungsprofile",
+            t("preset.window_title"),
             width,
             height,
             (&*state as *const State).cast_mut().cast(),
@@ -1614,7 +1703,7 @@ fn run_window(
         ShowWindow(hwnd, SW_SHOW);
         let handle = hwnd as usize;
         let thread = thread::spawn(move || worker(handle, requests, updates));
-        dispatch(hwnd, &state, Request::Load(id), "Presets werden geladen …");
+        dispatch(hwnd, &state, Request::Load(id), t("preset.status_loading"));
         ui::messages(hwnd);
         let _ = state.tx.send(Request::Stop);
         if thread.is_finished() {

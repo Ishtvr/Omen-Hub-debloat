@@ -422,7 +422,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let saved = store.last_transaction::<RestoreState>()?;
             if args.len() == 3 && saved.profile_id != args[1] {
-                return Err("Das letzte Originalbild gehört zu einem anderen Profil. Neu laden, bevor es wiederhergestellt wird.".into());
+                return Err(omen_core::message::msg("profile.err.other_profile", &[]));
             }
             // Disable further automatic application before explicit recovery.
             store.disable_startup()?;

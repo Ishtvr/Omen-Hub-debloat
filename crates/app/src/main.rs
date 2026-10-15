@@ -11,6 +11,7 @@ mod dashboard;
 #[cfg(windows)]
 mod elevation;
 #[cfg(windows)]
+mod i18n;
 mod inventory;
 #[cfg(windows)]
 mod keyboard_ui;
@@ -37,7 +38,10 @@ fn main() {
     if let Err(error) = run() {
         #[cfg(windows)]
         if std::env::args().count() == 1 || std::env::args().skip(1).eq(["--tray"]) {
-            let body: Vec<u16> = error.encode_utf16().chain(Some(0)).collect();
+            let body: Vec<u16> = i18n::message(&error)
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
             let title: Vec<u16> = omen_core::APP_NAME.encode_utf16().chain(Some(0)).collect();
             // SAFETY: Strings are terminated and remain alive for the modal call.
             unsafe {

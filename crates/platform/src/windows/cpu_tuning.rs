@@ -1,10 +1,11 @@
-//! Curve Optimizer, PBO scalar and the PPT/TDC/EDC/Tctl limits through fixed SMU
-//! messages. Margins and scalar have SMU GETs; each limit is read back from the
+//! Curve Optimizer, PBO scalar and the PPT/STAPM/slow/TDC/EDC/Tctl limits through
+//! fixed SMU messages and the HP power-limit command. Margins and scalar have SMU GETs; each limit is read back from the
 //! PM-table cell measured on 16 October 2026 (cpu-smu-calibrate-limits).
 use super::smu::{Message, Smu, core_mask, margin_arg, margin_value};
 use omen_core::{
     Inventory,
     features::Feature,
+    message::msg,
     profiles::{CoreDelta, Value},
 };
 use serde::{Deserialize, Serialize};
@@ -15,35 +16,57 @@ const CORES: u8 = 16;
 pub const MARGIN_RANGE: (i64, i64) = (-50, 30);
 pub const PBO_RANGE: (i64, i64) = (1, 10);
 
+/// How a limit is written: a fixed RSMU message, or byte `n` of the HP BIOS
+/// power-limit command (`0x29`), which on this board carries slow (byte 0) and
+/// STAPM (byte 1) in whole watts (measured 16 October 2026).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Setter {
+    Smu(Message),
+    Hp(usize),
+}
 /// Limit, its setter, measured PM-table cell (version 0x540108), the factor from
 /// the table unit to the profile unit and the allowed profile range. Upper
 /// bounds are the fused PPT/TDC, the observed EDC and a 95 °C Tctl ceiling.
-type LimitSpec = (Feature, Message, usize, f32, (i64, i64));
-const LIMITS: [LimitSpec; 4] = [
+type LimitSpec = (Feature, Setter, usize, f32, (i64, i64));
+const LIMITS: [LimitSpec; 6] = [
     (
         Feature::CpuPptLimitMw,
-        Message::SetPptLimit,
+        Setter::Smu(Message::SetPptLimit),
         2,
         1000.0,
         (15_000, 160_000),
     ),
     (
+        Feature::CpuStapmLimitMw,
+        Setter::Hp(1),
+        0,
+        1000.0,
+        (15_000, 160_000),
+    ),
+    (
+        Feature::CpuSlowPptLimitMw,
+        Setter::Hp(0),
+        4,
+        1000.0,
+        (15_000, 160_000),
+    ),
+    (
         Feature::CpuTdcMa,
-        Message::SetTdcLimit,
+        Setter::Smu(Message::SetTdcLimit),
         8,
         1000.0,
         (30_000, 108_000),
     ),
     (
         Feature::CpuEdcMa,
-        Message::SetEdcLimit,
+        Setter::Smu(Message::SetEdcLimit),
         62,
         1000.0,
         (30_000, 160_000),
     ),
     (
         Feature::CpuTemperatureLimitC,
-        Message::SetTctlMax,
+        Setter::Smu(Message::SetTctlMax),
         10,
         1.0,
         (60, 95),
@@ -51,11 +74,48 @@ const LIMITS: [LimitSpec; 4] = [
 ];
 const PM_TABLE_VERSION: u32 = 0x540108;
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
-fn limit(feature: Feature) -> Option<(Message, usize, f32, (i64, i64))> {
+/// The BIOS hands HP limits to the SMU a little later than RSMU messages land.
+const HP_SETTLE: std::time::Duration = std::time::Duration::from_millis(600);
+fn limit(feature: Feature) -> Option<(Setter, usize, f32, (i64, i64))> {
     LIMITS
         .iter()
         .find(|l| l.0 == feature)
         .map(|l| (l.1, l.2, l.3, l.4))
+}
+/// Sends one limit. The HP command always carries both slow and STAPM, so the
+/// other one is written with its live value instead of relying on `0xFF`.
+fn send_limit(smu: &Smu, feature: Feature, value: i64) -> Result<(), String> {
+    let (setter, ..) = limit(feature).ok_or("No limit")?;
+    match setter {
+        Setter::Smu(message) => {
+            smu.send(message, u32::try_from(value).map_err(|e| e.to_string())?)?;
+            // The PM table reflects a new limit after a short refresh interval.
+            std::thread::sleep(SETTLE);
+        }
+        Setter::Hp(byte) => {
+            let (version, table) = smu.pm_table(8)?;
+            if version != PM_TABLE_VERSION {
+                return Err(format!(
+                    "PM table {version:#x} differs from the measured layout"
+                ));
+            }
+            let watts = |cell: usize| {
+                let w = table[cell].round();
+                if (15.0..=160.0).contains(&w) {
+                    Ok(w as u8)
+                } else {
+                    Err(format!("PM-table limit {w} W is not plausible"))
+                }
+            };
+            let mut payload = [watts(4)?, watts(0)?, 0xFF, 0xFF];
+            payload[byte] = u8::try_from(value / 1000).map_err(|e| e.to_string())?;
+            smu.hp()?
+                .set_mode_payload(omen_core::hp_mode::POWER_LIMITS_TYPE, payload)
+                .map_err(|e| e.to_string())?;
+            std::thread::sleep(HP_SETTLE);
+        }
+    }
+    Ok(())
 }
 pub fn range(feature: Feature) -> (i64, i64) {
     match feature {
@@ -84,7 +144,7 @@ pub fn qualified(inventory: &Inventory) -> Result<(), String> {
         return Err("CPU tuning is qualified only for HP8E35/F.13/Ryzen9 8940HX".into());
     }
     if !super::smu::module_present() {
-        return Err("Diese App-Version enthält keinen SMU-Adapter.".into());
+        return Err(msg("cpu.err.no_smu_module", &[]));
     }
     Ok(())
 }
@@ -170,13 +230,15 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
         (Feature::CpuCurveOptimizerPerCore, Value::PerCore(cores)) => {
             for c in cores {
                 if c.ccd > 1 || c.core > 7 || !in_margin(i64::from(c.steps)) {
-                    return Err(format!(
-                        "Curve Optimizer: CCD {} Kern {} mit {} liegt außerhalb {}…{}",
-                        c.ccd + 1,
-                        c.core + 1,
-                        c.steps,
-                        MARGIN_RANGE.0,
-                        MARGIN_RANGE.1
+                    return Err(msg(
+                        "cpu.err.core_margin",
+                        &[
+                            &(c.ccd + 1),
+                            &(c.core + 1),
+                            &c.steps,
+                            &MARGIN_RANGE.0,
+                            &MARGIN_RANGE.1,
+                        ],
                     ));
                 }
             }
@@ -187,13 +249,19 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
         }
         (f, Value::Integer(v)) if limit(f).is_some() => {
             let (lo, hi) = range(f);
-            if (lo..=hi).contains(v) {
+            let whole_watts = !matches!(limit(f), Some((Setter::Hp(_), ..))) || v % 1000 == 0;
+            if (lo..=hi).contains(v) && whole_watts {
                 Ok(())
             } else {
-                Err(format!("Wert {v} liegt außerhalb {lo}…{hi}"))
+                // Shown in the profile unit (W, A or °C), not mW/mA.
+                let unit = limit(f).map_or(1, |l| l.2 as i64);
+                Err(msg(
+                    "cpu.err.limit_range",
+                    &[&(v / unit), &(lo / unit), &(hi / unit)],
+                ))
             }
         }
-        _ => Err("Wert außerhalb des erlaubten Bereichs".into()),
+        _ => Err(msg("cpu.err.out_of_range", &[])),
     }
 }
 
@@ -214,12 +282,7 @@ pub fn write(smu: &Smu, feature: Feature, value: &Value) -> Result<(), String> {
         (Feature::CpuPboScalar, Value::Integer(v)) => {
             smu.send(Message::SetPboScalar, (*v as u32) * 100)?;
         }
-        (f, Value::Integer(v)) if limit(f).is_some() => {
-            let (message, ..) = limit(f).ok_or("No limit")?;
-            smu.send(message, u32::try_from(*v).map_err(|e| e.to_string())?)?;
-            // The PM table reflects a new limit after a short refresh interval.
-            std::thread::sleep(SETTLE);
-        }
+        (f, Value::Integer(v)) if limit(f).is_some() => send_limit(smu, f, *v)?,
         _ => return Err("Wrong SMU value".into()),
     }
     Ok(())
@@ -259,11 +322,7 @@ pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), S
                 (f32::from_bits(*bits) * 100.0).round() as u32,
             )?;
         }
-        SmuImage::Limit { value } => {
-            let (message, ..) = limit(feature).ok_or("No limit")?;
-            smu.send(message, u32::try_from(*value).map_err(|e| e.to_string())?)?;
-            std::thread::sleep(SETTLE);
-        }
+        SmuImage::Limit { value } => send_limit(smu, feature, *value)?,
     }
     if capture(smu, feature)? != *original {
         return Err("SMU setting did not return to its captured original".into());

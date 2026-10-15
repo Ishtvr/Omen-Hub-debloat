@@ -1,5 +1,6 @@
 //! Direct four-zone lighting. One elevated editor; the dashboard stays normal.
 use crate::{
+    i18n::t,
     native_ui::{self as ui, text, wide},
     theme,
 };
@@ -34,7 +35,13 @@ const POWER: usize = 600;
 const ZONE: usize = 610;
 const STATUS: i32 = 624;
 const CLASS: &str = "OmenHubPPKeyboardEditor";
-const LABELS: [&str; 4] = ["Links", "Mitte", "Rechts", "Nummernblock"];
+/// Language keys of the four keyboard zones, left to right.
+const LABELS: [&str; 4] = [
+    "lighting.zone_left",
+    "lighting.zone_middle",
+    "lighting.zone_right",
+    "lighting.zone_numpad",
+];
 enum Request {
     Read,
     Apply {
@@ -122,13 +129,13 @@ fn refresh(state: &State) {
         text(
             state.power.get(),
             if state.busy.get() {
-                "Wird übernommen …"
+                t("lighting.applying")
             } else if !ready {
-                "Erneut verbinden"
+                t("lighting.reconnect")
             } else if state.enabled.get() {
-                "Ein"
+                t("common.on")
             } else {
-                "Aus"
+                t("common.off")
             },
         );
         for handle in state.zones.get() {
@@ -145,11 +152,11 @@ fn dispatch(state: &State, request: Request) {
     if state.busy.replace(true) {
         return;
     }
-    status(state, "Wird übernommen …", false);
+    status(state, t("lighting.applying"), false);
     refresh(state);
     if state.tx.send(request).is_err() {
         state.busy.set(false);
-        status(state, "Verbindung beendet. Fenster neu öffnen.", true);
+        status(state, t("preset.connection_lost"), true);
         refresh(state);
     }
 }
@@ -346,13 +353,20 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         match message {
             WM_CREATE => {
                 state.theme.frame(hwnd);
-                ui::control(hwnd, state.theme.title, 620, "STATIC", "Beleuchtung", 0);
+                ui::control(
+                    hwnd,
+                    state.theme.title,
+                    620,
+                    "STATIC",
+                    t("dash.lighting"),
+                    0,
+                );
                 state.power.set(ui::control(
                     hwnd,
                     state.theme.body,
                     POWER,
                     "BUTTON",
-                    "Wird gelesen …",
+                    t("curve.reading_short"),
                     WS_TABSTOP,
                 ));
                 let zones = std::array::from_fn(|i| {
@@ -361,14 +375,20 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         state.theme.body,
                         ZONE + i,
                         "BUTTON",
-                        LABELS[i],
+                        t(LABELS[i]),
                         WS_TABSTOP | BS_OWNERDRAW as u32,
                     )
                 });
                 state.zones.set(zones);
                 for (i, label) in LABELS.iter().enumerate() {
-                    let c =
-                        ui::control(hwnd, state.theme.small, 630 + i, "STATIC", label, SS_CENTER);
+                    let c = ui::control(
+                        hwnd,
+                        state.theme.small,
+                        630 + i,
+                        "STATIC",
+                        t(label),
+                        SS_CENTER,
+                    );
                     theme::muted(c);
                 }
                 ui::control(
@@ -376,7 +396,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     state.theme.small,
                     STATUS as usize,
                     "STATIC",
-                    "Tastatur wird gelesen …",
+                    t("lighting.reading"),
                     0,
                 );
                 layout(hwnd, state);
@@ -432,9 +452,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 while let Ok(update) = state.rx.try_recv() {
                     state.busy.set(false);
                     if let Some(live) = update.state {
-                        if let Ok(colors) = live.colors().and_then(|v| {
-                            v.try_into().map_err(|_| "Vier Zonen erforderlich".into())
-                        }) {
+                        if let Ok(colors) = live
+                            .colors()
+                            .and_then(|v| v.try_into().map_err(|_| t("lighting.four_zones").into()))
+                        {
                             state.colors.set(colors);
                         }
                         state
@@ -448,9 +469,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         status(
                             state,
                             if error.contains("outside this window") {
-                                "Beleuchtung wurde zwischenzeitlich geändert. Erneut wählen."
+                                t("lighting.changed_elsewhere")
                             } else {
-                                "Beleuchtung konnte nicht geändert werden. Erneut verbinden."
+                                t("lighting.failed")
                             },
                             true,
                         );
@@ -458,9 +479,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         status(
                             state,
                             if state.enabled.get() {
-                                "Zone auswählen, um die Farbe zu ändern."
+                                t("lighting.hint")
                             } else {
-                                "Beleuchtung aus."
+                                t("lighting.off")
                             },
                             false,
                         );
@@ -475,7 +496,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             WM_CLOSE => {
                 if state.busy.get() {
                     state.closing.set(true);
-                    status(state, "Änderung wird abgeschlossen …", false);
+                    status(state, t("lighting.finishing"), false);
                 } else {
                     DestroyWindow(hwnd);
                 }
@@ -492,7 +513,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
 }
 pub fn run(selected: Option<String>) -> Result<(), String> {
     if selected.is_some() {
-        return Err("Beleuchtung direkt über keyboard-ui ohne Profilparameter öffnen.".into());
+        return Err(t("lighting.no_profile").into());
     }
     if unsafe { IsUserAnAdmin() } == 0 {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -507,7 +528,7 @@ pub fn run(selected: Option<String>) -> Result<(), String> {
             )
         };
         if result as usize <= 32 {
-            return Err("Windows-Freigabe für Beleuchtung abgebrochen.".into());
+            return Err(t("lighting.uac_cancelled").into());
         }
         return Ok(());
     }
@@ -527,7 +548,7 @@ fn run_window(
 ) -> Result<(), String> {
     let [width, height] = size.unwrap_or([1000, 590]);
     if !(760..=2560).contains(&width) || !(480..=1600).contains(&height) {
-        return Err("Lighting preview dimensions outside supported capture bounds".into());
+        return Err(t("error.preview_size").into());
     }
     let (tx, requests) = mpsc::channel();
     let (updates, rx) = mpsc::channel();
@@ -578,7 +599,7 @@ fn run_window(
         ui::register(CLASS, Some(procedure))?;
         let hwnd = ui::create(
             CLASS,
-            "Omen Hub++ – Beleuchtung",
+            t("lighting.window_title"),
             width,
             height,
             (&*state as *const State).cast_mut().cast(),
@@ -589,9 +610,9 @@ fn run_window(
             status(
                 &state,
                 if state.enabled.get() {
-                    "Zone auswählen, um die Farbe zu ändern."
+                    t("lighting.hint")
                 } else {
-                    "Beleuchtung aus."
+                    t("lighting.off")
                 },
                 false,
             );

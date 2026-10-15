@@ -2,6 +2,7 @@
 //! documented GET, so capture, readback and restore are complete.
 use omen_core::{
     features::Feature,
+    message::msg,
     profiles::{Choice, Value},
 };
 use serde::{Deserialize, Serialize};
@@ -359,7 +360,7 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
             // Reading any index proves the plan exists on this system.
             read_index(scheme, MAX_STATE)
                 .map(|_| ())
-                .map_err(|_| "Dieser Energiesparplan ist auf diesem System nicht vorhanden.".into())
+                .map_err(|_| msg("windows.err.plan_missing", &[]))
         }
         (Feature::WindowsEnergyMode, Value::Choice(c)) => overlay_guid(*c)
             .map(|_| ())
@@ -368,16 +369,14 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
             if refresh_rates()?.iter().any(|r| i64::from(*r) == *hz) {
                 Ok(())
             } else {
-                Err(format!(
-                    "Der Bildschirm bietet {hz} Hz in der aktuellen Auflösung nicht an."
-                ))
+                Err(msg("windows.err.refresh_rate", &[hz]))
             }
         }
         (f, Value::Integer(v)) if power_setting(f).is_some() => {
             if (0..=100).contains(v) {
                 Ok(())
             } else {
-                Err("Prozentwert außerhalb 0…100".into())
+                Err(msg("windows.err.percent", &[]))
             }
         }
         _ => Err("Wrong value type for this Windows setting".into()),

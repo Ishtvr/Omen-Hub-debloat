@@ -1,6 +1,7 @@
 //! Serialize visible GPU reads on a worker; each read owns a bounded child.
 //! NVIDIA process-global allocations disappear with that child, even if the
 //! driver's DLL unload retains state. No driver handle enters the dashboard.
+use crate::i18n::{t, tf};
 use omen_core::GpuSample;
 use serde::{Deserialize, Serialize};
 use std::{sync::mpsc, thread, time::Duration};
@@ -41,7 +42,7 @@ impl GpuTelemetry {
                     crate::read_process::capture(crate::read_process::ReadCommand::GpuTelemetry)
                         .unwrap_or_else(|error| Readout {
                             sample: None,
-                            warnings: vec![format!("GPU-Leseprozess: {error}")],
+                            warnings: vec![tf("warning.gpu_reader", &[&error])],
                             lost: true,
                         });
                 if results.send(readout).is_err() {
@@ -60,7 +61,7 @@ impl GpuTelemetry {
     pub fn sample(&mut self) -> Option<GpuSample> {
         if self.tx.send(Request::Sample).is_err() {
             self.lost = true;
-            self.warnings = vec!["NVIDIA-Lesesitzung beendet; alte Werte verworfen.".into()];
+            self.warnings = vec![t("warning.nvidia_ended").into()];
             return None;
         }
         // The isolated child owns a five-second deadline; allow its result
@@ -73,9 +74,7 @@ impl GpuTelemetry {
             }
             Err(_) => {
                 self.lost = true;
-                self.warnings = vec![
-                    "NVIDIA-Messung hat das Zeitlimit überschritten; alte Werte verworfen.".into(),
-                ];
+                self.warnings = vec![t("warning.nvidia_timeout").into()];
                 None
             }
         }
