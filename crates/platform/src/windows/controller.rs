@@ -668,7 +668,7 @@ impl Backend for Controller {
                     reason: "HP BIOS graphics mode; takes effect after a restart".into(),
                     integer_range: None,
                     requires_ac: false,
-                    startup_safe: false,
+                    startup_safe: true,
                 }
             } else {
                 Capability::unsupported(feature, "Graphics mode is qualified only on HP8E35/F.13")
@@ -682,7 +682,7 @@ impl Backend for Controller {
                     reason: "AMD SMU message with exact per-core/scalar readback".into(),
                     integer_range: Some(super::cpu_tuning::range(feature)),
                     requires_ac: false,
-                    startup_safe: false,
+                    startup_safe: true,
                 },
                 Err(reason) => Capability::unsupported(feature, reason),
             };
@@ -700,7 +700,7 @@ impl Backend for Controller {
                         .into(),
                     integer_range: None,
                     requires_ac: false,
-                    startup_safe: false,
+                    startup_safe: true,
                 }
             } else {
                 Capability::unsupported(feature, "Dynamic Boost is qualified only on HP8E35/F.13")
@@ -736,11 +736,11 @@ impl Backend for Controller {
                     "Max-Fan is qualified only on HP8E35/F.13",
                 );
             }
-            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac:true,startup_safe:false};
+            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
         }
         if feature == Feature::KeyboardEffect {
             return match self.keyboard_state() {
-                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe:false},
+                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe: true},
                 Ok(_)=>Capability::unsupported(feature,"Mode restore is not qualified at this raw brightness level"),
                 Err(reason)=>Capability::unsupported(feature,reason),
             };
@@ -749,7 +749,7 @@ impl Backend for Controller {
             return match self.keyboard_state() {
                 Ok(_)=>Capability {feature,access:if KEYBOARD_COLOR_WRITE_VERIFIED||self.keyboard_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},
                     reason:"Direct board8E35/F.13 classic four-zone RGB; complete opaque/brightness state must remain unchanged. Animations and independent HP-controller replacement are not qualified".into(),
-                    integer_range:None,requires_ac:false,startup_safe:false},
+                    integer_range:None,requires_ac:false,startup_safe: true},
                 Err(reason)=>Capability::unsupported(feature,reason),
             };
         }
@@ -759,7 +759,7 @@ impl Backend for Controller {
                 state.value()?;
                 Ok(state)
             })();
-            return match state {Ok(_)=>Capability{feature,access:if CURVE_WRITE_VERIFIED||self.curve_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified".into(),integer_range:None,requires_ac:true,startup_safe:CURVE_WRITE_VERIFIED&&!self.curve_calibration},Err(reason)=>Capability::unsupported(feature,reason)};
+            return match state {Ok(_)=>Capability{feature,access:if CURVE_WRITE_VERIFIED||self.curve_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified".into(),integer_range:None,requires_ac: false,startup_safe:CURVE_WRITE_VERIFIED&&!self.curve_calibration},Err(reason)=>Capability::unsupported(feature,reason)};
         }
         if matches!(
             feature,
@@ -837,7 +837,7 @@ impl Backend for Controller {
                                 .into()
                         },
                         integer_range: Some(range),
-                        requires_ac: true,
+                        requires_ac: false,
                         startup_safe: CLOCK_WRITE_VERIFIED && !self.calibration,
                     }
                 }
