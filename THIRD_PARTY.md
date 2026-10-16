@@ -2,7 +2,7 @@
 
 Omen Hub++ contains original Rust code licensed under MIT. An optional embedded CPU sensor module is a separately licensed LGPL-2.1-or-later component. OmenMon/OmenHwCtl are references; their implementations have not been copied or linked.
 
-Direct Rust dependencies are `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. The exact dependency graph is locked in `Cargo.lock`; review each dependency's license and redistribution requirements before distributing release packages. This list is not a complete set of notices for every transitive dependency.
+Direct Rust dependencies are `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. The exact dependency graph is locked in `Cargo.lock`. All crates linked into the Windows executable are permissively licensed (MIT, Apache-2.0, ISC, Unlicense and Unicode-3.0 terms). `scripts/build-release.ps1` reads the locked graph with `cargo metadata`, excludes build- and dev-only crates, and copies every crate's own license files into `dist/third-party/rust/` with a summary in `dist/third-party/RUST-DEPENDENCIES.md`. Distribute these files with release packages.
 
 [UXTU](https://github.com/JamesCJ60/Universal-x86-Tuning-Utility) and [NvAPIWrapper](https://github.com/falahati/NvAPIWrapper) are local research references for feature scope and private-contract investigation. Their code is not copied or linked into this Rust runtime. Private control tables still require exact driver evidence and full restore validation; a matching structure size alone is insufficient.
 
@@ -19,3 +19,5 @@ When staged at build time, the binary embeds the unmodified signed **AMDFamily17
 The installed AMD Ryzen Master SDK, proprietary HP modules and diagnostic driver probes are local research sources only. None is loaded or copied into the CPU runtime. Linux [RAPL](https://github.com/torvalds/linux/blob/master/arch/x86/events/rapl.c) and [k10temp](https://github.com/torvalds/linux/blob/master/drivers/hwmon/k10temp.c) are public register/units references; the Rust calculation code is original.
 
 [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) is a planned optional native dependency, not included in this build. Its LGPL-3.0 terms, driver requirements and CPU-family support must be reviewed before integration or redistribution. No HP assemblies, HP drivers, WinRing0 binaries or decompiled code are distributed.
+
+The application icon (`crates/app/assets/omen-hub-pp.ico`) is original artwork drawn by `scripts/generate-icon.py` from geometric primitives. It uses no HP, OMEN or third-party logo and is covered by the project's MIT license.

@@ -338,8 +338,8 @@ fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
     data.uID = 1;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = TRAY;
-    // SAFETY: Shared system icon, never destroyed by this process.
-    data.hIcon = unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
+    // Shared embedded icon, never destroyed by this process.
+    data.hIcon = crate::native_ui::app_icon(SM_CXSMICON);
     for (target, value) in data.szTip.iter_mut().zip(wide(APP_NAME)) {
         *target = value;
     }
@@ -745,16 +745,18 @@ fn run_window(
         SetProcessDPIAware();
         let instance = GetModuleHandleW(ptr::null());
         let class_name = wide("OmenHubPlusPlusWindow");
-        let class = WNDCLASSW {
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
-            hIcon: LoadIconW(ptr::null_mut(), IDI_APPLICATION),
+            hIcon: crate::native_ui::app_icon(SM_CXICON),
+            hIconSm: crate::native_ui::app_icon(SM_CXSMICON),
             hbrBackground: state.theme.background,
             lpszClassName: class_name.as_ptr(),
             ..std::mem::zeroed()
         };
-        if RegisterClassW(&class) == 0 {
+        if RegisterClassExW(&class) == 0 {
             return Err(format!("Window class: {}", std::io::Error::last_os_error()));
         }
         state.taskbar_message = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());

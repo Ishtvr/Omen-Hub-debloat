@@ -372,6 +372,19 @@ Die vier neuen Produktions-Clientbilder unter `.impeccable/review/cpu-windows-se
 
 Die alten Debug-/Hardware- und Speichermessungen weiter oben behalten ihre eigenen Build-Hashes; eine neue CPU-Helper-/Warm-Tray-Messung oder eine 115-W-Leistungsprobe wurde nicht ausgeführt. Die Regressionen schreiben nur eigene temporäre Profildateien, keine CPU/APU-/GPU-Power-/Voltage-Werte. Keine Dienste, Treiber oder Firmware wurden geändert.
 
+## App-Symbol und Installationspaket — 16. Oktober 2026
+
+Auf Nutzerwunsch hat die Anwendung ein eigenes Symbol für Desktopverknüpfung und Programm: dunkle Kachel, Mint-Instrument und darunter der gezeichnete Schriftzug **Hub** (statt eines ersten „++“-Entwurfs, ebenfalls auf Nutzerwunsch). `crates/app/build.rs` schreibt Symbolgruppe und Versionsinformationen ohne Ressourcencompiler als `.res`; Dashboard, Leistungsprofile, Beleuchtung, Kurveneditor und Tray laden das Symbol aus der EXE und fallen ohne Ressource auf das Windows-Standardsymbol zurück.
+
+Geprüft wurde in einer Linux-Cloud-Umgebung, **nicht auf dem Referenzgerät**:
+
+- Die erzeugte `.res` ist byteidentisch mit der Ausgabe von `llvm-rc` für dieselbe Symbol-/VERSIONINFO-Definition.
+- Ein mit `lld-link` und den Windows-SDK-Bibliotheken gelinkter x64-Release (2077184 Bytes, nicht verteilt) enthält zehn ICON-Einträge (16…256 px), GROUP_ICON 1 und VERSIONINFO 1.
+- `cargo fmt --check`, Clippy mit `-D warnings` für `x86_64-pc-windows-msvc` und die Linux-Tests bestehen: **79 Tests** (66 Core, 9 plattformneutrale Platform-Tests und die vier neuen Ressourcen-Tests der App). Windows-spezifische Platform-/App-Tests liefen hier nicht; die Windows-CI führt die vollständige Suite mit MSVC `link.exe` aus.
+- `install-app.ps1` und `build-release.ps1` sind mit PowerShell 7.4 syntaxgeprüft; der Lizenzsammler fand für alle 51 eingebundenen Crates eigene Lizenzdateien.
+
+Nicht geprüft: Installation, Verknüpfungen, Entfernen und `Install.cmd` auf Windows; Symboldarstellung bei verschiedenen DPI, in Taskleiste und Tray; Speicherbedarf und Hash des neuen Windows-Releases. Hardwareverträge, Journale und Startup-Prüfung sind unverändert.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.

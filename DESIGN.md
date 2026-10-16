@@ -101,7 +101,7 @@ components:
 
 The user approved a modern, clean dark application on 14 October 2026. Charcoal surfaces, clear value fields and restrained mint actions give the native Windows interface a consistent visual language. Information density serves frequent hardware checks; typography and alignment carry the hierarchy.
 
-Measured state, editable drafts and hardware actions keep distinct labels and places. The shared system covers the dashboard and native GPU, lighting and curve-editor controls. The curve plot retains its user-approved MSI Afterburner reference and its own data palette. No raster assets, downloaded fonts, animation or browser runtime are required.
+Measured state, editable drafts and hardware actions keep distinct labels and places. The shared system covers the dashboard and native GPU, lighting and curve-editor controls. The curve plot retains its user-approved MSI Afterburner reference and its own data palette. The client UI requires no raster assets, downloaded fonts, animation or browser runtime; the only raster asset is the application icon embedded as a Windows resource.
 
 **Key Characteristics:**
 
@@ -183,6 +183,10 @@ The canvas keeps the scoped chart palette, rectangular grid, pale square draft n
 Windows high contrast is sampled when `Theme` is created and selects system color roles for shared surfaces, text and buttons. DWM dark-frame/caption/text attributes are requested in ordinary mode. The client captures do not verify titlebars, dynamic high-contrast switching or comprehensive assistive-technology behavior. The chart's scoped palette also remains outside a complete high-contrast certificate.
 
 The design sidecar contains self-contained HTML/CSS reference tiles for the documentation panel. They translate these native primitives for inspection; the application does not load or execute them. Its synthesized tonal ramps are display metadata derived from each token's hue/chroma, rather than additional runtime palette steps.
+
+### Application icon
+
+The icon is a flat `panel` tile with a one-unit `border`-family rim and the panel's rounded corners. A mint gauge arc opens toward the bottom, a dim mint track marks the remaining range, and a pale mint needle ends in a bright `foreground` hub. Sizes from 48 pixels add the word **Hub** below the gauge, drawn as rounded `foreground` strokes in the gauge's line language rather than set in a font; at the user's request on 16 October 2026 it replaced an earlier **++** label; 32 and 40 pixels drop the label, and 16–24 pixels show only a thicker arc and hub. Every size is drawn separately by `scripts/generate-icon.py`, not downscaled, and the same `.ico` serves Explorer, shortcuts, taskbar, title bar and tray. It contains no HP or OMEN mark.
 
 ## Do's and Don'ts
 
