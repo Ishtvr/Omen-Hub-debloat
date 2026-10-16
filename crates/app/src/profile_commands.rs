@@ -134,6 +134,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 &omen_platform::inventory(),
                 || store.fan_max(),
                 || store.active_fan_curve(),
+                || store.ccd_selection(),
                 |s| {
                     let _ = status.save_fan_status(s);
                 },
@@ -401,6 +402,15 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
             let digest = profile_digest(&profile)?;
+            if profile
+                .settings
+                .iter()
+                .any(|s| s.feature == Feature::CpuCcdAffinity)
+            {
+                // The background service pins programs; install or update it
+                // first so the saved selection takes effect.
+                crate::startup_setup::ensure_fan_service()?;
+            }
             let mut controller = Controller::for_profile(&profile)?;
             let result = transaction::apply(&profile, &digest, &mut controller, &mut store, false);
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"result":result}))?;

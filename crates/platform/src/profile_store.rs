@@ -402,6 +402,37 @@ impl ProfileStore {
         read_json::<serde_json::Value>(&self.root.join("fan-mode.json"))
             .is_ok_and(|v| v["schema"] == 1 && v["mode"] == "max")
     }
+    /// CCD selection the background service pins foreground programs to
+    /// (bit 0 = first CCD). Absent means every CCD: Windows schedules freely.
+    pub fn ccd_selection(&self) -> Result<Option<u8>, String> {
+        let path = self.root.join("ccd-affinity.json");
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        let value: serde_json::Value = read_json(&path)?;
+        if value["schema"] != 1 {
+            return Err("Unknown CCD affinity schema".into());
+        }
+        value["selection"]
+            .as_u64()
+            .and_then(|s| u8::try_from(s).ok())
+            .filter(|s| *s > 0)
+            .map(Some)
+            .ok_or_else(|| "CCD affinity selection is invalid".into())
+    }
+    pub fn save_ccd_selection(&self, selection: Option<u8>) -> Result<(), String> {
+        let path = self.root.join("ccd-affinity.json");
+        match selection {
+            Some(selection) => atomic_json(
+                &path,
+                &serde_json::json!({"schema": 1, "selection": selection}),
+            ),
+            None if path.try_exists().map_err(|e| e.to_string())? => {
+                fs::remove_file(path).map_err(|e| e.to_string())
+            }
+            None => Ok(()),
+        }
+    }
     pub fn save_fan_status<T: Serialize>(&self, value: &T) -> Result<(), String> {
         atomic_json(&self.root.join("fan-service-status.json"), value)
     }
@@ -794,6 +825,23 @@ mod tests {
         assert!(store.pending().unwrap());
         finish(store, Completion::Restored);
         assert_eq!(store.last_transaction::<Value>().unwrap(), saved);
+    }
+    #[test]
+    fn ccd_selection_round_trips_and_all_ccds_removes_the_file() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.ccd_selection().unwrap(), None);
+        store.save_ccd_selection(Some(1)).unwrap();
+        assert_eq!(store.ccd_selection().unwrap(), Some(1));
+        store.save_ccd_selection(None).unwrap();
+        assert_eq!(store.ccd_selection().unwrap(), None);
+        store.save_ccd_selection(None).unwrap();
+        fs::write(
+            store.root().join("ccd-affinity.json"),
+            br#"{"schema":1,"selection":0}"#,
+        )
+        .unwrap();
+        assert!(store.ccd_selection().is_err());
     }
     #[test]
     fn migration_retains_pending_barrier_and_never_overwrites_existing_data() {

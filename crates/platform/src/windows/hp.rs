@@ -484,17 +484,21 @@ pub struct HpModeReport {
     pub plan: omen_core::hp_mode::ModePlan,
     pub gpu_before: GpuPowerStatus,
     pub gpu_after: GpuPowerStatus,
+    /// STAPM and slow limit read back through the SMU, in watts; None when
+    /// the SMU module is not available.
+    pub cpu_limits_w: Option<(i64, i64)>,
 }
 
-/// Switches the notebook to the Hub's Balanced or Unleashed mode. The thermal
-/// mode cannot be read back; the GPU cTGP/PPAB flags are verified afterwards.
-/// A failed Unleashed write falls back to Balanced.
+/// Switches the notebook to one of the Hub's modes. The thermal mode cannot
+/// be read back; the GPU cTGP/PPAB flags and, when the SMU is reachable, the
+/// CPU PL1 are verified afterwards. Any failed mode falls back to Balanced.
 pub fn apply_hp_mode(
     inventory: &Inventory,
     mode: omen_core::hp_mode::HpMode,
 ) -> Result<HpModeReport, String> {
     use omen_core::hp_mode::{self, GPU_POWER_TYPE, HpMode, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
-    if mode == HpMode::Unleashed && super::power_status().ac_connected != Some(true) {
+    let ac = super::power_status().ac_connected == Some(true);
+    if mode == HpMode::Unleashed && !ac {
         return Err("Unleashed braucht Netzbetrieb.".into());
     }
     let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
@@ -508,16 +512,17 @@ pub fn apply_hp_mode(
         .get(Read::SystemDesign)
         .map_err(|e| query_error("system-design", e))?;
     let design = decode_system_design(code, &design)?;
-    if !design.extreme_supported {
+    if mode == HpMode::Unleashed && !design.extreme_supported {
         return Err("Die Firmware meldet keinen Unleashed-/Extreme-Modus.".into());
     }
     let gpu_before = read_gpu(&bios)?;
-    let send = |plan: &hp_mode::ModePlan| -> Result<GpuPowerStatus, String> {
-        // Same order as the Hub: mode, then GPU flags, then the shared budget.
+    let send = |plan: &hp_mode::ModePlan| -> Result<(GpuPowerStatus, Option<(i64, i64)>), String> {
+        // Same order as the Hub: mode, GPU flags, shared budget, then PL1.
         for (command_type, bytes) in [
             (THERMAL_MODE_TYPE, plan.thermal),
             (GPU_POWER_TYPE, plan.gpu_power),
             (POWER_LIMITS_TYPE, plan.shared_budget),
+            (POWER_LIMITS_TYPE, plan.cpu_power),
         ] {
             bios.set_mode_payload(command_type, bytes)
                 .map_err(|e| query_error(&format!("mode SET {command_type:#x}"), e))?;
@@ -531,17 +536,28 @@ pub fn apply_hp_mode(
                 &[&after.custom_tgp_enabled, &after.ppab_enabled],
             ));
         }
-        Ok(after)
+        let limits = super::cpu_tuning::hp_limits_w(inventory).ok();
+        if let Some((stapm, slow)) = limits {
+            let pl1 = i64::from(plan.pl1_w());
+            if stapm != pl1 || slow != pl1 {
+                return Err(omen_core::message::msg(
+                    "mode.err.pl1_readback",
+                    &[&pl1, &stapm, &slow],
+                ));
+            }
+        }
+        Ok((after, limits))
     };
-    let plan = hp_mode::plan(mode, design.default_shared_budget_raw)?;
+    let plan = hp_mode::plan(mode, design.default_shared_budget_raw, ac)?;
     match send(&plan) {
-        Ok(gpu_after) => Ok(HpModeReport {
+        Ok((gpu_after, cpu_limits_w)) => Ok(HpModeReport {
             plan,
             gpu_before,
             gpu_after,
+            cpu_limits_w,
         }),
-        Err(error) if mode == HpMode::Unleashed => {
-            let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw)
+        Err(error) if mode != HpMode::Balanced => {
+            let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw, ac)
                 .and_then(|balanced| send(&balanced));
             Err(match fallback {
                 Ok(_) => omen_core::message::msg("mode.err.balanced_restored", &[&error]),

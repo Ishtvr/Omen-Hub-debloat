@@ -715,7 +715,12 @@ impl Backend for Controller {
                 Ok(integer_range) => Capability {
                     feature,
                     access: Access::ReadWrite,
-                    reason: "Windows setting with exact readback and restore".into(),
+                    reason: if feature == Feature::CpuCcdAffinity {
+                        "Saved for the Omen Hub++ background service, which pins the foreground program to the selected CCDs and restores it at all CCDs"
+                    } else {
+                        "Windows setting with exact readback and restore"
+                    }
+                    .into(),
                     integer_range,
                     requires_ac: false,
                     startup_safe: true,
@@ -865,6 +870,12 @@ impl Backend for Controller {
             }
             Feature::GpuPowerLimitMw => {
                 "Current power-limit readback/restore and model write validation are missing; a maximum constraint is not the current limit"
+            }
+            Feature::AmdCpuClockMhz | Feature::AmdCpuVoltageMv => {
+                "A fixed CPU clock or voltage needs the SMU OC mode. Firmware permission (cpu-smu-probe: oc_allowed) and a measured enable/restore on 8E35/F.13 are pending; the original Hub reaches it only through an HP service"
+            }
+            Feature::CpuBoostProfile | Feature::CpuAllCoreVoltageOffsetMv => {
+                "No such control exists for Dragon Range: neither the SMU nor the original Hub offers a boost profile or an all-core millivolt offset. Use EPP/processor boost and Curve Optimizer"
             }
             _ => {
                 "Profile data is supported; no validated hardware/Windows adapter for this feature yet"

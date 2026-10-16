@@ -1,3 +1,4 @@
+mod ccd;
 mod control_lease;
 mod controller;
 mod cooling;

@@ -44,6 +44,7 @@ Seit 16. Oktober übernimmt ein eigener Lüfterdienst (Anmeldeaufgabe `OmenHubPP
 
 - Das Lüfterfenster speichert die gemeinsame CPU-/GPU-Kurve nur noch als `active-fan-curve.json`, nicht mehr als Leistungsprofil.
 - Der Schnellschalter auf der Startseite (rechts neben **Steuerung**) schreibt `fan-mode.json`: **Auto** folgt der gespeicherten Kurve, **Max** setzt beide Lüfter auf Höchststufe. Beim ersten Umschalten ohne installierten Dienst fragt Windows einmal nach der Freigabe.
+- Derselbe Dienst setzt die CCD-Affinität aus `ccd-affinity.json` (Preset-Einstellung, siehe [8E35](models/8e35.md)): jedes Programm im Vordergrund läuft dann nur auf den gewählten CCDs, „beide“ oder das Dienstende geben die alte Zuordnung zurück. Das läuft unabhängig von Lüfterkurve und Original-Hub; wendet ein Preset die CCD-Affinität an, wird der Dienst vorher installiert oder aktualisiert.
 
 Der folgende Abschnitt beschreibt den Stand vor dem Lüfterdienst.
 

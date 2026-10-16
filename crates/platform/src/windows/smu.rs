@@ -37,6 +37,10 @@ pub enum Message {
     GetCoreMargin,
     GetFusedPpt,
     GetFusedTdc,
+    /// Read-only OC capability bits (bit 0: overclocking enabled).
+    IsOverclockable,
+    /// Read-only boost frequency limit (Fmax) in MHz.
+    GetBoostLimitFrequency,
 }
 impl Message {
     fn id(self) -> u64 {
@@ -52,6 +56,8 @@ impl Message {
             Self::GetCoreMargin => 0xD5,
             Self::GetFusedPpt => 0xDC,
             Self::GetFusedTdc => 0xDB,
+            Self::IsOverclockable => 0x6F,
+            Self::GetBoostLimitFrequency => 0x6E,
         }
     }
 }
@@ -272,7 +278,9 @@ pub fn calibrate_limits(inventory: &Inventory) -> Result<Vec<LimitCalibration>, 
     Ok(results)
 }
 
-/// Read-only diagnostic used to qualify readback before any SMU write.
+/// Read-only diagnostic used to qualify readback before any SMU write. The
+/// OC fields decide whether a fixed CPU clock/voltage can exist on this
+/// firmware at all (ZenStates-Core `GetIsOverclockable`, `GetOcMode`).
 #[derive(Debug, Serialize)]
 pub struct SmuProbe {
     pub smu_version: Result<u32, String>,
@@ -282,15 +290,31 @@ pub struct SmuProbe {
     pub fused_ppt_raw: Result<u32, String>,
     pub fused_tdc_raw: Result<u32, String>,
     pub core_margins: Vec<Result<i32, String>>,
+    /// RSMU 0x6F capability word. Bit 0 = the firmware allows the OC mode a
+    /// fixed clock or voltage needs; bit 1 power limits; bit 2 PBO.
+    pub oc_capabilities_raw: Result<u32, String>,
+    pub oc_allowed: Option<bool>,
+    /// The SMU reports a PBO scalar of 0 while its OC mode is active.
+    pub oc_mode_active: Option<bool>,
+    pub boost_limit_mhz: Result<u32, String>,
 }
 pub fn probe(inventory: &Inventory) -> Result<SmuProbe, String> {
     let smu = Smu::new(inventory)?;
     let table = smu.pm_table(64);
+    let pbo_scalar_raw = smu.send(Message::GetPboScalar, 0).map(|r| r[0]);
+    let oc_capabilities_raw = smu.send(Message::IsOverclockable, 0).map(|r| r[0]);
     Ok(SmuProbe {
         smu_version: smu.smu_version(),
         pm_table_version: table.as_ref().map(|t| t.0).map_err(Clone::clone),
         pm_table_head: table.map(|t| t.1),
-        pbo_scalar_raw: smu.send(Message::GetPboScalar, 0).map(|r| r[0]),
+        oc_allowed: oc_capabilities_raw.as_ref().ok().map(|c| c & 1 != 0),
+        oc_capabilities_raw,
+        oc_mode_active: pbo_scalar_raw
+            .as_ref()
+            .ok()
+            .map(|bits| f32::from_bits(*bits) == 0.0),
+        pbo_scalar_raw,
+        boost_limit_mhz: smu.send(Message::GetBoostLimitFrequency, 0).map(|r| r[0]),
         fused_ppt_raw: smu.send(Message::GetFusedPpt, 0).map(|r| r[0]),
         fused_tdc_raw: smu.send(Message::GetFusedTdc, 0).map(|r| r[0]),
         // 8940HX: two CCDs with eight cores each.

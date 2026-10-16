@@ -378,6 +378,10 @@ Vom Nutzer freigegeben („Dann mach die STAPM/Fast/Slow settings“). Einmalige
 
 Jede Preset-Einstellung hat ein rundes **i**; ein Klick zeigt Name und Erklärung. Alle sichtbaren Texte stehen in `crates/app/lang/de.json` und `en.json`; Meldungen aus core/platform reisen als Marker und werden in der App übersetzt (docs/LOCALIZATION.md). Tests prüfen gleiche Schlüssel in beiden Sprachen, jeden im Code verwendeten Schlüssel und Name/Erklärung jeder Einstellung. Vorschauen in Deutsch und Englisch (Dashboard, Limits-Gruppe) wurden gerendert und geprüft.
 
+## Quiet/Performance, PL1, CCD-Affinität und OC-Probe — 16. Oktober 2026 (Cloud-Build, ungemessen)
+
+Gebaut ohne Hardwarelauf: Quiet (L0) und Performance (L7) im Dashboard-Moduswahlfeld mit rundem **i**; jeder Modus schreibt jetzt auch PL1 über HP `0x29` und liest STAPM/Slow aus der SMU-PM-Tabelle zurück (Werte und Quelle in [models/8e35.md](models/8e35.md)). CCD-Affinität bindet über den Hintergrunddienst das Vordergrundprogramm an die gewählten CCDs und stellt die ursprüngliche Affinität wieder her. `cpu-smu-probe` meldet zusätzlich `oc_allowed`, `oc_capabilities_raw`, `oc_mode_active` und `boost_limit_mhz` (nur lesend). AMD-Boostprofil und All-Core-Spannungsoffset wurden entfernt, weil Dragon Range dafür keine Steuerung hat. Fester CPU-Takt und feste Spannung bleiben gesperrt. Geprüft: `cargo fmt`, Clippy für `x86_64-pc-windows-msvc`, core-/platform-Tests unter Linux; Windows-Tests und Release-Build laufen in der CI.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.
@@ -388,6 +392,7 @@ Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) 
 - Echte Standby-/Resume-/AC-Wechsel, Display-Treiber-Neustart und MUX-Neustart. Lifecycle-Policy und Event-Handler sind implementiert, aber deren tatsächliche Hardwareübergänge nicht getestet.
 - Gezielt hängender WMI-Provider und verlorene Treibersitzung; Abgrenzung/Timeout/Backoff sind implementiert, die Störfälle noch nicht auf dem echten System provoziert.
 - CPU-Sensoren auf weiteren Geräten/Treiberversionen, gemessener Boost-/Effektivtakt und CCD-/Kerntemperaturen. Paketenergie-Mittelwert und Tctl sind auf der dokumentierten 8E35/F.13-/PawnIO-Kombination inzwischen bestätigt; keine ACPI-Zone und kein konfiguriertes Power-Limit werden als Messwert verwendet.
+- Quiet/Performance/Balanced/Unleashed mit PL1-Rücklesen, CCD-Affinität mit dem Hintergrunddienst und die OC-Felder von `cpu-smu-probe` auf 8E35/F.13.
 - Eigene Lüfterkurven, BIOS-Lüftermodus und zusätzlicher thermischer Sicherheitsweg; Max-Fan bei realen Power-Übergängen. Weitere Beleuchtungsvarianten, MUX, CPU-Tuning, GPU-/VRAM-Spannung und vollständiger Unleashed-Adapter. Tatsächlicher Reboot mit ausgewähltem Profil und ein gegebenenfalls nötiger privilegierter Dienst.
 - Visuelle Prüfung und Skalierung bei mehreren DPI-/Display-Konfigurationen; längere Tray- und Sensor-Dauerläufe.
 

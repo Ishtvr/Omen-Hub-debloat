@@ -114,6 +114,16 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
         ] {
             label(id, value, font, panel, muted);
         }
+        // Explains the four built-in modes (owner-drawn round "i").
+        control(
+            182,
+            "BUTTON",
+            "i",
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            th.small,
+            false,
+            false,
+        );
         control(
             101,
             "BUTTON",
@@ -237,10 +247,14 @@ pub unsafe fn layout(hwnd: HWND) {
         }
         // Content stays top-aligned; a taller window only adds space below it.
         let bottom = PANEL_BOTTOM + 150;
+        let label = GetDlgItem(hwnd, 161);
+        let font = SendMessageW(label, WM_GETFONT, 0, 0) as HFONT;
+        let mode_label = crate::native_ui::text_width(label, font, t("dash.mode")) + 4;
         boxes.extend([
             (160, [28, bottom, panel, 28]),
             (180, [28, bottom + 35, panel - 8, 74]),
-            (161, [right, bottom, panel, 28]),
+            (161, [right, bottom, mode_label, 28]),
+            (182, [right + mode_label + 6, bottom + 2, 24, 24]),
             (102, [right, bottom + 34, panel, 220]),
             (181, [right, bottom + 78, panel, 44]),
         ]);

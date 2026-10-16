@@ -971,37 +971,6 @@ unsafe fn paint_pane(hwnd: HWND, state: &State, dc: HDC) {
         }
     }
 }
-/// Round outlined "i" in the muted text colour; brighter when focused or pressed.
-unsafe fn info_draw(state: &State, item: &DRAWITEMSTRUCT) {
-    unsafe {
-        let r = item.rcItem;
-        ui::fill(item.hDC, &r, state.theme.bg());
-        let size = (r.right - r.left).min(r.bottom - r.top) - 4;
-        let left = r.left + (r.right - r.left - size) / 2;
-        let top = r.top + (r.bottom - r.top - size) / 2;
-        let color = if item.itemState & (ODS_SELECTED | ODS_FOCUS) != 0 {
-            state.theme.text()
-        } else {
-            state.theme.muted()
-        };
-        let pen = CreatePen(PS_SOLID, 2, color);
-        let old_pen = SelectObject(item.hDC, pen);
-        let old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
-        Ellipse(item.hDC, left, top, left + size, top + size);
-        SelectObject(item.hDC, old_brush);
-        SelectObject(item.hDC, old_pen);
-        DeleteObject(pen);
-        let mut label = r;
-        ui::draw_text(
-            item.hDC,
-            state.theme.small,
-            &mut label,
-            "i",
-            color,
-            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-        );
-    }
-}
 unsafe fn group_draw(state: &State, item: &DRAWITEMSTRUCT) {
     unsafe {
         let group = item.CtlID as usize - GROUP_BASE;
@@ -1158,7 +1127,7 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 if (GROUP_BASE..GROUP_BASE + GROUPS.len()).contains(&id) {
                     group_draw(state, item);
                 } else if id >= FIELD_BASE && (id - FIELD_BASE) % FIELD_STRIDE == INFO_OFFSET {
-                    info_draw(state, item);
+                    state.theme.info(item);
                 } else {
                     state.theme.button(item, state.theme.body, false);
                 }

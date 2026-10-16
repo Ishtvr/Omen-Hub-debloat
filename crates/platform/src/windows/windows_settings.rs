@@ -1,6 +1,8 @@
-//! Windows power-scheme and display settings. Every control has an exact
-//! documented GET, so capture, readback and restore are complete.
+//! Windows power-scheme and display settings, plus the CCD selection the
+//! background service enforces. Every control has an exact GET, so capture,
+//! readback and restore are complete.
 use omen_core::{
+    ccd,
     features::Feature,
     message::msg,
     profiles::{Choice, Value},
@@ -59,6 +61,7 @@ pub fn handles(feature: Feature) -> bool {
             | Feature::WindowsCoreParkingMinPercent
             | Feature::WindowsCoreParkingMaxPercent
             | Feature::DisplayRefreshRateHz
+            | Feature::CpuCcdAffinity
     )
 }
 
@@ -84,6 +87,15 @@ pub enum WindowsImage {
         height: u32,
         hz: u32,
     },
+    /// Saved CCD selection (bit 0 = first CCD); None = every CCD.
+    CcdSelection {
+        selection: Option<u8>,
+    },
+}
+
+/// The per-user file the background service reads every cycle.
+fn ccd_store() -> Result<crate::profile_store::ProfileStore, String> {
+    crate::profile_store::ProfileStore::user_data()
 }
 
 fn guid(value: u128) -> GUID {
@@ -294,6 +306,9 @@ pub fn capture(feature: Feature) -> Result<WindowsImage, String> {
                 hz: mode.dmDisplayFrequency,
             })
         }
+        Feature::CpuCcdAffinity => Ok(WindowsImage::CcdSelection {
+            selection: ccd_store()?.ccd_selection()?,
+        }),
         _ => Err("Not a Windows setting".into()),
     }
 }
@@ -328,6 +343,10 @@ pub fn value(feature: Feature, image: &WindowsImage) -> Result<Value, String> {
         (Feature::DisplayRefreshRateHz, WindowsImage::Refresh { hz, .. }) => {
             Value::Integer(i64::from(*hz))
         }
+        (Feature::CpuCcdAffinity, WindowsImage::CcdSelection { selection }) => {
+            let all = ccd::all(super::ccd::ccd_masks()?.len());
+            Value::Integer(i64::from(selection.unwrap_or(all)))
+        }
         _ => return Err("Windows image does not belong to this feature".into()),
     })
 }
@@ -347,6 +366,11 @@ pub fn range(feature: Feature) -> Result<Option<(i64, i64)>, String> {
             ))
         }
         f if power_setting(f).is_some() && f != Feature::WindowsBoostMode => Some((0, 100)),
+        Feature::CpuCcdAffinity => {
+            let ccds = super::ccd::ccd_masks()?.len();
+            ccd::validate(1, ccds)?;
+            Some((1, i64::from(ccd::all(ccds))))
+        }
         _ => None,
     })
 }
@@ -371,6 +395,9 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
             } else {
                 Err(msg("windows.err.refresh_rate", &[hz]))
             }
+        }
+        (Feature::CpuCcdAffinity, Value::Integer(v)) => {
+            ccd::validate(*v, super::ccd::ccd_masks()?.len()).map(|_| ())
         }
         (f, Value::Integer(v)) if power_setting(f).is_some() => {
             if (0..=100).contains(v) {
@@ -422,6 +449,12 @@ pub fn write(feature: Feature, original: &WindowsImage, value: &Value) -> Result
             *height,
             u32::try_from(*hz).map_err(|e| e.to_string())?,
         ),
+        (WindowsImage::CcdSelection { .. }, Value::Integer(v)) => {
+            let ccds = super::ccd::ccd_masks()?.len();
+            let selection = ccd::validate(*v, ccds)?;
+            // "Every CCD" is stored as no file, the state before any selection.
+            ccd_store()?.save_ccd_selection((selection != ccd::all(ccds)).then_some(selection))
+        }
         _ => Err("Windows image and value do not match".into()),
     }
 }
@@ -445,6 +478,7 @@ pub fn restore(feature: Feature, original: &WindowsImage) -> Result<(), String> 
         }
         WindowsImage::Overlay { overlay } => write_overlay(*overlay)?,
         WindowsImage::Refresh { width, height, hz } => write_refresh(*width, *height, *hz)?,
+        WindowsImage::CcdSelection { selection } => ccd_store()?.save_ccd_selection(*selection)?,
     }
     if capture(feature)? != *original {
         return Err("Windows setting did not return to its captured original".into());
@@ -460,6 +494,15 @@ mod tests {
     fn guid_round_trip_keeps_byte_order() {
         for value in [PLAN_BALANCED, BOOST_MODE, OVERLAY_PERFORMANCE, 0] {
             assert_eq!(to_u128(&guid(value)), value);
+        }
+    }
+
+    #[test]
+    fn ccd_selection_image_round_trips_through_the_journal() {
+        for selection in [None, Some(1), Some(2)] {
+            let image = WindowsImage::CcdSelection { selection };
+            let text = serde_json::to_string(&image).unwrap();
+            assert_eq!(serde_json::from_str::<WindowsImage>(&text).unwrap(), image);
         }
     }
 

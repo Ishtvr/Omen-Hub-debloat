@@ -27,19 +27,17 @@ const KEYBOARD: usize = 105;
 /// Fan quick switch on the Controls line: saved curve or both fans at maximum.
 const FAN_AUTO: usize = 106;
 const FAN_MAX: usize = 107;
+/// Round "i" next to the performance-mode label.
+const MODE_INFO: usize = 182;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
-/// Built-in modes (language keys) ahead of saved presets. Only Balanced and Unleashed have a
-/// native HP adapter; the others stay listed but unavailable.
-const DEFAULT_MODES: [(&str, Option<HpMode>); 4] = [
-    ("mode.quiet", None),
-    ("mode.balanced", Some(HpMode::Balanced)),
-    ("mode.performance", None),
-    ("mode.unleashed", Some(HpMode::Unleashed)),
+/// Built-in HP modes (language keys) ahead of saved presets.
+const DEFAULT_MODES: [(&str, HpMode); 4] = [
+    ("mode.quiet", HpMode::Quiet),
+    ("mode.balanced", HpMode::Balanced),
+    ("mode.performance", HpMode::Performance),
+    ("mode.unleashed", HpMode::Unleashed),
 ];
-fn unavailable(index: usize) -> String {
-    tf("mode.unavailable", &[&t(DEFAULT_MODES[index].0)])
-}
 
 #[derive(Debug, Clone)]
 enum Request {
@@ -273,10 +271,10 @@ fn worker(
             Some(Request::ApplyMode(mode)) => {
                 let result =
                     crate::elevation::run(None, crate::elevation::Action::Mode(mode), || false);
-                let label = match mode {
-                    HpMode::Balanced => t("mode.balanced"),
-                    HpMode::Unleashed => t("mode.unleashed"),
-                };
+                let label = DEFAULT_MODES
+                    .iter()
+                    .find(|(_, m)| *m == mode)
+                    .map_or("", |(key, _)| t(key));
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
                     Ok(_) => tf("mode.active", &[&label]),
                     Err(error) => tf("mode.failed", &[&label, &error]),
@@ -363,9 +361,6 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
             }
             *state.custom_profiles.borrow_mut() = entries;
             SendMessageW(state.profile.get(), CB_SETCURSEL, selected, 0);
-            if selected < DEFAULT_MODES.len() && DEFAULT_MODES[selected].1.is_none() {
-                *state.mode_status.borrow_mut() = unavailable(selected);
-            }
             SetWindowTextW(
                 state.preview.get(),
                 wide(&state.mode_status.borrow()).as_ptr(),
@@ -523,7 +518,10 @@ unsafe extern "system" fn window_proc(
             }
             WM_DRAWITEM => {
                 let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
-                if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
+                if item.CtlID == MODE_INFO as u32 {
+                    state.theme.info(item);
+                    1
+                } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
                     state.theme.button(
                         item,
                         state.theme.body,
@@ -551,6 +549,14 @@ unsafe extern "system" fn window_proc(
                 // Focus/paint/double-click notifications cannot trigger actions.
                 if id != PROFILE && (wparam >> 16) as u32 != BN_CLICKED {
                     return 0;
+                }
+                if id == MODE_INFO {
+                    MessageBoxW(
+                        hwnd,
+                        wide(t("info.mode")).as_ptr(),
+                        wide(t("dash.mode")).as_ptr(),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
                 }
                 if id == REFRESH {
                     reload_modes(hwnd, state);
@@ -612,15 +618,7 @@ unsafe extern "system" fn window_proc(
                     } else if index >= 0 {
                         state.preview_index.set(index as usize);
                         *state.selected_custom.borrow_mut() = None;
-                        if let Some(mode) = DEFAULT_MODES[index as usize].1 {
-                            begin(Request::ApplyMode(mode));
-                        } else {
-                            *state.mode_status.borrow_mut() = unavailable(index as usize);
-                            SetWindowTextW(
-                                state.preview.get(),
-                                wide(&unavailable(index as usize)).as_ptr(),
-                            );
-                        }
+                        begin(Request::ApplyMode(DEFAULT_MODES[index as usize].1));
                     }
                 }
                 if id == SHOW as usize {

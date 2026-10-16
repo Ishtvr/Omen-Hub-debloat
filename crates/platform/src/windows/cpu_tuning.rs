@@ -117,6 +117,21 @@ fn send_limit(smu: &Smu, feature: Feature, value: i64) -> Result<(), String> {
     }
     Ok(())
 }
+/// STAPM and slow limit in whole watts after an HP `0x29` write, read from
+/// their measured PM-table cells once the BIOS has handed them to the SMU.
+pub fn hp_limits_w(inventory: &Inventory) -> Result<(i64, i64), String> {
+    qualified(inventory)?;
+    std::thread::sleep(HP_SETTLE);
+    let smu = Smu::new(inventory)?;
+    let watts = |feature| match capture(&smu, feature)? {
+        SmuImage::Limit { value } => Ok((value as f64 / 1000.0).round() as i64),
+        _ => Err("Not a limit".to_owned()),
+    };
+    Ok((
+        watts(Feature::CpuStapmLimitMw)?,
+        watts(Feature::CpuSlowPptLimitMw)?,
+    ))
+}
 pub fn range(feature: Feature) -> (i64, i64) {
     match feature {
         Feature::CpuPboScalar => PBO_RANGE,

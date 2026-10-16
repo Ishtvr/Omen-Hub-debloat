@@ -74,7 +74,7 @@ Die sichtbare NVIDIA-Telemetrie läuft pro Abfrage in einem kurzlebigen eigenen 
 | CPU-Takt (Windows) | Durchschnitt der von Windows gemeldeten MHz, implementiert; kein gemessener Boost-/Effektivtakt |
 | CPU-Paketleistung und Tctl | Feste PawnIO-/AMD-RAPL-Leseoperationen auf 8E35/F.13/8940HX mit exakt geprüftem Treiber/Modul; nach expliziter UAC-Freigabe, Energie-Mittelwert samt Intervall, erste Baseline ohne Wattwert |
 | Native Oberfläche, Tray, AC-/Standby-Ereignisse | Implementiert; Suspend/Resume auf Hardware noch zu prüfen |
-| Leistungsmodus | Quiet (Default), Balanced (Default), Performance (Default) noch nicht anwendbar; gespeicherte Custom Presets stehen im selben Dropdown. Dynamic Boost steht im GPU-Presetbereich, die Hardwareanwendung ist noch nicht freigegeben |
+| Leistungsmodus | Quiet (Default), Balanced (Default), Performance (Default) und Unleashed (Default) über den eigenen HP-Modusadapter anwendbar (Quiet/Performance noch ohne Hardwaretest); gespeicherte Custom Presets stehen im selben Dropdown. Dynamic Boost steht im GPU-Presetbereich und ist anwendbar |
 | Lüfterzustand und Firmwaretabelle | Feste BIOS-WMI-GETs auf 8E35/F.13; CPU-/GPU-Drehzahlen in 100-RPM-Einheiten, Zuordnung, vollständiger Max-Fan-Schalter und gekoppelte Tabelle |
 | Gemeinsame Thermikdiagnose | `cooling-read` erfasst einmalig CPU-Tctl, GPU, Firmware-IR in °C und Lüfterwerte; monotone Zeitfenster, Fehler bei fehlenden/veralteten Daten, keine Kurven-Schreibfreigabe; erhöhte PowerShell erforderlich |
 | Max-Fan | Manueller BIOS-WMI-Override auf 8E35/F.13 mit Identitäts-/Tabellen-/Zustandsprüfung, vollständigem Readback und persistiertem Original-Restore; Netzbetrieb erforderlich, kein automatischer Profilstart |

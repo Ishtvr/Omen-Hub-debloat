@@ -1,6 +1,7 @@
 //! Background fan control that replaces the OMEN Hub's software fan loop.
 //! It runs elevated from the user's logon task, follows the saved shared
 //! curve and hands control back to the BIOS whenever it stops sending.
+//! The same service pins the foreground program to the saved CCD selection.
 use super::{
     CpuHardwareReader, Nvidia,
     hp::{HpBios, Read},
@@ -41,6 +42,8 @@ pub struct FanServiceStatus {
     pub protection: u8,
     pub cpu_level: u8,
     pub gpu_level: u8,
+    /// Programs currently pinned to the saved CCD selection.
+    pub ccd_pinned: usize,
     pub updated_unix_s: u64,
 }
 
@@ -70,6 +73,18 @@ fn hub_running() -> bool {
     }
 }
 
+/// Gives every pinned program its affinity back when the service ends,
+/// including an early error return.
+struct Pinning {
+    enforcer: omen_core::ccd::Enforcer,
+    processes: super::ccd::WindowsProcesses,
+}
+impl Drop for Pinning {
+    fn drop(&mut self) {
+        self.enforcer.release(&mut self.processes);
+    }
+}
+
 fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
     FanCurve::new(
         points
@@ -85,11 +100,13 @@ fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
 
 /// Runs until the process ends. `max` is the dashboard quick switch (both
 /// fans at maximum); otherwise `load` returns the active shared curve (None:
-/// leave the BIOS in charge). `report` persists each status.
+/// leave the BIOS in charge). `ccd` returns the saved CCD selection (None:
+/// every CCD). `report` persists each status.
 pub fn run(
     inventory: &Inventory,
     mut max: impl FnMut() -> bool,
     mut load: impl FnMut() -> Result<Option<Vec<FanPoint>>, String>,
+    mut ccd: impl FnMut() -> Result<Option<u8>, String>,
     mut report: impl FnMut(&FanServiceStatus),
 ) -> Result<(), String> {
     if inventory.manufacturer != "HP" || inventory.board != "8E35" || inventory.bios != "F.13" {
@@ -101,8 +118,27 @@ pub fn run(
     let mut smoother = (Smoother::default(), Smoother::default());
     let mut last_heartbeat: Option<Instant> = None;
     let mut protection = 0u8;
+    let ccd_masks = super::ccd::ccd_masks();
+    let mut pinning = Pinning {
+        enforcer: omen_core::ccd::Enforcer::default(),
+        processes: super::ccd::WindowsProcesses::default(),
+    };
     loop {
         let started = Instant::now();
+        // CCD pinning is independent of the fans and of the original Hub. An
+        // unreadable selection or topology releases every pinned program.
+        let target = match (&ccd_masks, ccd()) {
+            (Ok(masks), Ok(Some(selection))) => {
+                omen_core::ccd::affinity(selection, masks).unwrap_or(None)
+            }
+            _ => None,
+        };
+        let Pinning {
+            enforcer,
+            processes,
+        } = &mut pinning;
+        enforcer.tick(processes, target);
+        let ccd_pinned = enforcer.pinned();
         let now = || {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -118,6 +154,7 @@ pub fn run(
             protection: 0,
             cpu_level: 0,
             gpu_level: 0,
+            ccd_pinned,
             updated_unix_s: now(),
         };
         // Releasing control means sending nothing: the BIOS resumes its own
@@ -208,6 +245,7 @@ pub fn run(
             protection,
             cpu_level,
             gpu_level,
+            ccd_pinned,
             updated_unix_s: now(),
         });
         std::thread::sleep(CYCLE.saturating_sub(started.elapsed()));

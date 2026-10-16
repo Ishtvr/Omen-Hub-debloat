@@ -72,8 +72,14 @@ pub const REMOVED_APU_OPTIONS: &[F] = &[
     F::IntelGpuPowerBalance,
     F::IntelGpuVoltageOffsetMv,
 ];
+/// No Dragon Range control exists for these: the SMU and the original Hub
+/// offer no AMD boost profile (Windows EPP/boost cover it) and no all-core
+/// millivolt offset (Curve Optimizer is the Zen 4 offset).
+pub const REMOVED_CPU_OPTIONS: &[F] = &[F::CpuBoostProfile, F::CpuAllCoreVoltageOffsetMv];
 pub fn retired(feature: F) -> bool {
-    REMOVED_GPU_OPTIONS.contains(&feature) || REMOVED_APU_OPTIONS.contains(&feature)
+    REMOVED_GPU_OPTIONS.contains(&feature)
+        || REMOVED_APU_OPTIONS.contains(&feature)
+        || REMOVED_CPU_OPTIONS.contains(&feature)
 }
 pub fn fields() -> Vec<Field> {
     let rows = [
@@ -89,10 +95,8 @@ pub fn fields() -> Vec<Field> {
         (F::CpuTdcMa, 1, 108000),
         (F::CpuEdcMa, 1, 160000),
         (F::CpuPboScalar, 2, 1),
-        (F::CpuBoostProfile, 2, 0),
         (F::CpuCurveOptimizerAllCore, 3, 0),
         (F::CpuCurveOptimizerPerCore, 4, 0),
-        (F::CpuAllCoreVoltageOffsetMv, 5, 0),
         (F::AmdCpuVoltageMv, 5, 1000),
         (F::AmdCpuClockMhz, 5, 3000),
         (F::IntelPl1Mw, 6, 45000),

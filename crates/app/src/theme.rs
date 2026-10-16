@@ -191,6 +191,43 @@ impl Theme {
             FillRect(dc, &r, self.background);
         }
     }
+    /// Round outlined "i" in the muted text colour; brighter when focused or
+    /// pressed. Every setting carries one that explains what it does.
+    pub unsafe fn info(&self, item: &DRAWITEMSTRUCT) {
+        unsafe {
+            let r = item.rcItem;
+            let fill = CreateSolidBrush(self.bg());
+            FillRect(item.hDC, &r, fill);
+            DeleteObject(fill);
+            let size = (r.right - r.left).min(r.bottom - r.top) - 4;
+            let left = r.left + (r.right - r.left - size) / 2;
+            let top = r.top + (r.bottom - r.top - size) / 2;
+            let color = if item.itemState & (ODS_SELECTED | ODS_FOCUS) != 0 {
+                self.text()
+            } else {
+                self.muted()
+            };
+            let pen = CreatePen(PS_SOLID, 2, color);
+            let old_pen = SelectObject(item.hDC, pen);
+            let old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+            Ellipse(item.hDC, left, top, left + size, top + size);
+            SelectObject(item.hDC, old_brush);
+            SelectObject(item.hDC, old_pen);
+            DeleteObject(pen);
+            let mut label = r;
+            let old_font = SelectObject(item.hDC, self.small);
+            SetBkMode(item.hDC, TRANSPARENT as i32);
+            SetTextColor(item.hDC, color);
+            DrawTextW(
+                item.hDC,
+                wide("i").as_ptr(),
+                -1,
+                &mut label,
+                DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+            );
+            SelectObject(item.hDC, old_font);
+        }
+    }
     pub unsafe fn button(&self, item: &DRAWITEMSTRUCT, font: HFONT, primary: bool) {
         unsafe {
             let disabled = item.itemState & ODS_DISABLED != 0;

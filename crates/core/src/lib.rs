@@ -1,4 +1,5 @@
 //! Hardware-independent policy for Omen Hub++. No OS access or firmware writes.
+pub mod ccd;
 pub mod cooling;
 pub mod cpu;
 pub mod curve_editor;
