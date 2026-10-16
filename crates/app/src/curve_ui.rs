@@ -1,6 +1,7 @@
 //! Native, metadata-only workbench for V/F and independent CPU/GPU fan curves.
 use crate::{
     curve_widget as plot,
+    i18n::{t, tf},
     native_ui::{input, positioned_control as control, text, token, wide},
 };
 use omen_core::{
@@ -61,6 +62,7 @@ const FIT: usize = 525;
 const HELP: usize = 526;
 const FOCUS: usize = 527;
 const KINDS: [Kind; 3] = [Kind::Gpu, Kind::CpuFan, Kind::GpuFan];
+const FAN_TITLE: &str = "curve.fan_title";
 #[derive(Clone)]
 struct Row {
     curve: Option<Curve>,
@@ -109,16 +111,18 @@ fn load(id: Option<&str>) -> Result<View, String> {
                 curve: Some(curve),
                 enabled: setting.is_some(),
                 source: if i == 0 {
-                    "GPU-Spannungsanker sind fest. Bearbeiten und Speichern ändern keine Hardware.\r\nFrequenzziele sind kein hartes Spannungslimit; Stabilität unter Last ist ungeprüft.".into()
+                    t("curve.gpu_source").into()
                 } else {
-                    format!(
-                        "{} · {}. Bearbeiten und Speichern verändern keine Lüfter.\r\nProfile mit Lüfterkurven sind bis zur geprüften HP-Anbindung noch nicht anwendbar.",
-                        kind.title(),
-                        if setting.is_some() {
-                            "Gespeicherte Kurve"
-                        } else {
-                            "Vorlage, kein ausgelesener Hardwarezustand"
-                        }
+                    tf(
+                        "curve.fan_source",
+                        &[
+                            &t(&format!("curve.kind.{kind:?}")),
+                            &if setting.is_some() {
+                                t("curve.saved_curve")
+                            } else {
+                                t("curve.template")
+                            },
+                        ],
                     )
                 },
             },
@@ -136,8 +140,53 @@ fn load(id: Option<&str>) -> Result<View, String> {
         rows,
     })
 }
+/// The fan window edits only the shared fan curve the fan service follows;
+/// it is not stored as a performance profile.
+fn load_fans() -> Result<View, String> {
+    let store = ProfileStore::user_data()?;
+    let binding = Controller::new(false, None)?.context()?.binding;
+    let saved = store.active_fan_curve()?.map(Value::FanCurve);
+    let row = |kind: Kind| match Curve::fan(kind, saved.as_ref()) {
+        Ok(curve) => Row {
+            curve: Some(curve),
+            enabled: true,
+            source: tf(
+                "curve.fan_source",
+                &[
+                    &t(&format!("curve.kind.{kind:?}")),
+                    &t(if saved.is_some() {
+                        "curve.saved_curve"
+                    } else {
+                        "curve.template"
+                    }),
+                ],
+            ),
+        },
+        Err(error) => Row {
+            curve: None,
+            enabled: false,
+            source: error,
+        },
+    };
+    Ok(View {
+        profiles: vec![],
+        selected: None,
+        binding,
+        rows: [
+            Row {
+                curve: None,
+                enabled: false,
+                source: String::new(),
+            },
+            row(Kind::CpuFan),
+            row(Kind::GpuFan),
+        ],
+    })
+}
 enum Request {
     Load(Option<String>),
+    LoadFans,
+    SaveFans(Vec<omen_core::profiles::FanPoint>),
     Save {
         baseline: Box<Option<PerformanceProfile>>,
         binding: Box<DeviceBinding>,
@@ -158,6 +207,17 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
         let result = (|| -> Result<(View, String), String> {
             match request {
                 Request::Load(id) => Ok((load(id.as_deref())?, String::new())),
+                Request::LoadFans => Ok((load_fans()?, String::new())),
+                Request::SaveFans(points) => {
+                    let store = ProfileStore::user_data()?;
+                    store.save_active_fan_curve(&points)?;
+                    if !omen_platform::fan_service_installed() {
+                        crate::elevation::run(None, crate::elevation::Action::FanService, || {
+                            false
+                        })?;
+                    }
+                    Ok((load_fans()?, t("curve.fan_saved").into()))
+                }
                 Request::Save {
                     baseline,
                     binding,
@@ -177,7 +237,7 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
                         if managed(&fresh) != managed(old)
                             || (name != old.name && fresh.name != old.name)
                         {
-                            return Err("Die Kurven wurden in einem anderen Fenster geändert. Neu laden, bevor sie überschrieben werden.".into());
+                            return Err(t("curve.changed_elsewhere").into());
                         }
                         fresh
                     } else {
@@ -211,7 +271,7 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
                                             .for_settings(&[])
                                             .matches(&binding.for_settings(&[]))
                                         {
-                                            return Err("Profil und aktuelles Board/BIOS unterscheiden sich.".into());
+                                            return Err(t("curve.binding_mismatch").into());
                                         }
                                         profile.binding = (*binding).clone();
                                     }
@@ -222,16 +282,36 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
                                 });
                             }
                         } else if row.enabled {
-                            return Err("Eine ausgewählte Kurve ist nicht verfügbar.".into());
+                            return Err(t("curve.selected_unavailable").into());
                         }
                     }
                     if profile.settings.is_empty() {
-                        return Err("Mindestens eine Kurve im Profil auswählen.".into());
+                        return Err(t("curve.none_selected").into());
                     }
                     profile.binding = profile.binding.for_settings(&profile.settings);
                     store.save(&profile)?;
-                    let fans = rows.iter().skip(1).any(|r| r.enabled);
-                    Ok((load(Some(&profile.id))?,if fans{"Profil gespeichert. Keine Hardware verändert. Lüfterkurven bleiben Entwürfe; Anwenden ist noch gesperrt."}else{"Profil gespeichert. Keine Hardware verändert. Anwenden und Startoptionen befinden sich im GPU-Profilfenster."}.into()))
+                    // The saved shared fan curve is what the logon fan service follows.
+                    let active = match rows[1].curve.as_ref().filter(|_| rows[1].enabled) {
+                        Some(curve) => match curve.value()? {
+                            Value::FanCurve(points) => Some(points),
+                            _ => None,
+                        },
+                        None => None,
+                    };
+                    let status = if let Some(points) = active {
+                        store.save_active_fan_curve(&points)?;
+                        if !omen_platform::fan_service_installed() {
+                            crate::elevation::run(
+                                None,
+                                crate::elevation::Action::FanService,
+                                || false,
+                            )?;
+                        }
+                        t("curve.fan_saved")
+                    } else {
+                        t("curve.profile_saved")
+                    };
+                    Ok((load(Some(&profile.id))?, status.into()))
                 }
                 Request::Stop => unreachable!(),
             }
@@ -295,6 +375,30 @@ struct State {
     theme: crate::theme::Theme,
     draft: bool,
     draft_result: RefCell<Option<Value>>,
+    /// Fan window: one shared curve, saved for both the CPU and the GPU fan.
+    fans_merged: bool,
+}
+fn discard(hwnd: HWND, s: &State) -> bool {
+    !s.dirty.get()
+        || unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(t("preset.discard_question")).as_ptr(),
+                wide(t("curve.switch_title")).as_ptr(),
+                MB_YESNO | MB_ICONQUESTION,
+            )
+        } == IDYES
+}
+/// Re-enable a disabled owner first; otherwise Windows activates another
+/// application's window when this owned editor is destroyed.
+unsafe fn close(hwnd: HWND) {
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER);
+        if !owner.is_null() {
+            EnableWindow(owner, 1);
+        }
+        DestroyWindow(hwnd);
+    }
 }
 fn selected(s: &State) -> Option<String> {
     s.view
@@ -303,6 +407,19 @@ fn selected(s: &State) -> Option<String> {
         .selected
         .as_ref()
         .map(|p| p.id.clone())
+}
+/// The fan window edits one curve; saving writes it for the CPU and the GPU fan.
+fn shared_fan_rows(rows: &[Row; 3]) -> [Row; 3] {
+    let mut rows = rows.clone();
+    rows[2] = Row {
+        curve: rows[1]
+            .curve
+            .as_ref()
+            .and_then(|c| Curve::fan(Kind::GpuFan, c.value().ok().as_ref()).ok()),
+        enabled: rows[1].enabled,
+        source: rows[1].source.clone(),
+    };
+    rows
 }
 fn sync(s: &State) {
     let Some(c) = s.controls.get() else {
@@ -323,17 +440,17 @@ fn sync(s: &State) {
         text(
             c.xlabel,
             if model.kind == Kind::Gpu {
-                "Spannungsanker (mV)"
+                t("curve.x_voltage")
             } else {
-                "Temperatur (°C)"
+                t("curve.x_temperature")
             },
         );
         text(
             c.ylabel,
             if model.kind == Kind::Gpu {
-                "Frequenz (MHz)"
+                t("curve.y_frequency")
             } else {
-                "Lüfterwert (%)"
+                t("curve.y_fan")
             },
         );
         text(c.x, &p.x.to_string());
@@ -445,15 +562,37 @@ fn mode(s: &State, index: usize, capture: bool) {
     plot::set(c.canvas, row.curve.clone());
     sync(s);
 }
+/// Shows a message in the status line, or as a box in the fan window, which
+/// has no status line.
+fn report(hwnd: HWND, s: &State, message: &str) {
+    if s.fans_merged {
+        unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(&crate::i18n::message(message)).as_ptr(),
+                wide(t("dash.fan_curve")).as_ptr(),
+                MB_OK | MB_ICONWARNING,
+            );
+        }
+    } else if let Some(c) = s.controls.get() {
+        text(c.status, message);
+    }
+}
 fn dirty(s: &State) {
     s.dirty.set(true);
     if let Some(c) = s.controls.get() {
+        if s.fans_merged {
+            text(
+                unsafe { GetParent(c.canvas) },
+                &tf("curve.fan_title_unsaved", &[&t(FAN_TITLE)]),
+            );
+        }
         text(
             c.status,
             if s.draft {
-                "Kurvenentwurf geändert · Im Preset speichern."
+                t("curve.draft_changed")
             } else {
-                "Ungespeicherter Entwurf. Ziehen und Tastatur ändern nur die Kurve; Speichern ändert keine Hardware."
+                t("curve.unsaved_draft")
             },
         );
     }
@@ -476,7 +615,7 @@ fn edit(s: &State, action: impl FnOnce(&mut Curve) -> Result<bool, String>) {
             }
             sync(s);
         }
-        Err(e) => text(c.status, &e),
+        Err(e) => report(unsafe { GetParent(c.canvas) }, s, &e),
     }
 }
 fn dispatch(s: &State, request: Request, status: &str) {
@@ -490,15 +629,29 @@ fn dispatch(s: &State, request: Request, status: &str) {
     if s.tx.send(request).is_err() {
         s.busy.set(false);
         if let Some(c) = s.controls.get() {
-            text(c.status, "Ladevorgang nicht verfügbar. Fenster neu öffnen.");
+            text(c.status, t("curve.load_unavailable"));
         }
         enabled(s);
     }
 }
-fn show(s: &State, view: View, status: &str) {
+fn show(s: &State, mut view: View, status: &str) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    if s.fans_merged {
+        text(unsafe { GetParent(c.canvas) }, t(FAN_TITLE));
+    }
+    if s.fans_merged && !view.rows[1].enabled && view.rows[2].enabled {
+        // A profile with only a GPU fan curve opens with that curve as the shared one.
+        if let Some(curve) = view.rows[2]
+            .curve
+            .as_ref()
+            .and_then(|c| Curve::fan(Kind::CpuFan, c.value().ok().as_ref()).ok())
+        {
+            view.rows[1].curve = Some(curve);
+            view.rows[1].enabled = true;
+        }
+    }
     s.rendering.set(true);
     unsafe {
         SendMessageW(c.profiles, CB_RESETCONTENT, 0, 0);
@@ -506,7 +659,7 @@ fn show(s: &State, view: View, status: &str) {
             c.profiles,
             CB_ADDSTRING,
             0,
-            wide("Neues Profil …").as_ptr() as isize,
+            wide(t("curve.new_profile")).as_ptr() as isize,
         );
         for p in &view.profiles {
             SendMessageW(c.profiles, CB_ADDSTRING, 0, wide(&p.name).as_ptr() as isize);
@@ -522,7 +675,7 @@ fn show(s: &State, view: View, status: &str) {
         c.name,
         view.selected
             .as_ref()
-            .map_or("Mein Kurvenprofil", |p| &p.name),
+            .map_or(t("curve.default_name"), |p| &p.name),
     );
     *s.view.borrow_mut() = Some(view);
     s.busy.set(false);
@@ -532,7 +685,11 @@ fn show(s: &State, view: View, status: &str) {
     text(
         c.status,
         if status.is_empty() {
-            "Entwurf · Speichern verändert keine Hardware. Shift: Kurve/Bereich · Strg + Z: Rückgängig · F1: Tastenkürzel"
+            if s.fans_merged {
+                t("curve.fan_hint")
+            } else {
+                t("curve.gpu_hint")
+            }
         } else {
             status
         },
@@ -542,9 +699,23 @@ fn layout(hwnd: HWND, s: &State) {
     let Some(c) = s.controls.get() else {
         return;
     };
+    // The GPU draft and the fan window keep only Speichern/Übernehmen,
+    // Rückgängig and Abbrechen below the chart (the GPU draft also keeps
+    // Tastenkürzel); redo, zoom and the whole curve remain keyboard/wheel actions.
+    let minimal = (s.draft || s.fans_merged) && s.graph_only.get();
     unsafe {
         for (i, handle) in c.modes.iter().enumerate() {
-            ShowWindow(*handle, if s.allowed[i] { SW_SHOW } else { SW_HIDE });
+            ShowWindow(
+                *handle,
+                if s.allowed[i] && !minimal {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
+        for handle in [c.redo, c.focus, c.zoom[0], c.zoom[1], c.zoom[2]] {
+            ShowWindow(handle, if minimal { SW_HIDE } else { SW_SHOW });
         }
     }
     let mut r: RECT = unsafe { std::mem::zeroed() };
@@ -561,6 +732,26 @@ fn layout(hwnd: HWND, s: &State) {
         for handle in regular {
             ShowWindow(handle, if s.graph_only.get() { SW_HIDE } else { SW_SHOW });
         }
+    }
+    if minimal {
+        unsafe {
+            ShowWindow(c.open, SW_SHOW);
+            ShowWindow(c.help, if s.draft { SW_SHOW } else { SW_HIDE });
+            // The fan window has no status line; errors use a message box.
+            ShowWindow(c.status, if s.fans_merged { SW_HIDE } else { SW_SHOW });
+            let chart_bottom = if s.fans_merged { 70 } else { 104 };
+            for (handle, b) in [
+                (c.canvas, [8, 8, w - 16, h - chart_bottom]),
+                (c.status, [20, h - 92, w - 40, 30]),
+                (c.save, [20, h - 54, 150, 36]),
+                (c.undo, [182, h - 54, 150, 36]),
+                (c.open, [344, h - 54, 150, 36]),
+                (c.help, [w - 170, h - 54, 150, 36]),
+            ] {
+                MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
+            }
+        }
+        return;
     }
     if s.graph_only.get() {
         let narrow = w < 1130;
@@ -601,9 +792,9 @@ fn layout(hwnd: HWND, s: &State) {
         text(
             c.focus,
             if s.draft {
-                "Werte …"
+                t("curve.values")
             } else {
-                "Profil / Werte …"
+                t("curve.profile_values")
             },
         );
         return;
@@ -611,9 +802,9 @@ fn layout(hwnd: HWND, s: &State) {
     text(
         c.focus,
         if s.draft {
-            "Diagramm"
+            t("curve.chart")
         } else {
-            "Diagrammansicht"
+            t("curve.chart_view")
         },
     );
     let plot_top = if s.draft { 128 } else { 202 };
@@ -682,18 +873,16 @@ fn layout(hwnd: HWND, s: &State) {
     }
 }
 fn help(hwnd: HWND, draft: bool) {
-    let message = "GPU-Kurve\r\nZiehen: Punkt oder ausgewählten Bereich vertikal verschieben.\r\nShift + Punkt ziehen: geladene Ausgangskurve/Auswahl verschieben.\r\nAlt + Punkt ziehen: aktuellen Entwurf/Auswahl gleichmäßig verschieben.\r\nStrg + Punkt ziehen: Kurve um den gegenüberliegenden Randpunkt neigen.\r\nShift + Ziehen im freien Diagramm: Spannungsbereich auswählen.\r\nShift + Links/Rechts: Auswahl erweitern. Strg + A: alle Punkte.\r\nShift + Enter: Auswahl abflachen; ohne Auswahl Plateau ab dem Punkt.\r\nEsc oder Doppelklick: Auswahl aufheben; Esc beim Ziehen: abbrechen.\r\n\r\nGemeinsame Bedienung\r\nLinks/Rechts: Punkt wählen. Oben/Unten: 1 MHz bzw. 1 %.\r\nStrg + Oben/Unten: 10 Schritte. Enter: Zahlenfeld bearbeiten.\r\nStrg + Z: Rückgängig. Strg + Y / Strg + Shift + Z: Wiederholen.\r\nStrg + D: geladenen Entwurf zurücksetzen. Strg + S: Profil speichern.\r\nMausrad oder +/−: Spannung/Temperatur zoomen. Strg: Y-Achse.\r\nShift + Mausrad: horizontal verschieben. Strg + 0: ganze Kurve.\r\n\r\nLüfter\r\nStrg + Links/Rechts: Temperatur bearbeiten. Shift: größere Schritte.\r\nEinfg/Entf: Punkt hinzufügen/entfernen. Separate CPU-/GPU-Kurven.\r\n\r\nSpeichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.\r\nLüfteranwendung, fester Spannungs-/Takt-Lock und OC Scanner sind noch nicht verfügbar.";
-    let message = if draft {
-        message.replace("Strg + S: Profil speichern.", "Strg + S: Kurve in den Preset-Entwurf übernehmen.")
-            .replace("Speichern ändert keine Hardware. Anwenden erfolgt im Profilfenster.", "Übernehmen ändert nur den Preset-Entwurf. Erst dort speichern und ausdrücklich anwenden.")
+    let message = t(if draft {
+        "curve.help_draft"
     } else {
-        message.to_string()
-    };
+        "curve.help"
+    });
     unsafe {
         MessageBoxW(
             hwnd,
-            wide(&message).as_ptr(),
-            wide("Kurveneditor – Tastenkürzel").as_ptr(),
+            wide(message).as_ptr(),
+            wide(t("curve.help_title")).as_ptr(),
             MB_OK | MB_ICONINFORMATION,
         );
     }
@@ -750,7 +939,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     child(
                         GPU + i,
                         "BUTTON",
-                        KINDS[i].title(),
+                        t(&format!("curve.kind.{:?}", KINDS[i])),
                         WS_TABSTOP | BS_AUTORADIOBUTTON as u32,
                     )
                 });
@@ -775,48 +964,48 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 let c = Controls {
                     profiles,
                     name,
-                    save: child(SAVE, "BUTTON", "&Speichern", WS_TABSTOP),
-                    new: child(NEW, "BUTTON", "&Neu", WS_TABSTOP),
+                    save: child(SAVE, "BUTTON", t("curve.save"), WS_TABSTOP),
+                    new: child(NEW, "BUTTON", t("curve.new"), WS_TABSTOP),
                     modes,
                     include: child(
                         INCLUDE,
                         "BUTTON",
-                        "Kurve im &Profil",
+                        t("curve.include"),
                         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                     ),
-                    source: child(0, "STATIC", "Kurven werden gelesen …", 0),
+                    source: child(0, "STATIC", t("curve.reading"), 0),
                     canvas,
                     points: child(POINT, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST as u32),
-                    xlabel: child(0, "STATIC", "Spannungsanker (mV)", 0),
+                    xlabel: child(0, "STATIC", t("curve.x_voltage"), 0),
                     x,
-                    ylabel: child(0, "STATIC", "Frequenz (MHz)", 0),
+                    ylabel: child(0, "STATIC", t("curve.y_frequency"), 0),
                     y,
-                    set: child(SET_POINT, "BUTTON", "&Wert übernehmen", WS_TABSTOP),
-                    add: child(ADD, "BUTTON", "Punkt &hinzufügen", WS_TABSTOP),
-                    remove: child(REMOVE, "BUTTON", "Punkt &entfernen", WS_TABSTOP),
-                    plateau: child(PLATEAU, "BUTTON", "Ab hier P&lateau", WS_TABSTOP),
-                    reset: child(RESET, "BUTTON", "&Zurücksetzen", WS_TABSTOP),
+                    set: child(SET_POINT, "BUTTON", t("curve.set_value"), WS_TABSTOP),
+                    add: child(ADD, "BUTTON", t("curve.add_point"), WS_TABSTOP),
+                    remove: child(REMOVE, "BUTTON", t("curve.remove_point"), WS_TABSTOP),
+                    plateau: child(PLATEAU, "BUTTON", t("curve.plateau"), WS_TABSTOP),
+                    reset: child(RESET, "BUTTON", t("curve.reset"), WS_TABSTOP),
                     status: child(
                         STATUS,
                         "EDIT",
-                        "Wird gelesen …",
+                        t("curve.reading_short"),
                         WS_BORDER
                             | WS_VSCROLL
                             | ES_MULTILINE as u32
                             | ES_READONLY as u32
                             | ES_AUTOVSCROLL as u32,
                     ),
-                    open: child(OPEN, "BUTTON", "&Profil öffnen …", WS_TABSTOP),
-                    reload: child(RELOAD, "BUTTON", "Neu &laden", WS_TABSTOP),
-                    undo: child(UNDO, "BUTTON", "Rückgängig", WS_TABSTOP),
-                    redo: child(REDO, "BUTTON", "Wiederholen", WS_TABSTOP),
+                    open: child(OPEN, "BUTTON", t("curve.open_profile"), WS_TABSTOP),
+                    reload: child(RELOAD, "BUTTON", t("curve.reload"), WS_TABSTOP),
+                    undo: child(UNDO, "BUTTON", t("curve.undo"), WS_TABSTOP),
+                    redo: child(REDO, "BUTTON", t("curve.redo"), WS_TABSTOP),
                     zoom: [
-                        child(ZOOM_IN, "BUTTON", "Zoom +", WS_TABSTOP),
-                        child(ZOOM_OUT, "BUTTON", "Zoom −", WS_TABSTOP),
-                        child(FIT, "BUTTON", "Ganze Kurve", WS_TABSTOP),
+                        child(ZOOM_IN, "BUTTON", t("curve.zoom_in"), WS_TABSTOP),
+                        child(ZOOM_OUT, "BUTTON", t("curve.zoom_out"), WS_TABSTOP),
+                        child(FIT, "BUTTON", t("curve.fit"), WS_TABSTOP),
                     ],
-                    help: child(HELP, "BUTTON", "Tastenkürzel", WS_TABSTOP),
-                    focus: child(FOCUS, "BUTTON", "Profil / Werte …", WS_TABSTOP),
+                    help: child(HELP, "BUTTON", t("curve.shortcuts"), WS_TABSTOP),
+                    focus: child(FOCUS, "BUTTON", t("curve.profile_values"), WS_TABSTOP),
                 };
                 // Public theme API: classic native radios/checks honour the
                 // window's WM_CTLCOLOR foreground and retain native semantics.
@@ -884,9 +1073,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         Update::View(v, status) => show(s, *v, &status),
                         Update::Error(e) => {
                             s.busy.set(false);
-                            if let Some(c) = s.controls.get() {
-                                text(c.status, &e);
-                            }
+                            report(hwnd, s, &e);
                             enabled(s);
                         }
                     }
@@ -897,7 +1084,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 if let Some(c) = s.controls.get() {
                     if l == c.canvas as isize {
                         if w == 2 {
-                            text(c.status, &plot::error(c.canvas));
+                            report(hwnd, s, &plot::error(c.canvas));
                         } else {
                             if w == 1 {
                                 if let Some(v) = s.view.borrow_mut().as_mut() {
@@ -932,6 +1119,17 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     return 0;
                 }
                 match id {
+                    SELECT if code == CBN_SELCHANGE && !discard(hwnd, s) => {
+                        // Keep the selector on the retained draft's profile.
+                        let view = s.view.borrow();
+                        let current = view.as_ref().map_or(0, |v| {
+                            v.selected
+                                .as_ref()
+                                .and_then(|p| v.profiles.iter().position(|q| q.id == p.id))
+                                .map_or(0, |i| i + 1)
+                        });
+                        SendMessageW(c.profiles, CB_SETCURSEL, current, 0);
+                    }
                     SELECT if code == CBN_SELCHANGE => {
                         let i = SendMessageW(c.profiles, CB_GETCURSEL, 0, 0);
                         let id = s
@@ -942,18 +1140,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                 usize::try_from(i - 1).ok().and_then(|i| v.profiles.get(i))
                             })
                             .map(|p| p.id.clone());
-                        dispatch(s, Request::Load(id), "Profil wird geladen …");
+                        dispatch(s, Request::Load(id), t("curve.profile_loading"));
                     }
-                    NEW => dispatch(
-                        s,
-                        Request::Load(None),
-                        "Neue Kurvenvorlagen werden geladen …",
-                    ),
-                    RELOAD => dispatch(
-                        s,
-                        Request::Load(selected(s)),
-                        "Gespeicherte Kurven werden erneut geladen …",
-                    ),
+                    NEW | RELOAD if !discard(hwnd, s) => {}
+                    NEW | RELOAD if s.fans_merged => {
+                        dispatch(s, Request::LoadFans, t("curve.reloading"))
+                    }
+                    NEW => dispatch(s, Request::Load(None), t("curve.templates_loading")),
+                    RELOAD => dispatch(s, Request::Load(selected(s)), t("curve.reloading")),
                     GPU | CPU_FAN | GPU_FAN => {
                         mode(s, id - GPU, true);
                         layout(hwnd, s);
@@ -1005,14 +1199,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                             .and_then(|x| {
                                 x.trim()
                                     .parse::<i32>()
-                                    .map_err(|_| "X-Wert als ganze Zahl eingeben.".into())
+                                    .map_err(|_| t("curve.x_invalid").into())
                             })
                             .and_then(|x| {
                                 input(c.y).and_then(|y| {
                                     y.trim()
                                         .parse::<i32>()
                                         .map(|y| Point { x, y })
-                                        .map_err(|_| "Y-Wert als ganze Zahl eingeben.".into())
+                                        .map_err(|_| t("curve.y_invalid").into())
                                 })
                             }) {
                             Ok(p) => edit(s, |curve| curve.set(curve.selected, p, false)),
@@ -1023,7 +1217,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         match input(c.y).and_then(|y| {
                             y.trim()
                                 .parse::<i32>()
-                                .map_err(|_| "Frequenz als ganze MHz-Zahl eingeben.".into())
+                                .map_err(|_| t("curve.frequency_invalid").into())
                         }) {
                             Ok(y) => edit(s, |curve| curve.plateau(y)),
                             Err(e) => text(c.status, &e),
@@ -1045,14 +1239,30 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         sync(s);
                         if s.draft {
                             match plot::curve(c.canvas)
-                                .ok_or_else(|| "GPU-Kurve nicht verfügbar.".to_string())
+                                .ok_or_else(|| t("curve.gpu_unavailable").to_string())
                                 .and_then(|curve| curve.value())
                             {
                                 Ok(value) => {
                                     *s.draft_result.borrow_mut() = Some(value);
-                                    DestroyWindow(hwnd);
+                                    close(hwnd);
                                 }
                                 Err(error) => text(c.status, &error),
+                            }
+                            return 0;
+                        }
+                        if s.fans_merged {
+                            let value = s.view.borrow().as_ref().and_then(|v| {
+                                shared_fan_rows(&v.rows)[1]
+                                    .curve
+                                    .as_ref()
+                                    .map(|c| c.value())
+                            });
+                            match value {
+                                Some(Ok(Value::FanCurve(points))) => {
+                                    dispatch(s, Request::SaveFans(points), t("curve.saving"))
+                                }
+                                Some(Err(error)) => report(hwnd, s, &error),
+                                _ => report(hwnd, s, t("curve.unavailable")),
                             }
                             return 0;
                         }
@@ -1064,21 +1274,26 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                         baseline: Box::new(v.selected.clone()),
                                         binding: Box::new(v.binding.clone()),
                                         name: name.trim().into(),
-                                        rows: Box::new(v.rows.clone()),
+                                        rows: Box::new(if s.fans_merged {
+                                            shared_fan_rows(&v.rows)
+                                        } else {
+                                            v.rows.clone()
+                                        }),
                                     };
                                     drop(view);
-                                    dispatch(
-                                        s,
-                                        request,
-                                        "Kurvenprofil wird gespeichert; keine Hardwareänderung …",
-                                    );
+                                    dispatch(s, request, t("curve.saving"));
                                 }
                                 Err(e) => text(c.status, &e),
                             }
                         }
                     }
                     OPEN if s.draft => {
-                        DestroyWindow(hwnd);
+                        close(hwnd);
+                    }
+                    OPEN if s.fans_merged => {
+                        if discard(hwnd, s) {
+                            close(hwnd);
+                        }
                     }
                     OPEN if !s.dirty.get() => {
                         if let Some(id) = selected(s) {
@@ -1087,10 +1302,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                                     .args(["presets-ui", &id])
                                     .spawn()
                             }) {
-                                text(
-                                    c.status,
-                                    &format!("Profilfenster konnte nicht geöffnet werden: {e}"),
-                                );
+                                text(c.status, &tf("curve.open_failed", &[&e]));
                             }
                         }
                     }
@@ -1099,7 +1311,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 0
             }
             WM_CLOSE => {
-                DestroyWindow(hwnd);
+                if s.draft || discard(hwnd, s) {
+                    close(hwnd);
+                }
                 0
             }
             WM_DESTROY => {
@@ -1159,14 +1373,11 @@ pub fn preview(kind: &str, path: &Path) -> Result<(), String> {
         "gpu" => 0,
         "cpu-fan" => 1,
         "gpu-fan" => 2,
-        _ => return Err("Preview-Typ gpu/cpu-fan/gpu-fan erwartet.".into()),
+        _ => return Err(t("curve.preview_kind").into()),
     };
     plot::render(
         path,
-        view.rows[i]
-            .curve
-            .as_ref()
-            .ok_or("Kurve nicht verfügbar.")?,
+        view.rows[i].curve.as_ref().ok_or(t("curve.unavailable"))?,
     )
 }
 struct Preview {
@@ -1194,7 +1405,7 @@ pub fn edit_gpu_draft(
     binding: DeviceBinding,
 ) -> Result<Option<Value>, String> {
     if curve.kind != Kind::Gpu {
-        return Err("GPU-Kurve erwartet.".into());
+        return Err(t("curve.gpu_expected").into());
     }
     run_editor(None, None, Some(false), Some((owner, curve, binding)))
 }
@@ -1229,7 +1440,7 @@ fn run_editor(
                 .map_or(if fans == Some(true) { 1 } else { 0 }, |p| p.mode),
         ),
         allowed: match fans {
-            Some(true) => [false, true, true],
+            Some(true) => [false, true, false],
             Some(false) => [true, false, false],
             None => [true; 3],
         },
@@ -1241,6 +1452,7 @@ fn run_editor(
         surface: Cell::new(unsafe { CreateSolidBrush(plot::SURFACE) }),
         draft: draft.is_some(),
         draft_result: RefCell::new(None),
+        fans_merged: fans == Some(true) && draft.is_none(),
     });
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
@@ -1263,16 +1475,17 @@ fn run_editor(
             WS_EX_CONTROLPARENT,
             class.as_ptr(),
             wide(match fans {
-                Some(true) => "Omen Hub++ – Lüfterkurve",
-                Some(false) => "Omen Hub++ – GPU-Leistungskurve",
-                None => "Omen Hub++ – GPU- und Lüfterkurven",
+                Some(true) => t(FAN_TITLE),
+                Some(false) => t("curve.gpu_title"),
+                None => t("curve.all_title"),
             })
             .as_ptr(),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            preview.as_ref().map_or(1380, |p| p.width),
-            preview.as_ref().map_or(940, |p| p.height),
+            // Fits a 1152-px-high work area at 125 % with the buttons below the chart.
+            preview.as_ref().map_or(1240, |p| p.width),
+            preview.as_ref().map_or(780, |p| p.height),
             draft.as_ref().map_or(ptr::null_mut(), |d| d.0),
             ptr::null_mut(),
             instance,
@@ -1290,12 +1503,10 @@ fn run_editor(
             size_of::<i32>() as u32,
         );
         let thread = if let Some((_, curve, binding)) = draft {
-            let rows = std::array::from_fn(|i| {
-                Row {
+            let rows = std::array::from_fn(|i| Row {
                 curve: if i == 0 { Some(curve.clone()) } else { None },
                 enabled: i == 0,
-                source: "GPU-Spannungsanker sind fest. Übernehmen ändert nur den Preset-Entwurf; keine Hardwareänderung.".into(),
-            }
+                source: t("curve.draft_source").into(),
             });
             show(
                 &state,
@@ -1305,19 +1516,29 @@ fn run_editor(
                     binding,
                     rows,
                 },
-                "Kurvenentwurf · Speichern erfolgt im Preset.",
+                t("curve.draft_hint"),
             );
             if let Some(c) = state.controls.get() {
-                text(c.save, "Übernehmen");
-                text(c.open, "Abbrechen");
+                text(c.save, t("curve.take_over"));
+                text(c.open, t("curve.cancel"));
             }
             if preview.is_some() {
                 PostMessageW(hwnd, UPDATE, 0, 0);
             }
             None
         } else {
+            if state.fans_merged {
+                if let Some(c) = state.controls.get() {
+                    text(c.open, t("curve.cancel"));
+                }
+            }
             let thread = thread::spawn(move || worker(handle, requests, updates));
-            dispatch(&state, Request::Load(id), "Kurven werden gelesen …");
+            let request = if state.fans_merged {
+                Request::LoadFans
+            } else {
+                Request::Load(id)
+            };
+            dispatch(&state, request, t("curve.reading"));
             Some(thread)
         };
         ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });
@@ -1361,7 +1582,7 @@ fn run_editor(
                                         .points
                                         .iter()
                                         .position(|p| p.x >= 1000)
-                                        .ok_or("Kein 1000-mV-Anker für den Beispielentwurf.")?;
+                                        .ok_or(t("curve.example_anchor"))?;
                                     curve.select(index, false);
                                     curve.plateau(curve.points[index].y)?;
                                     curve.select_voltage_range(1000, 1250);
@@ -1371,18 +1592,14 @@ fn run_editor(
                                     preview_error = Some(e);
                                 }
                                 sync(&state);
-                                text(
-                                    c.status,
-                                    "Beispielentwurf · nicht gespeichert oder angewendet. Speichern ändert keine Hardware.",
-                                );
+                                text(c.status, t("curve.example_hint"));
                             }
                         }
                         if let Err(e) = plot::render_window(hwnd, &preview.path) {
                             preview_error = Some(e);
                         }
                     } else {
-                        preview_error =
-                            Some("Der native Preview konnte die Kurven nicht laden.".into());
+                        preview_error = Some(t("curve.preview_failed").into());
                     }
                     DestroyWindow(hwnd);
                     break 1;

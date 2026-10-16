@@ -9,6 +9,20 @@ use omen_core::{
     transaction::{self, Backend},
 };
 
+/// Keep rollback/recovery causes: a bare first error would look like a clean,
+/// fully restored failure while hardware and the journal remain changed.
+fn describe(failure: transaction::ApplyFailure) -> String {
+    if failure.rollback_errors.is_empty() {
+        failure.error
+    } else {
+        format!(
+            "{}; restore incomplete: {}",
+            failure.error,
+            failure.rollback_errors.join("; ")
+        )
+    }
+}
+
 pub struct DirectLighting {
     store: ProfileStore,
 }
@@ -40,7 +54,7 @@ impl DirectLighting {
                     "Lighting recovery contains unrelated controls; no write dispatched".into(),
                 );
             }
-            transaction::recover(&pending, controller, &mut self.store).map_err(|e| e.error)?;
+            transaction::recover(&pending, controller, &mut self.store).map_err(describe)?;
         }
         Ok(())
     }
@@ -95,7 +109,7 @@ impl DirectLighting {
         self.store.save(&profile)?;
         let digest = profile_digest(&profile)?;
         transaction::apply(&profile, &digest, &mut controller, &mut self.store, false)
-            .map_err(|e| e.error)?;
+            .map_err(describe)?;
         let actual = controller.keyboard_state()?;
         let target = expected.with_colors(colors)?.with_classic_mode(enabled)?;
         if actual != target {

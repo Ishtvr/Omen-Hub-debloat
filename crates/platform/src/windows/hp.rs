@@ -25,6 +25,7 @@ pub(super) enum Read {
     FanTypes,
     FanTable,
     SurfaceSensor,
+    GraphicsMode,
 }
 
 struct ReadContract {
@@ -48,6 +49,8 @@ impl Read {
             Self::FanTypes => (0x20008, 0x2c, &[0; 4], 128, "hpqBIOSInt128"),
             Self::FanTable => (0x20008, 0x2f, &[0; 4], 128, "hpqBIOSInt128"),
             Self::SurfaceSensor => (0x20008, 0x23, &[0; 4], 4, "hpqBIOSInt4"),
+            // GraphicsSwitcherHelper: WMI_CMD_READ_BIOS_CONFIG (1), type 0x52.
+            Self::GraphicsMode => (1, 0x52, &[], 4, "hpqBIOSInt4"),
         };
         ReadContract {
             command,
@@ -145,6 +148,51 @@ impl HpBios {
             method: "hpqBIOSInt4",
         };
         self.invoke(&contract, &[raw, 0, 0, 0]).map(|_| ())
+    }
+    /// `PerformanceControlHelper.SetSwFanControlLevel`: CPU and GPU fan levels in
+    /// 100-RPM units at bytes 0 and 1 of a 128-byte buffer (`0x2E`).
+    pub(super) fn set_fan_levels(&self, cpu: u8, gpu: u8) -> WMIResult<()> {
+        let mut bytes = [0u8; 128];
+        bytes[0] = cpu;
+        bytes[1] = gpu;
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type: 0x2E,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &bytes).map(|_| ())
+    }
+    /// `OmenHsaClient.GetNumOfFan` (`0x10`): the Hub's 30-second heartbeat. Byte 1
+    /// carries BIOS protection flags (bit 0 over-current, bit 1 over-temperature).
+    pub(super) fn heartbeat(&self) -> WMIResult<u8> {
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type: 0x10,
+            input: &[0; 4],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, contract.input).map(|(_, b)| b[1])
+    }
+    /// The three fixed 4-byte performance-mode SETs used by the Hub (0x1A,
+    /// 0x22, 0x29). The caller passes only a type from `omen_core::hp_mode`.
+    pub(super) fn set_mode_payload(&self, command_type: u32, bytes: [u8; 4]) -> WMIResult<()> {
+        use omen_core::hp_mode::{GPU_POWER_TYPE, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
+        if ![THERMAL_MODE_TYPE, GPU_POWER_TYPE, POWER_LIMITS_TYPE].contains(&command_type) {
+            return Err(WMIError::ConvertVariantError(
+                "Only the fixed HP performance-mode SETs can be written".into(),
+            ));
+        }
+        let contract = ReadContract {
+            command: 0x20008,
+            command_type,
+            input: &[],
+            output_size: 4,
+            method: "hpqBIOSInt4",
+        };
+        self.invoke(&contract, &bytes).map(|_| ())
     }
     fn invoke(&self, contract: &ReadContract, bytes: &[u8]) -> WMIResult<(u32, Vec<u8>)> {
         let data = self.connection.get_object("hpqBDataIn")?.spawn_instance()?;
@@ -373,6 +421,153 @@ pub fn read_hp_system_design(inventory: &Inventory) -> Result<SystemDesignData, 
         decode_system_design(code, &bytes).map_err(WMIError::ConvertVariantError)
     };
     query().map_err(|error| query_error("system-design", error))
+}
+
+/// BIOS graphics mode byte: 0 Hybrid, 1 Discrete, 2 Optimus, 3 UMA. A change
+/// takes effect after the next restart.
+pub fn read_hp_graphics_mode(inventory: &Inventory) -> Result<u8, String> {
+    let (_, bytes) = HpBios::new(inventory)
+        .and_then(|bios| bios.get(Read::GraphicsMode))
+        .map_err(|e| query_error("graphics-mode", e))?;
+    match bytes[0] {
+        mode @ 0..=3 => Ok(mode),
+        other => Err(format!("Unknown BIOS graphics mode {other}")),
+    }
+}
+pub fn write_hp_graphics_mode(inventory: &Inventory, mode: u8) -> Result<(), String> {
+    if mode > 3 {
+        return Err("Unknown BIOS graphics mode".into());
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("graphics-mode", e))?;
+    // GraphicsSwitcherHelper.SetGPUModeOnBIOS: WMI_CMD_WRITE_BIOS_CONFIG (2), 0x52.
+    let contract = ReadContract {
+        command: 2,
+        command_type: 0x52,
+        input: &[],
+        output_size: 4,
+        method: "hpqBIOSInt4",
+    };
+    bios.invoke(&contract, &[mode, 0, 0, 0])
+        .map(|_| ())
+        .map_err(|e| query_error("graphics-mode SET", e))
+}
+
+/// Sets the Hub's cTGP and PPAB (Dynamic Boost) flags with the Hub's fixed
+/// D-state 1 and 87 °C GPS byte, then reads both flags back.
+pub fn write_hp_gpu_power(
+    inventory: &Inventory,
+    custom_tgp: bool,
+    ppab: bool,
+) -> Result<GpuPowerStatus, String> {
+    use omen_core::hp_mode::GPU_POWER_TYPE;
+    let bios = HpBios::new(inventory).map_err(|e| query_error("GPU-power", e))?;
+    bios.set_mode_payload(
+        GPU_POWER_TYPE,
+        [u8::from(custom_tgp), u8::from(ppab), 1, 87],
+    )
+    .map_err(|e| query_error("GPU-power SET", e))?;
+    let (code, bytes) = bios
+        .get(Read::GpuStatus)
+        .map_err(|e| query_error("GPU-status", e))?;
+    let status = decode_gpu_status(code, &bytes)?;
+    if status.custom_tgp_enabled != custom_tgp || status.ppab_enabled != ppab {
+        return Err(format!(
+            "GPU-power readback differs: cTGP {} / PPAB {}",
+            status.custom_tgp_enabled, status.ppab_enabled
+        ));
+    }
+    Ok(status)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HpModeReport {
+    pub plan: omen_core::hp_mode::ModePlan,
+    pub gpu_before: GpuPowerStatus,
+    pub gpu_after: GpuPowerStatus,
+    /// STAPM and slow limit read back through the SMU, in watts; None when
+    /// the SMU module is not available.
+    pub cpu_limits_w: Option<(i64, i64)>,
+}
+
+/// Switches the notebook to one of the Hub's modes. The thermal mode cannot
+/// be read back; the GPU cTGP/PPAB flags and, when the SMU is reachable, the
+/// CPU PL1 are verified afterwards. Any failed mode falls back to Balanced.
+pub fn apply_hp_mode(
+    inventory: &Inventory,
+    mode: omen_core::hp_mode::HpMode,
+) -> Result<HpModeReport, String> {
+    use omen_core::hp_mode::{self, GPU_POWER_TYPE, HpMode, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
+    let ac = super::power_status().ac_connected == Some(true);
+    if mode == HpMode::Unleashed && !ac {
+        return Err("Unleashed braucht Netzbetrieb.".into());
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
+    let read_gpu = |bios: &HpBios| -> Result<GpuPowerStatus, String> {
+        let (code, bytes) = bios
+            .get(Read::GpuStatus)
+            .map_err(|e| query_error("GPU-status", e))?;
+        decode_gpu_status(code, &bytes)
+    };
+    let (code, design) = bios
+        .get(Read::SystemDesign)
+        .map_err(|e| query_error("system-design", e))?;
+    let design = decode_system_design(code, &design)?;
+    if mode == HpMode::Unleashed && !design.extreme_supported {
+        return Err("Die Firmware meldet keinen Unleashed-/Extreme-Modus.".into());
+    }
+    let gpu_before = read_gpu(&bios)?;
+    let send = |plan: &hp_mode::ModePlan| -> Result<(GpuPowerStatus, Option<(i64, i64)>), String> {
+        // Same order as the Hub: mode, GPU flags, shared budget, then PL1.
+        for (command_type, bytes) in [
+            (THERMAL_MODE_TYPE, plan.thermal),
+            (GPU_POWER_TYPE, plan.gpu_power),
+            (POWER_LIMITS_TYPE, plan.shared_budget),
+            (POWER_LIMITS_TYPE, plan.cpu_power),
+        ] {
+            bios.set_mode_payload(command_type, bytes)
+                .map_err(|e| query_error(&format!("mode SET {command_type:#x}"), e))?;
+        }
+        let after = read_gpu(&bios)?;
+        if after.custom_tgp_enabled != plan.expect_custom_tgp
+            || after.ppab_enabled != plan.expect_ppab
+        {
+            return Err(omen_core::message::msg(
+                "gpu.err.readback",
+                &[&after.custom_tgp_enabled, &after.ppab_enabled],
+            ));
+        }
+        let limits = super::cpu_tuning::hp_limits_w(inventory).ok();
+        if let Some((stapm, slow)) = limits {
+            let pl1 = i64::from(plan.pl1_w());
+            if stapm != pl1 || slow != pl1 {
+                return Err(omen_core::message::msg(
+                    "mode.err.pl1_readback",
+                    &[&pl1, &stapm, &slow],
+                ));
+            }
+        }
+        Ok((after, limits))
+    };
+    let plan = hp_mode::plan(mode, design.default_shared_budget_raw, ac)?;
+    match send(&plan) {
+        Ok((gpu_after, cpu_limits_w)) => Ok(HpModeReport {
+            plan,
+            gpu_before,
+            gpu_after,
+            cpu_limits_w,
+        }),
+        Err(error) if mode != HpMode::Balanced => {
+            let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw, ac)
+                .and_then(|balanced| send(&balanced));
+            Err(match fallback {
+                Ok(_) => omen_core::message::msg("mode.err.balanced_restored", &[&error]),
+                Err(again) => {
+                    omen_core::message::msg("mode.err.fallback_failed", &[&error, &again])
+                }
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn read_hp_keyboard_state(inventory: &Inventory) -> Result<KeyboardState, String> {

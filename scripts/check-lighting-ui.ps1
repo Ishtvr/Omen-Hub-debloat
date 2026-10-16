@@ -4,6 +4,8 @@
 #requires -Version 5.1
 param([switch]$SwitchOnly,[ValidateRange(1,10)][int]$HoldSeconds=4)
 $ErrorActionPreference='Stop'
+# UI labels below are German; pin the app language so the checks stay stable.
+$env:OMEN_HUB_LANG = 'de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
 $taskExe=Join-Path $taskRepo 'dist\Omen Hub++.exe'
 $taskRoot=Join-Path $taskRepo '.local\research\keyboard-direct'

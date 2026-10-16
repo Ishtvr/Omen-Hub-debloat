@@ -62,6 +62,11 @@ pub fn handles(command: &str) -> bool {
             | "profile-apply"
             | "profile-restore"
             | "profile-ui-apply"
+            | "mode-ui-apply"
+            | "cpu-smu-probe"
+            | "fan-service"
+            | "fan-service-install"
+            | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
             | "profile-ui-startup-enable"
             | "profile-startup-enable"
@@ -83,6 +88,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 Some(("keyboard_read", args[1].as_str()))
             }
             Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
+            Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
+            Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -106,6 +113,58 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 fn run_inner(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("cpu-smu-calibrate-limits") if args.len() == 1 => {
+            // Fixed approved qualification: lower each limit once, find its
+            // PM-table cell, write the previous value back.
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::smu_calibrate_limits(&omen_platform::inventory())?;
+            let store = ProfileStore::user_data()?;
+            std::fs::write(
+                store.root().join("smu-limit-calibration.json"),
+                serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            return print(&report);
+        }
+        Some("fan-service") if args.len() == 1 => {
+            // Runs for the whole logon session from the protected task copy.
+            let store = ProfileStore::user_data()?;
+            let status = ProfileStore::user_data()?;
+            return omen_platform::run_fan_service(
+                &omen_platform::inventory(),
+                || store.fan_max(),
+                || store.active_fan_curve(),
+                || store.ccd_selection(),
+                |s| {
+                    let _ = status.save_fan_status(s);
+                },
+            );
+        }
+        Some("fan-service-install") if args.len() == 2 => {
+            validate_nonce(Some(&args[1]))?;
+            crate::startup_setup::ensure_fan_service()?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"fan","nonce":args[1],"result":{"Ok":true}}))?;
+            return print(&serde_json::json!({"fan_service":"installed"}));
+        }
+        Some("cpu-smu-probe") if args.len() == 1 => {
+            // Read-only: SMU version, PM table head, PBO scalar and CO margins.
+            let report = omen_platform::smu_probe(&omen_platform::inventory())?;
+            let store = ProfileStore::user_data()?;
+            std::fs::write(
+                store.root().join("smu-probe.json"),
+                serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            return print(&report);
+        }
+        Some("mode-ui-apply") if args.len() == 3 => {
+            validate_nonce(Some(&args[2]))?;
+            let mode = omen_core::hp_mode::HpMode::parse(&args[1])?;
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":args[2],"result":{"Ok":report}}))?;
+            return print(&report);
+        }
         Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
             validate_nonce(Some(&args[1]))?;
             let store = ProfileStore::user_data()?;
@@ -343,6 +402,15 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
             let digest = profile_digest(&profile)?;
+            if profile
+                .settings
+                .iter()
+                .any(|s| s.feature == Feature::CpuCcdAffinity)
+            {
+                // The background service pins programs; install or update it
+                // first so the saved selection takes effect.
+                crate::startup_setup::ensure_fan_service()?;
+            }
             let mut controller = Controller::for_profile(&profile)?;
             let result = transaction::apply(&profile, &digest, &mut controller, &mut store, false);
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"result":result}))?;
@@ -365,7 +433,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let saved = store.last_transaction::<RestoreState>()?;
             if args.len() == 3 && saved.profile_id != args[1] {
-                return Err("Das letzte Originalbild gehört zu einem anderen Profil. Neu laden, bevor es wiederhergestellt wird.".into());
+                return Err(omen_core::message::msg("profile.err.other_profile", &[]));
             }
             // Disable further automatic application before explicit recovery.
             store.disable_startup()?;

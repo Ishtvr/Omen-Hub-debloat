@@ -1,5 +1,6 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
-use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot};
+use crate::i18n::{t, tf};
+use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot, hp_mode::HpMode};
 use std::{
     cell::{Cell, RefCell},
     ptr,
@@ -23,9 +24,20 @@ const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
-const CPU_SENSORS: usize = 106;
+/// Fan quick switch on the Controls line: saved curve or both fans at maximum.
+const FAN_AUTO: usize = 106;
+const FAN_MAX: usize = 107;
+/// Round "i" next to the performance-mode label.
+const MODE_INFO: usize = 182;
 const SHOW: u32 = 201;
 const EXIT: u32 = 202;
+/// Built-in HP modes (language keys) ahead of saved presets.
+const DEFAULT_MODES: [(&str, HpMode); 4] = [
+    ("mode.quiet", HpMode::Quiet),
+    ("mode.balanced", HpMode::Balanced),
+    ("mode.performance", HpMode::Performance),
+    ("mode.unleashed", HpMode::Unleashed),
+];
 
 #[derive(Debug, Clone)]
 enum Request {
@@ -34,8 +46,9 @@ enum Request {
     Suspend,
     Resume,
     Power,
-    CpuSensors,
     ApplyPreset(String),
+    ApplyMode(HpMode),
+    FanMode(bool),
     Stop,
 }
 
@@ -45,7 +58,6 @@ struct State {
     details: Cell<HWND>,
     profile: Cell<HWND>,
     preview: Cell<HWND>,
-    cpu_sensor: Cell<HWND>,
     tray: Cell<bool>,
     taskbar_message: u32,
     theme: crate::theme::Theme,
@@ -55,6 +67,7 @@ struct State {
     mode_result: Arc<Mutex<Option<String>>>,
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
+    fan_max: Cell<bool>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -62,40 +75,40 @@ fn wide(s: &str) -> Vec<u16> {
 }
 pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
     if detail.starts_with("This build has no staged signed CPU module") {
-        "Diese App-Version enthält keinen CPU-Sensoradapter. Vollständigen Build verwenden."
+        t("cpu_error.no_module")
     } else if detail.contains("qualified only")
         || detail.contains("family/model/stepping/package")
         || detail.contains("requires Windows x64")
     {
-        "CPU-Sensoren sind für dieses Gerät/BIOS nicht freigegeben. Geräteunterstützung prüfen."
+        t("cpu_error.unsupported")
     } else if detail.starts_with("PawnIO must already be installed and running") {
-        "PawnIO fehlt oder läuft nicht. Sensor-Voraussetzungen in der Anleitung prüfen."
+        t("cpu_error.pawnio_missing")
     } else if detail.contains("hash differs")
         || detail.contains("version/response differs")
         || detail.contains("Embedded CPU module differs")
         || detail.contains("Signed CPU module load")
         || detail.contains("driver path")
     {
-        "Treiber-/Modulversion nicht freigegeben. Passende Version von Omen Hub++ verwenden."
+        t("cpu_error.driver_version")
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:") && detail.contains("1223") {
-        "CPU-Sensorfreigabe abgebrochen. Zum Aktivieren erneut CPU-Sensoren … wählen."
+        t("cpu_error.cancelled")
     } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:")
         || detail.starts_with("CPU driver access requires")
     {
-        "Windows hat den CPU-Zugriff verweigert. Berechtigungen und PawnIO-Installation prüfen."
+        t("cpu_error.denied")
     } else if detail.contains("pipe peer")
         || detail.contains("server PID")
         || detail.contains("stale or unrelated")
     {
-        "CPU-Leseprozess konnte nicht sicher zugeordnet werden. App neu öffnen."
+        t("cpu_error.peer")
     } else if detail.contains("failed to connect")
         || detail.contains("disconnected")
         || detail.contains("timed out")
         || detail.contains("request pipe closed")
     {
-        "CPU-Verbindung unterbrochen. Sensoren erneut aktivieren."
+        t("cpu_error.disconnected")
     } else {
-        "CPU-Messung unterbrochen; alte Werte verworfen. Sensoren erneut aktivieren."
+        t("cpu_error.interrupted")
     }
 }
 fn cpu_failed(snapshot: &mut Snapshot, detail: String) {
@@ -114,6 +127,7 @@ fn worker(
     shared: Arc<Mutex<Option<Snapshot>>>,
     initially_visible: bool,
     mode_result: Arc<Mutex<Option<String>>>,
+    mut start_cpu_reader: bool,
 ) {
     let mut snapshot = Snapshot {
         inventory: crate::inventory::read(),
@@ -165,9 +179,7 @@ fn worker(
                 // Do not reuse lost handles. A 30-second cooldown avoids a retry loop.
                 reopen_at = Instant::now() + Duration::from_secs(30);
                 snapshot.gpu = None;
-                snapshot
-                    .warnings
-                    .push("NVIDIA session lost; retrying after 30 seconds".into());
+                snapshot.warnings.push(t("warning.nvidia_lost").into());
             }
         } else if visible && !suspended {
             snapshot.gpu = None;
@@ -182,6 +194,25 @@ fn worker(
         snapshot.power = omen_platform::power_status();
         snapshot.cpu_reader_pid = hardware.as_ref().map(|r| r.process_id());
         publish(&snapshot);
+        // CPU values need no separate switch: the first visible dashboard
+        // requests the session helper once. A cancelled or failed request is
+        // retried only through Aktualisieren, never in a prompt loop.
+        if start_cpu_reader && hardware.is_none() && visible && !suspended {
+            start_cpu_reader = false;
+            snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
+            publish(&snapshot);
+            match crate::cpu_sensor_bridge::CpuSensorBridge::start() {
+                Ok(reader) => {
+                    hardware = Some(reader);
+                    cpu = None;
+                    continue;
+                }
+                Err(e) => {
+                    cpu_failed(&mut snapshot, e);
+                    publish(&snapshot);
+                }
+            }
+        }
         let request = if visible && !suspended {
             match rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(request) => Some(request),
@@ -200,27 +231,53 @@ fn worker(
         );
         match request {
             Some(Request::Stop) => break,
-            Some(Request::CpuSensors) => {
-                if hardware.is_some() {
-                    hardware = None;
-                    snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-                } else if visible && !suspended {
-                    snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
-                    publish(&snapshot);
-                    match crate::cpu_sensor_bridge::CpuSensorBridge::start() {
-                        Ok(reader) => hardware = Some(reader),
-                        Err(e) => cpu_failed(&mut snapshot, e),
-                    }
-                }
-                cpu = None;
-            }
             Some(Request::ApplyPreset(id)) => {
                 let result =
                     crate::elevation::run(Some(&id), crate::elevation::Action::Apply, || false);
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(if result.is_ok() {
-                    "Preset angewendet.".into()
+                    t("preset.applied").into()
                 } else {
-                    "Preset konnte nicht angewendet werden. Einstellungen unter Leistungsprofile prüfen.".into()
+                    t("mode.preset_failed").into()
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
+            Some(Request::FanMode(max)) => {
+                // The switch is a user file the elevated fan service reads; only
+                // its first installation needs Windows approval.
+                let result =
+                    omen_platform::profile_store::ProfileStore::user_data().and_then(|store| {
+                        store.save_fan_max(max)?;
+                        if !omen_platform::fan_service_installed() {
+                            crate::elevation::run(
+                                None,
+                                crate::elevation::Action::FanService,
+                                || false,
+                            )?;
+                        }
+                        Ok(store.active_fan_curve().ok().flatten().is_some())
+                    });
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) if max => t("fan.quick.max_active").into(),
+                    Ok(true) => t("fan.quick.auto_active").into(),
+                    Ok(false) => t("fan.quick.auto_bios").into(),
+                    Err(error) => tf("fan.quick.failed", &[&error]),
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
+            Some(Request::ApplyMode(mode)) => {
+                let result =
+                    crate::elevation::run(None, crate::elevation::Action::Mode(mode), || false);
+                let label = DEFAULT_MODES
+                    .iter()
+                    .find(|(_, m)| *m == mode)
+                    .map_or("", |(key, _)| t(key));
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) => tf("mode.active", &[&label]),
+                    Err(error) => tf("mode.failed", &[&label, &error]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -241,6 +298,7 @@ fn worker(
             }
             Some(Request::Refresh) => {
                 cpu = None;
+                start_cpu_reader = hardware.is_none();
                 snapshot.inventory = crate::inventory::read();
                 nvidia = None;
                 reopen_at = Instant::now();
@@ -278,19 +336,15 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                 .map(|p| (p.id, p.name))
                 .collect::<Vec<_>>();
             SendMessageW(state.profile.get(), CB_RESETCONTENT, 0, 0);
-            for label in [
-                "Quiet (Default)",
-                "Balanced (Default)",
-                "Performance (Default)",
-            ] {
+            for (label, _) in DEFAULT_MODES {
                 SendMessageW(
                     state.profile.get(),
                     CB_ADDSTRING,
                     0,
-                    wide(label).as_ptr() as isize,
+                    wide(&tf("mode.default_entry", &[&t(label)])).as_ptr() as isize,
                 );
             }
-            let mut selected = state.preview_index.get().min(2);
+            let mut selected = state.preview_index.get().min(DEFAULT_MODES.len() - 1);
             for (i, (id, name)) in entries.iter().enumerate() {
                 SendMessageW(
                     state.profile.get(),
@@ -299,20 +353,14 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                     wide(name).as_ptr() as isize,
                 );
                 if state.selected_custom.borrow().as_ref() == Some(id) {
-                    selected = i + 3;
+                    selected = i + DEFAULT_MODES.len();
                 }
             }
-            if selected < 3 {
+            if selected < DEFAULT_MODES.len() {
                 *state.selected_custom.borrow_mut() = None;
             }
             *state.custom_profiles.borrow_mut() = entries;
             SendMessageW(state.profile.get(), CB_SETCURSEL, selected, 0);
-            if selected < 3 {
-                *state.mode_status.borrow_mut() = format!(
-                    "{} (Default): noch nicht verfügbar.",
-                    ["Quiet", "Balanced", "Performance"][selected]
-                );
-            }
             SetWindowTextW(
                 state.preview.get(),
                 wide(&state.mode_status.borrow()).as_ptr(),
@@ -324,7 +372,7 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
         } else {
             SetWindowTextW(
                 GetDlgItem(hwnd, 181),
-                wide("Gespeicherte Presets konnten nicht geladen werden.").as_ptr(),
+                wide(t("mode.presets_unreadable")).as_ptr(),
             );
         }
     }
@@ -360,27 +408,6 @@ unsafe fn redraw(state: &State) {
         if let Some(snapshot) = snapshot {
             let hwnd = GetParent(state.details.get());
             crate::dashboard::update(hwnd, &state.theme, &snapshot);
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-            EnableWindow(
-                state.cpu_sensor.get(),
-                (!matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting)) as i32,
-            );
-            SetWindowTextW(
-                state.cpu_sensor.get(),
-                wide(
-                    if matches!(
-                        snapshot.cpu_hardware_status,
-                        CpuHardwareStatus::Active | CpuHardwareStatus::Paused
-                    ) {
-                        "CPU-Sensoren aus"
-                    } else if matches!(snapshot.cpu_hardware_status, CpuHardwareStatus::Starting) {
-                        "Windows-Freigabe …"
-                    } else {
-                        "CPU-Sensoren …"
-                    },
-                )
-                .as_ptr(),
-            );
         }
     }
 }
@@ -394,7 +421,6 @@ unsafe fn show_dashboard(hwnd: HWND, state: &State) {
             state.details.set(GetDlgItem(hwnd, 180));
             state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
             state.preview.set(GetDlgItem(hwnd, 181));
-            state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
             reload_modes(hwnd, state);
             redraw(state);
         }
@@ -416,7 +442,6 @@ unsafe fn hide_dashboard(hwnd: HWND, state: &State) {
         state.details.set(ptr::null_mut());
         state.profile.set(ptr::null_mut());
         state.preview.set(ptr::null_mut());
-        state.cpu_sensor.set(ptr::null_mut());
     }
 }
 
@@ -459,13 +484,11 @@ unsafe extern "system" fn window_proc(
                 state.details.set(GetDlgItem(hwnd, 180));
                 state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
                 state.preview.set(GetDlgItem(hwnd, 181));
-                state.cpu_sensor.set(GetDlgItem(hwnd, CPU_SENSORS as i32));
                 reload_modes(hwnd, state);
                 if [
                     state.details.get(),
                     state.profile.get(),
                     state.preview.get(),
-                    state.cpu_sensor.get(),
                 ]
                 .iter()
                 .any(|h| h.is_null())
@@ -495,10 +518,21 @@ unsafe extern "system" fn window_proc(
             }
             WM_DRAWITEM => {
                 let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
-                if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
-                    state
-                        .theme
-                        .button(item, state.theme.body, item.CtlID == GPU_PROFILES as u32);
+                if item.CtlID == MODE_INFO as u32 {
+                    state.theme.info(item);
+                    1
+                } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
+                    state.theme.button(
+                        item,
+                        state.theme.body,
+                        item.CtlID == GPU_PROFILES as u32
+                            || item.CtlID
+                                == if state.fan_max.get() {
+                                    FAN_MAX
+                                } else {
+                                    FAN_AUTO
+                                } as u32,
+                    );
                     1
                 } else {
                     DefWindowProcW(hwnd, message, wparam, lparam)
@@ -506,7 +540,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 960, y: 790 };
+                info.ptMinTrackSize = POINT { x: 960, y: 700 };
                 0
             }
             WM_COMMAND => {
@@ -516,12 +550,26 @@ unsafe extern "system" fn window_proc(
                 if id != PROFILE && (wparam >> 16) as u32 != BN_CLICKED {
                     return 0;
                 }
+                if id == MODE_INFO {
+                    MessageBoxW(
+                        hwnd,
+                        wide(t("info.mode")).as_ptr(),
+                        wide(t("dash.mode")).as_ptr(),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                }
                 if id == REFRESH {
                     reload_modes(hwnd, state);
                     let _ = state.tx.send(Request::Refresh);
                 }
-                if id == CPU_SENSORS {
-                    let _ = state.tx.send(Request::CpuSensors);
+                if (id == FAN_AUTO || id == FAN_MAX) && (wparam >> 16) as u32 == BN_CLICKED {
+                    let max = id == FAN_MAX;
+                    if state.fan_max.replace(max) != max {
+                        for button in [FAN_AUTO, FAN_MAX] {
+                            InvalidateRect(GetDlgItem(hwnd, button as i32), ptr::null(), 0);
+                        }
+                    }
+                    let _ = state.tx.send(Request::FanMode(max));
                 }
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
@@ -537,8 +585,7 @@ unsafe extern "system" fn window_proc(
                         Err(error) => {
                             SetWindowTextW(
                                 state.preview.get(),
-                                wide(&format!("Steuerung konnte nicht geöffnet werden: {error}"))
-                                    .as_ptr(),
+                                wide(&tf("main.open_failed", &[&error])).as_ptr(),
                             );
                         }
                     }
@@ -548,36 +595,30 @@ unsafe extern "system" fn window_proc(
                     && !state.applying_preset.get()
                 {
                     let index = SendMessageW(state.profile.get(), CB_GETCURSEL, 0, 0);
-                    if index >= 3 {
+                    let begin = |request: Request| {
+                        state.applying_preset.set(true);
+                        windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                            state.profile.get(),
+                            0,
+                        );
+                        SetWindowTextW(state.preview.get(), wide(t("common.uac")).as_ptr());
+                        *state.mode_status.borrow_mut() = t("common.uac").into();
+                        let _ = state.tx.send(request);
+                    };
+                    if index >= DEFAULT_MODES.len() as isize {
                         let selected = state
                             .custom_profiles
                             .borrow()
-                            .get(index as usize - 3)
+                            .get(index as usize - DEFAULT_MODES.len())
                             .cloned();
                         if let Some((id, _)) = selected {
-                            state.applying_preset.set(true);
-                            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                                state.profile.get(),
-                                0,
-                            );
                             *state.selected_custom.borrow_mut() = Some(id.clone());
-                            SetWindowTextW(
-                                state.preview.get(),
-                                wide("Windows-Freigabe …").as_ptr(),
-                            );
-                            *state.mode_status.borrow_mut() = "Windows-Freigabe …".into();
-                            let _ = state.tx.send(Request::ApplyPreset(id));
+                            begin(Request::ApplyPreset(id));
                         }
                     } else if index >= 0 {
                         state.preview_index.set(index as usize);
                         *state.selected_custom.borrow_mut() = None;
-                        let label = ["Quiet", "Balanced", "Performance"][index as usize];
-                        *state.mode_status.borrow_mut() =
-                            format!("{label} (Default): noch nicht verfügbar.");
-                        SetWindowTextW(
-                            state.preview.get(),
-                            wide(&format!("{label} (Default): noch nicht verfügbar.")).as_ptr(),
-                        );
+                        begin(Request::ApplyMode(DEFAULT_MODES[index as usize].1));
                     }
                 }
                 if id == SHOW as usize {
@@ -608,7 +649,10 @@ unsafe extern "system" fn window_proc(
                 {
                     *state.mode_status.borrow_mut() = message.clone();
                     if !state.preview.get().is_null() {
-                        SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
+                        SetWindowTextW(
+                            state.preview.get(),
+                            wide(&crate::i18n::message(&message)).as_ptr(),
+                        );
                     }
                 }
                 0
@@ -652,9 +696,14 @@ unsafe extern "system" fn window_proc(
                             menu,
                             MF_STRING,
                             SHOW as usize,
-                            wide("Omen Hub++ öffnen").as_ptr(),
+                            wide(t("tray.open")).as_ptr(),
                         );
-                        AppendMenuW(menu, MF_STRING, EXIT as usize, wide("Beenden").as_ptr());
+                        AppendMenuW(
+                            menu,
+                            MF_STRING,
+                            EXIT as usize,
+                            wide(t("tray.exit")).as_ptr(),
+                        );
                         let mut point = POINT { x: 0, y: 0 };
                         GetCursorPos(&mut point);
                         SetForegroundWindow(hwnd);
@@ -704,14 +753,14 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None, [1140, 820])
+    run_window(start_in_tray, None, [1140, 730])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path), [1140, 820])
+    run_window(false, Some(path), [1140, 730])
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
-    if size[0] < 960 || size[1] < 790 || size[0] > 2000 || size[1] > 1400 {
-        return Err("Preview size outside dashboard bounds".into());
+    if size[0] < 960 || size[1] < 700 || size[0] > 2000 || size[1] > 1400 {
+        return Err(t("error.preview_size").into());
     }
     run_window(false, Some(path), size)
 }
@@ -728,7 +777,6 @@ fn run_window(
         details: Cell::new(ptr::null_mut()),
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
-        cpu_sensor: Cell::new(ptr::null_mut()),
         tray: Cell::new(false),
         taskbar_message: 0,
         theme: crate::theme::Theme::new(),
@@ -737,12 +785,14 @@ fn run_window(
         selected_custom: RefCell::new(None),
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
-        mode_status: RefCell::new("Balanced (Default): noch nicht verfügbar.".into()),
+        mode_status: RefCell::new(t("mode.bios_unreadable").into()),
+        fan_max: Cell::new(
+            omen_platform::profile_store::ProfileStore::user_data().is_ok_and(|s| s.fan_max()),
+        ),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
     unsafe {
-        SetProcessDPIAware();
         let instance = GetModuleHandleW(ptr::null());
         let class_name = wide("OmenHubPlusPlusWindow");
         let class = WNDCLASSEXW {
@@ -757,7 +807,7 @@ fn run_window(
             ..std::mem::zeroed()
         };
         if RegisterClassExW(&class) == 0 {
-            return Err(format!("Window class: {}", std::io::Error::last_os_error()));
+            return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
         state.taskbar_message = RegisterWindowMessageW(wide("TaskbarCreated").as_ptr());
         let hwnd = CreateWindowExW(
@@ -776,16 +826,23 @@ fn run_window(
         );
         if hwnd.is_null() {
             UnregisterClassW(class_name.as_ptr(), instance);
-            return Err(format!(
-                "Window creation: {}",
-                std::io::Error::last_os_error()
-            ));
+            return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
         let initially_visible = !start_in_tray || !state.tray.get();
         let worker_hwnd = hwnd as usize;
         let mode_result = state.mode_result.clone();
-        let worker =
-            thread::spawn(move || worker(worker_hwnd, rx, shared, initially_visible, mode_result));
+        // Previews never request Windows approval.
+        let auto_cpu = preview.is_none();
+        let worker = thread::spawn(move || {
+            worker(
+                worker_hwnd,
+                rx,
+                shared,
+                initially_visible,
+                mode_result,
+                auto_cpu,
+            )
+        });
         let power_registration = RegisterPowerSettingNotification(
             hwnd,
             &GUID_ACDC_POWER_SOURCE,
@@ -803,7 +860,7 @@ fn run_window(
             if status == -1 {
                 let error = std::io::Error::last_os_error();
                 DestroyWindow(hwnd);
-                break Err(format!("Window messages: {error}"));
+                break Err(tf("error.window", &[&error]));
             }
             if IsDialogMessageW(hwnd, &message) == 0 {
                 TranslateMessage(&message);
@@ -845,63 +902,41 @@ mod tests {
         let missing = cpu_error_message(
             "This build has no staged signed CPU module; use scripts/prepare-cpu-module.ps1",
         );
-        assert!(missing.contains("Vollständigen Build"));
+        assert_eq!(missing, t("cpu_error.no_module"));
         assert!(!missing.contains("scripts/"));
         let unsupported =
             cpu_error_message("CPU sensors are qualified only for HP8E35/F.13/Ryzen9 8940HX");
-        assert!(unsupported.contains("Gerät/BIOS"));
-        assert!(!unsupported.contains("erneut"));
+        assert_eq!(unsupported, t("cpu_error.unsupported"));
         let driver =
             cpu_error_message("PawnIO driver hash differs from the measured 2.2.0 contract");
-        assert!(driver.contains("Treiber-/Modulversion"));
-        assert!(!driver.contains("erneut"));
-        assert!(
+        assert_eq!(driver, t("cpu_error.driver_version"));
+        assert_eq!(
             cpu_error_message(
                 "CPU-Sensorfreigabe nicht erfolgt: operation cancelled (os error 1223)"
-            )
-            .contains("abgebrochen")
+            ),
+            t("cpu_error.cancelled")
         );
-        assert!(cpu_error_message("CPU reader disconnected").contains("erneut aktivieren"));
+        assert_eq!(
+            cpu_error_message("CPU reader disconnected"),
+            t("cpu_error.disconnected")
+        );
     }
     #[test]
-    fn cpu_status_distinguishes_energy_baseline_and_mean_with_tctl_provenance() {
-        let hardware = omen_core::CpuHardwareSample {
-            schema: 1,
-            source: omen_core::CpuHardwareSource::PawnioAmdRapl,
-            temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
-            package_power_w: Some(55.0),
-            temperature_c: Some(82.0),
-            power_interval_ms: Some(1100),
-            warnings: vec![],
-        };
+    fn cpu_status_line_is_empty_while_measuring_and_explains_other_states() {
         let mut snapshot = Snapshot {
-            cpu: Some(omen_core::CpuSample {
-                windows_clock_mhz: Some(2400),
-                package_power_w: hardware.package_power_w,
-                temperature_c: hardware.temperature_c,
-                hardware: Some(hardware),
-                ..Default::default()
-            }),
+            cpu: Some(omen_core::CpuSample::default()),
             cpu_hardware_status: CpuHardwareStatus::Active,
             ..Default::default()
         };
-        let report = crate::dashboard::cpu_detail(&snapshot);
-        assert!(report.contains("Mittelwert über 1.10 s"));
-        assert!(report.contains("Temperatur: Tctl"));
-        assert!(report.contains("Quelle: CPU-Energiezähler und Tctl über PawnIO"));
-        snapshot
-            .cpu
-            .as_mut()
-            .unwrap()
-            .hardware
-            .as_mut()
-            .unwrap()
-            .power_interval_ms = None;
-        let baseline = crate::dashboard::cpu_detail(&snapshot);
-        assert!(baseline.contains("Energie-Baseline"));
-        assert!(!baseline.contains("Mittelwert über"));
-        snapshot.cpu = Some(omen_core::CpuSample::default());
+        assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Paused;
+        assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
         snapshot.cpu_hardware_status = CpuHardwareStatus::Off;
-        assert!(crate::dashboard::cpu_detail(&snapshot).contains("nicht aktiviert"));
+        assert_eq!(crate::dashboard::cpu_detail(&snapshot), t("dash.cpu_off"));
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Starting;
+        assert_eq!(
+            crate::dashboard::cpu_detail(&snapshot),
+            t("dash.cpu_starting")
+        );
     }
 }

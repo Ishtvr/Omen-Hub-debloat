@@ -12,18 +12,22 @@ try {
     # build.rs embeds icon and version information together; both must be present.
     if ((Get-Item -LiteralPath $taskOutput).VersionInfo.ProductName -ne 'Omen Hub++') { throw 'Embedded icon/version resources are missing.' }
     $taskCpuSource = Join-Path $taskRepo '.tools\pawnio\source-0.2.11'
-    if (Test-Path -LiteralPath (Join-Path $taskRepo '.tools\pawnio\modules-0.2.11\AMDFamily17.bin')) {
+    $taskModules = Join-Path $taskRepo '.tools\pawnio\modules-0.2.11'
+    $taskSmu = Test-Path -LiteralPath (Join-Path $taskModules 'RyzenSMU.bin')
+    if ((Test-Path -LiteralPath (Join-Path $taskModules 'AMDFamily17.bin')) -or $taskSmu) {
         foreach ($taskFile in @('AMDFamily17.p', 'COPYING', 'source-0.2.11.zip')) {
             if (-not (Test-Path -LiteralPath (Join-Path $taskCpuSource $taskFile))) { throw 'CPU module license/source missing. Run scripts/prepare-cpu-module.ps1.' }
         }
         $taskNoticeDir = Join-Path $taskDist 'third-party\PawnIO.Modules'
         New-Item -ItemType Directory -Force -Path $taskNoticeDir | Out-Null
         Copy-Item -LiteralPath (Join-Path $taskCpuSource 'AMDFamily17.p'), (Join-Path $taskCpuSource 'COPYING'), (Join-Path $taskCpuSource 'source-0.2.11.zip') -Destination $taskNoticeDir
+        # The embedded RyzenSMU module comes from the same LGPL release.
+        if ($taskSmu -and (Test-Path -LiteralPath (Join-Path $taskCpuSource 'RyzenSMU.p'))) { Copy-Item -LiteralPath (Join-Path $taskCpuSource 'RyzenSMU.p') -Destination $taskNoticeDir }
         Copy-Item -LiteralPath (Join-Path $taskRepo 'docs\CPU_SENSORS.md') -Destination $taskNoticeDir
     }
 
     # Installation package: installer, double-click wrapper, licenses and recovery guide.
-    Copy-Item -LiteralPath (Join-Path $taskRepo 'scripts\install-app.ps1') -Destination $taskDist
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'scripts\install-app.ps1'), (Join-Path $taskRepo 'scripts\install-startup.ps1'), (Join-Path $taskRepo 'scripts\install-fan-service.ps1') -Destination $taskDist
     Set-Content -LiteralPath (Join-Path $taskDist 'Install.cmd') -Encoding ASCII -Value @(
         '@echo off',
         'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-app.ps1" %*',

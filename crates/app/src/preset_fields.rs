@@ -1,27 +1,31 @@
 //! Declarative presentation of typed preset features. No register/API knowledge.
+use crate::i18n::t;
 use omen_core::{
     features::{Feature as F, Unit, ValueKind},
     profiles::{Choice as C, Value},
 };
 
-pub const GROUPS: [&str; 11] = [
-    "NVIDIA GPU",
-    "Temperatur",
-    "Leistungslimits",
-    "Stromlimits (VRM)",
-    "Precision Boost Overdrive",
-    "Curve Optimizer",
-    "Curve Optimizer pro Kern",
-    "Takt und Spannung",
-    "Intel",
-    "Prozessorleistung",
-    "Energie und Anzeige",
+/// Language keys of the collapsible groups, in display order.
+pub const GROUPS: [&str; 9] = [
+    "group.gpu",
+    "group.limits",
+    "group.pbo",
+    "group.curve_optimizer",
+    "group.curve_optimizer_per_core",
+    "group.clock_voltage",
+    "group.intel",
+    "group.processor",
+    "group.energy_display",
 ];
-pub const SECTIONS: &[(usize, &str)] = &[(0, "GPU"), (1, "CPU"), (9, "Windows")];
+/// First group of each section and the section's language key.
+pub const SECTIONS: &[(usize, &str)] = &[
+    (0, "section.gpu"),
+    (1, "section.cpu"),
+    (7, "section.windows"),
+];
 pub struct Field {
     pub feature: F,
     pub group: usize,
-    pub label: &'static str,
     pub seed: i64,
 }
 /// Legacy keys remain readable. Explicit Save retires only the removed options.
@@ -39,13 +43,12 @@ pub const REMOVED_GPU_OPTIONS: &[F] = &[
     F::GpuCustomTgp,
     F::OmenPerformanceMode,
 ];
+/// STAPM and slow are back as measured HP limits; the fast limit is PPT.
 /// APU power/VRM/soft-clock and integrated-graphics fields do not belong in the
 /// requested CPU-only tuning UI. Retain decoding; retire intent on explicit Save.
 pub const REMOVED_APU_OPTIONS: &[F] = &[
     F::CpuSkinTemperatureLimitC,
     F::CpuFastPptLimitMw,
-    F::CpuSlowPptLimitMw,
-    F::CpuStapmLimitMw,
     F::CpuStapmTimeSeconds,
     F::CpuSlowPptTimeSeconds,
     F::SocTdcMa,
@@ -69,102 +72,70 @@ pub const REMOVED_APU_OPTIONS: &[F] = &[
     F::IntelGpuPowerBalance,
     F::IntelGpuVoltageOffsetMv,
 ];
+/// No Dragon Range control exists for these: the SMU and the original Hub
+/// offer no AMD boost profile (Windows EPP/boost cover it) and no all-core
+/// millivolt offset (Curve Optimizer is the Zen 4 offset).
+pub const REMOVED_CPU_OPTIONS: &[F] = &[F::CpuBoostProfile, F::CpuAllCoreVoltageOffsetMv];
 pub fn retired(feature: F) -> bool {
-    REMOVED_GPU_OPTIONS.contains(&feature) || REMOVED_APU_OPTIONS.contains(&feature)
+    REMOVED_GPU_OPTIONS.contains(&feature)
+        || REMOVED_APU_OPTIONS.contains(&feature)
+        || REMOVED_CPU_OPTIONS.contains(&feature)
 }
 pub fn fields() -> Vec<Field> {
-    let rows = &[
-        (F::GpuCoreOffsetMhz, 0, "GPU-Takt-Offset", 0),
-        (F::GpuMemoryOffsetMhz, 0, "VRAM-Takt-Offset", 0),
-        (F::GpuVfCurve, 0, "GPU-Leistungskurve", 0),
-        (F::MaxFan, 0, "Maximale Lüfterdrehzahl", 0),
-        (F::GpuUnleashed, 0, "Dynamic Boost", 0),
-        (F::CpuTemperatureLimitC, 1, "CPU-Temperaturlimit", 95),
-        (F::CpuPptLimitMw, 2, "PPT", 45000),
-        (F::CpuTdcMa, 3, "CPU TDC", 65000),
-        (F::CpuEdcMa, 3, "CPU EDC", 90000),
-        (F::CpuPboScalar, 4, "PBO Scalar", 1),
-        (F::CpuBoostProfile, 4, "AMD Boost-Profil", 0),
-        (F::CpuCurveOptimizerAllCore, 5, "CPU · alle Kerne", 0),
-        (
-            F::CpuCurveOptimizerPerCore,
-            6,
-            "Curve Optimizer pro Kern",
-            0,
-        ),
-        (
-            F::CpuAllCoreVoltageOffsetMv,
-            7,
-            "CPU-Spannungs-Offset · alle Kerne",
-            0,
-        ),
-        (F::AmdCpuVoltageMv, 7, "CPU-Spannung", 1000),
-        (F::AmdCpuClockMhz, 7, "CPU-Takt", 3000),
-        (F::IntelPl1Mw, 8, "PL1", 45000),
-        (F::IntelPl2Mw, 8, "PL2", 65000),
-        (F::IntelPl4Mw, 8, "PL4", 90000),
-        (F::IntelIccMaxMa, 8, "ICC Max", 90000),
-        (F::IntelCpuPowerBalance, 8, "CPU Power Balance", 0),
-        (F::IntelCacheVoltageOffsetMv, 8, "Cache-Spannungs-Offset", 0),
-        (
-            F::IntelSystemAgentVoltageOffsetMv,
-            8,
-            "System-Agent-Spannungs-Offset",
-            0,
-        ),
-        (
-            F::IntelCoreRatios,
-            8,
-            "Core-Ratios · durch Komma getrennt",
-            40,
-        ),
-        (F::WindowsBoostMode, 9, "Prozessor-Boost", 0),
-        (
-            F::WindowsMinimumProcessorPercent,
-            9,
-            "Minimaler Prozessorzustand",
-            5,
-        ),
-        (
-            F::WindowsMaximumProcessorPercent,
-            9,
-            "Maximaler Prozessorzustand",
-            100,
-        ),
-        (
-            F::WindowsProcessorEppPercent,
-            9,
-            "Energiepräferenz (EPP)",
-            50,
-        ),
-        (
-            F::WindowsCoreParkingMinPercent,
-            9,
-            "Core Parking · Minimum",
-            0,
-        ),
-        (
-            F::WindowsCoreParkingMaxPercent,
-            9,
-            "Core Parking · Maximum",
-            100,
-        ),
-        (F::WindowsEnergyMode, 10, "Windows-Energiemodus", 0),
-        (F::WindowsPowerPlan, 10, "Windows-Energiesparplan", 0),
-        (F::DisplayRefreshRateHz, 10, "Bildwiederholrate", 60),
-        (F::GraphicsMode, 10, "Grafikmodus", 0),
-        (F::CpuCcdAffinity, 9, "CCD-Affinitätsmaske", 3),
+    let rows = [
+        (F::GpuCoreOffsetMhz, 0, 0),
+        (F::GpuMemoryOffsetMhz, 0, 0),
+        (F::GpuVfCurve, 0, 0),
+        (F::MaxFan, 0, 0),
+        (F::GpuUnleashed, 0, 0),
+        (F::CpuTemperatureLimitC, 1, 85),
+        (F::CpuStapmLimitMw, 1, 80000),
+        (F::CpuSlowPptLimitMw, 1, 55000),
+        (F::CpuPptLimitMw, 1, 80000),
+        (F::CpuTdcMa, 1, 108000),
+        (F::CpuEdcMa, 1, 160000),
+        (F::CpuPboScalar, 2, 1),
+        (F::CpuCurveOptimizerAllCore, 3, 0),
+        (F::CpuCurveOptimizerPerCore, 4, 0),
+        (F::AmdCpuVoltageMv, 5, 1000),
+        (F::AmdCpuClockMhz, 5, 3000),
+        (F::IntelPl1Mw, 6, 45000),
+        (F::IntelPl2Mw, 6, 65000),
+        (F::IntelPl4Mw, 6, 90000),
+        (F::IntelIccMaxMa, 6, 90000),
+        (F::IntelCpuPowerBalance, 6, 0),
+        (F::IntelCacheVoltageOffsetMv, 6, 0),
+        (F::IntelSystemAgentVoltageOffsetMv, 6, 0),
+        (F::IntelCoreRatios, 6, 40),
+        (F::WindowsBoostMode, 7, 0),
+        (F::WindowsMinimumProcessorPercent, 7, 5),
+        (F::WindowsMaximumProcessorPercent, 7, 100),
+        (F::WindowsProcessorEppPercent, 7, 50),
+        (F::WindowsCoreParkingMinPercent, 7, 0),
+        (F::WindowsCoreParkingMaxPercent, 7, 100),
+        (F::CpuCcdAffinity, 7, 3),
+        (F::WindowsEnergyMode, 8, 0),
+        (F::WindowsPowerPlan, 8, 0),
+        (F::DisplayRefreshRateHz, 8, 60),
+        (F::GraphicsMode, 8, 0),
     ];
     rows.iter()
-        .map(|(feature, group, label, seed)| Field {
+        .map(|(feature, group, seed)| Field {
             feature: *feature,
             group: *group,
-            label,
             seed: *seed,
         })
         .collect()
 }
 impl Field {
+    /// Display name from the language file (`field.<Feature>`).
+    pub fn label(&self) -> &'static str {
+        t(&format!("field.{:?}", self.feature))
+    }
+    /// What the setting changes and what it does (`info.<Feature>`).
+    pub fn info(&self) -> &'static str {
+        t(&format!("info.{:?}", self.feature))
+    }
     pub fn scale(&self) -> i64 {
         if matches!(
             self.feature.descriptor().unit,
@@ -186,7 +157,7 @@ impl Field {
             Unit::Percent => "%",
             Unit::Hz => "Hz",
             Unit::FramesPerSecond => "FPS",
-            Unit::CurveStep => "Schritte",
+            Unit::CurveStep => t("unit.steps"),
             Unit::None => "",
         }
     }
@@ -221,26 +192,5 @@ impl Field {
     }
 }
 pub fn choice_label(choice: C) -> &'static str {
-    match choice {
-        C::Disabled => "Deaktiviert",
-        C::Enabled => "Aktiviert",
-        C::Aggressive => "Aggressiv",
-        C::EfficientEnabled => "Effizient",
-        C::EfficientAggressive => "Effizient aggressiv",
-        C::AggressiveAtGuaranteed => "Aggressiv ab Basistakt",
-        C::EfficientAggressiveAtGuaranteed => "Effizient aggressiv ab Basistakt",
-        C::BestEfficiency => "Energiesparen",
-        C::BestPerformance => "Beste Leistung",
-        C::PowerSaver => "Energiesparen",
-        C::HighPerformance => "Höchstleistung",
-        C::IntegratedOnly => "Nur integrierte GPU",
-        C::Hybrid => "Hybrid",
-        C::DiscreteOnly => "Nur NVIDIA GPU",
-        C::Quiet => "Quiet",
-        C::Balanced => "Balanced",
-        C::Performance => "Performance",
-        C::Unleashed => "Dynamic Boost",
-        C::Auto => "Automatisch",
-        _ => "Nicht verfügbar",
-    }
+    t(&format!("choice.{choice:?}"))
 }

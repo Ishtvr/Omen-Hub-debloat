@@ -34,14 +34,14 @@ pub const CPU_DRIVER_SHA256: &str =
 const MODULE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cpu-module.bin"));
 #[cfg(not(cpu_sensor_module))]
 const MODULE: &[u8] = &[];
-const VERSION: u32 = (41394 << 16) | (0x861 << 2);
-const LOAD: u32 = (41394 << 16) | (0x821 << 2);
-const EXECUTE: u32 = (41394 << 16) | (0x841 << 2);
+pub(super) const VERSION: u32 = (41394 << 16) | (0x861 << 2);
+pub(super) const LOAD: u32 = (41394 << 16) | (0x821 << 2);
+pub(super) const EXECUTE: u32 = (41394 << 16) | (0x841 << 2);
 
-fn wide(text: &str) -> Vec<u16> {
+pub(super) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
-struct Handle(HANDLE);
+pub(super) struct Handle(pub(super) HANDLE);
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
@@ -95,7 +95,7 @@ impl Read {
         packet
     }
 }
-fn driver_identity() -> Result<(), String> {
+pub(super) fn driver_identity() -> Result<(), String> {
     // Query metadata only. The driver must already run. Never call a service
     // create/start/stop API or load an SDK to repair missing support.
     struct Service(SC_HANDLE);
@@ -354,7 +354,12 @@ impl CpuHardwareReader {
         result
     }
 }
-fn ioctl(driver: &Handle, code: u32, input: &[u8], output: &mut [u8]) -> Result<u32, String> {
+pub(super) fn ioctl(
+    driver: &Handle,
+    code: u32,
+    input: &[u8],
+    output: &mut [u8],
+) -> Result<u32, String> {
     let mut count = 0;
     // Exact bounded buffers remain live until the synchronous operation returns.
     let success = unsafe {

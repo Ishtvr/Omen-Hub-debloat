@@ -1,6 +1,7 @@
 //! Platform-free preset editing: exact units and optimistic, per-field merging.
 use crate::{
     features::Feature,
+    message::msg,
     profiles::{PerformanceProfile, Setting, Value},
 };
 use std::collections::BTreeSet;
@@ -24,20 +25,22 @@ pub fn parse_number(input: &str, scale: i64) -> Result<i64, String> {
         || (scale == 1 && !fraction.is_empty())
         || fraction.len() > 3
     {
-        return Err("Gültige Zahl eingeben.".into());
+        return Err(msg("preset.err.number", &[]));
     }
-    let whole: i64 = whole.parse().map_err(|_| "Zahl zu groß")?;
+    let whole: i64 = whole
+        .parse()
+        .map_err(|_| msg("preset.err.too_large", &[]))?;
     let fraction: i64 = if fraction.is_empty() {
         0
     } else {
         format!("{fraction:0<3}")
             .parse()
-            .map_err(|_| "Ungültige Nachkommastellen")?
+            .map_err(|_| msg("preset.err.decimals", &[]))?
     };
     let number = whole
         .checked_mul(scale)
         .and_then(|n| n.checked_add(fraction))
-        .ok_or("Zahl zu groß")?;
+        .ok_or_else(|| msg("preset.err.too_large", &[]))?;
     if negative {
         number.checked_neg().ok_or("Zahl zu klein".into())
     } else {
@@ -67,12 +70,12 @@ pub fn merge(
     edits: &[(Feature, Option<Value>)],
 ) -> Result<PerformanceProfile, String> {
     if baseline.id != fresh.id || baseline.binding != fresh.binding {
-        return Err("Preset-Bindung wurde geändert. Erneut laden.".into());
+        return Err(msg("preset.err.binding_changed", &[]));
     }
     let mut result = fresh.clone();
     if desired_name != baseline.name {
         if fresh.name != baseline.name {
-            return Err("Preset-Name wurde zwischenzeitlich geändert.".into());
+            return Err(msg("preset.err.name_changed", &[]));
         }
         result.name = desired_name.into();
     }
@@ -92,9 +95,9 @@ pub fn merge(
             continue;
         }
         if get(fresh, *feature) != before {
-            return Err(format!(
-                "{:?} wurde in einem anderen Fenster geändert. Erneut laden.",
-                feature
+            return Err(msg(
+                "preset.err.changed_elsewhere",
+                &[&format!("@field.{feature:?}")],
             ));
         }
         result.settings.retain(|s| s.feature != *feature);

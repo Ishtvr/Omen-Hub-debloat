@@ -46,9 +46,10 @@ pub fn token() -> String {
         std::process::id()
     )
 }
+/// Sets a window's text; core/platform message markers are translated.
 pub fn text(handle: HWND, value: &str) {
     unsafe {
-        SetWindowTextW(handle, wide(value).as_ptr());
+        SetWindowTextW(handle, wide(&crate::i18n::message(value)).as_ptr());
     }
 }
 pub fn value(handle: HWND) -> String {
@@ -196,5 +197,18 @@ pub unsafe fn messages(hwnd: HWND) {
                 DispatchMessageW(&message);
             }
         }
+    }
+}
+/// Width of `text` in `font` as drawn in `window`, in window units.
+pub unsafe fn text_width(window: HWND, font: HFONT, text: &str) -> i32 {
+    unsafe {
+        let dc = GetDC(window);
+        let old = SelectObject(dc, font);
+        let mut size = SIZE { cx: 0, cy: 0 };
+        let wide = text.encode_utf16().collect::<Vec<_>>();
+        GetTextExtentPoint32W(dc, wide.as_ptr(), wide.len() as i32, &mut size);
+        SelectObject(dc, old);
+        ReleaseDC(window, dc);
+        size.cx
     }
 }

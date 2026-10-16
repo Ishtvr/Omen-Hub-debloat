@@ -3,6 +3,8 @@
 #requires -Version 5.1
 param()
 $ErrorActionPreference='Stop'
+# UI labels below are German; pin the app language so the checks stay stable.
+$env:OMEN_HUB_LANG = 'de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
 $taskExe=Join-Path $taskRepo 'dist\Omen Hub++.exe'
 $taskOutput=Join-Path $taskRepo '.local\research\fan-control\cooling-read-check.json'

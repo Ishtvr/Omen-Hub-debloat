@@ -11,6 +11,7 @@ mod dashboard;
 #[cfg(windows)]
 mod elevation;
 #[cfg(windows)]
+mod i18n;
 mod inventory;
 #[cfg(windows)]
 mod keyboard_ui;
@@ -40,7 +41,10 @@ fn main() {
     if let Err(error) = run() {
         #[cfg(windows)]
         if std::env::args().count() == 1 || std::env::args().skip(1).eq(["--tray"]) {
-            let body: Vec<u16> = error.encode_utf16().chain(Some(0)).collect();
+            let body: Vec<u16> = i18n::message(&error)
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
             let title: Vec<u16> = omen_core::APP_NAME.encode_utf16().chain(Some(0)).collect();
             // SAFETY: Strings are terminated and remain alive for the modal call.
             unsafe {
@@ -70,6 +74,25 @@ fn preview_size(args: &[String], offset: usize) -> Result<Option<[i32; 2]>, Stri
 }
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // GDI scaling renders text and shapes at the monitor resolution while the
+    // fixed-pixel layouts stay in 96-DPI units. Without it, Windows stretches
+    // the bitmap and text looks blurred at 125 % and above. Windowless control
+    // commands are DPI aware so display APIs report physical modes.
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::HiDpi::*;
+        let windowless = args
+            .first()
+            .is_some_and(|a| profile_commands::handles(a) || a.starts_with("mode-"));
+        // SAFETY: Called once before any window exists; failure keeps the default.
+        unsafe {
+            SetProcessDpiAwarenessContext(if windowless {
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            } else {
+                DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
+            });
+        }
+    }
     #[cfg(windows)]
     if args.is_empty() || args == ["--tray"] {
         return ui::run(!args.is_empty());

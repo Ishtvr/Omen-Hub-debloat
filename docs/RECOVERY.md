@@ -6,24 +6,27 @@ Diese Anleitung beschreibt, was Omen Hub++ auf einem Gerät verändern kann, wie
 
 | Bereich | Wann geschrieben wird | Originalzustand |
 | --- | --- | --- |
-| NVIDIA-Core-/VRAM-Offset, vollständige V/F-Kurve, Max-Fan | Nur bei ausdrücklichem **Anwenden** eines gespeicherten Custom Presets (UAC) oder beim freigegebenen Anmeldestart eines vollständig unterstützten Presets | Vor jedem SET in `control-journal.json` gespeichert; Readback nach dem Schreiben, Rollback bei Teilfehlern |
+| Preset-Einstellungen: NVIDIA-Offsets/V/F-Kurve, Max-Fan, Dynamic Boost, CPU-Limits/Curve Optimizer/PBO (SMU), Windows-Richtlinien, Bildwiederholrate, CCD-Affinität, Grafikmodus (MUX) | Nur bei ausdrücklichem **Anwenden** eines gespeicherten Custom Presets (UAC) oder beim freigegebenen Anmeldestart | Vor jedem SET in `control-journal.json` gespeichert; Readback nach dem Schreiben, Rollback bei Teilfehlern |
+| HP-Leistungsmodus Quiet/Balanced/Performance/Unleashed samt PL1 | Auswahl im Dashboard (UAC) | Kein Journal: Der Thermalmodus hat keinen GET; zurück geht es durch Auswahl von **Balanced** |
+| Lüfterkurve, Auto/Max-Schalter, CCD-Affinität im Betrieb | Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`) | Ohne gespeicherte Kurve sendet er nichts; Entfernen gibt die Lüfter an das BIOS zurück |
 | Tastaturfarben und Ein/Aus | Nur durch Klick im Fenster **Beleuchtung** (UAC) | Eigenes Journal unter `keyboard-control\` |
-| Profile, Entwürfe, Lüfterkurven-Entwürfe | **Speichern** im Editor | Reine Metadaten, keine Hardwarewirkung |
+| Profile und Entwürfe | **Speichern** im Editor | Reine Metadaten, keine Hardwarewirkung |
 | Windows-Anmeldestart | Nur nach ausdrücklicher Freigabe eines bereits angewendeten, unterstützten Presets | Geplante Aufgabe `OmenHubPP-Profile-<SID>` |
 
-Omen Hub++ stoppt oder entfernt keine HP-Dienste, installiert keinen Treiber, flasht keine Firmware und ändert keine Spannungen oder Leistungsgrenzen. Ein Vorschau-Leistungsmodus (Quiet/Balanced/Performance) schreibt nichts.
+Omen Hub++ stoppt oder entfernt keine HP-Dienste, installiert keinen Treiber und flasht keine Firmware. Leistungsgrenzen (PL1, STAPM, PPT, TDC/EDC) und der Curve Optimizer werden nur über die oben genannten, ausdrücklich ausgelösten Wege geändert; feste CPU-Spannungen oder direkte GPU-Spannungen werden nie gesetzt. Ein geänderter Grafikmodus wirkt erst nach einem Neustart.
 
 ## Speicherorte
 
 - **Benutzerdaten:** `%USERPROFILE%\.omen-hub-pp\` – `profiles\`, `deleted-profiles\` (archivierte Originalbytes), `control-journal.json` (Originalbild des letzten Apply), `control-history\` (Sicherungen früherer abgeschlossener Journale aus Qualifikationsläufen), `startup.json`, `last-*.json`, `keyboard-control\` (Beleuchtungsjournal).
-- **Installation:** `%ProgramFiles%\OmenHubPlusPlus\` – `Omen Hub++.exe`, `installation.json` (Startup-Beleg) und `startup-authorized-<SID>.json`.
+- **Lüfterdienst und CCD-Affinität:** `active-fan-curve.json`, `fan-mode.json` und `ccd-affinity.json` im selben Ordner.
+- **Installation:** `%ProgramFiles%\OmenHubPlusPlus\` – `Omen Hub++.exe`, `installation.json` (Startup-Beleg), `startup-authorized-<SID>.json` sowie für den Lüfterdienst `Omen Hub++ Fan.exe` und `fan-service-<SID>.json`.
 - **Verknüpfungen:** `Omen Hub++.lnk` im Startmenü (Programme) und auf dem Desktop des installierenden Benutzers.
 
 Die Journale sind die einzige Quelle für den gespeicherten Originalzustand. **Löschen Sie `.omen-hub-pp` nicht, bevor Sie wiederhergestellt haben.**
 
 ## Originalzustand zurückholen
 
-### Leistungsprofil, GPU-Takt/-Kurve und Max-Fan
+### Preset-Einstellungen (GPU, CPU, Windows, Max-Fan, MUX)
 
 1. Ist eine Transaktion unvollständig (z. B. Absturz während **Anwenden**), zeigt **Leistungsprofile** statt **Anwenden** die Aktion **Wiederherstellen**. Sie stellt das gespeicherte Original nach UAC wieder her.
 2. Unabhängig davon stellt die Befehlszeile den vor dem letzten Apply gespeicherten Zustand wieder her. Die Funktion deaktiviert zuerst eine automatische Anmeldeauswahl:
@@ -34,6 +37,14 @@ Die Journale sind die einzige Quelle für den gespeicherten Originalzustand. **L
 
    In einer **als Administrator** geöffneten PowerShell ausführen. Ein anderes Board, BIOS oder ein anderer NVIDIA-Treiber blockiert die Wiederherstellung ausdrücklich, statt fremde Werte zu schreiben.
 3. Max-Fan lässt sich zusätzlich über ein Preset mit **Max-Fan: Aus** freigeben. **Aus** gibt nur den Override frei und wählt keinen bestimmten BIOS-Lüftermodus.
+
+### HP-Leistungsmodus
+
+Im Dashboard **Balanced (Default)** wählen. Das schreibt den ausgelieferten Balanced-Zustand samt PL1 und liest GPU-Bits sowie, mit SMU-Modul, STAPM/Slow zurück. Ein fehlgeschlagener Moduswechsel fällt selbst auf Balanced zurück.
+
+### Lüfter
+
+Der Schnellschalter auf der Startseite stellt **Auto** (gespeicherte Kurve) oder **Max** ein. Um die Lüfter vollständig dem BIOS zu überlassen, den Lüfterdienst entfernen (siehe Deinstallation, Schritt 2).
 
 ### Tastaturbeleuchtung
 
@@ -54,16 +65,18 @@ In einer **als Administrator** geöffneten Windows PowerShell 5.1 im entpackten 
 
 ```powershell
 # 1. Originalzustand wiederherstellen (siehe oben).
-# 2. Geplante Anmeldeaufgabe, Startup-Beleg und Freigabe entfernen:
+# 2. Lüfterdienst entfernen; die Lüfter regelt danach wieder das BIOS:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-fan-service.ps1 -Mode Remove
+# 3. Geplante Anmeldeaufgabe, Startup-Beleg und Freigabe entfernen:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-startup.ps1 -Mode Remove
-# 3. Programmdatei und eigene Verknüpfungen entfernen:
+# 4. Programmdatei und eigene Verknüpfungen entfernen:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-app.ps1 -Mode Remove
 ```
 
-`install-startup.ps1` ist nicht Teil des Release-Pakets; dort reicht Schritt 3, solange kein Anmeldestart eingerichtet wurde. Ohne vorher entfernte Anmeldeaufgabe entfernt `install-app.ps1` nur die Verknüpfungen und lässt die von der Aufgabe benutzte Programmdatei stehen. Beide Skripte löschen nie Profile, Journale oder den Ordner `.omen-hub-pp`. Diesen Ordner erst nach erfolgreicher Wiederherstellung von Hand löschen.
+Im Release-Paket liegen alle drei Skripte direkt neben der EXE; dort den Ordner `scripts\` weglassen. Ohne vorher entfernte Anmeldeaufgabe entfernt `install-app.ps1` nur die Verknüpfungen und lässt die von der Aufgabe benutzte Programmdatei stehen. Beide Skripte löschen nie Profile, Journale oder den Ordner `.omen-hub-pp`. Diesen Ordner erst nach erfolgreicher Wiederherstellung von Hand löschen.
 
 ## Grenzen
 
-- Ob NVIDIA-Offsets, Tastaturfarben oder Max-Fan einen echten Neustart, Standby/Resume oder einen Netzteilwechsel überdauern, ist nicht gemessen. Verlassen Sie sich nicht auf einen Neustart als Rücksetzung.
+- Ob NVIDIA-Offsets, CPU-Limits, Tastaturfarben oder Max-Fan einen echten Neustart, Standby/Resume oder einen Netzteilwechsel überdauern, ist nicht gemessen. Verlassen Sie sich nicht auf einen Neustart als Rücksetzung.
 - Das Originalbild beschreibt den Zustand **vor dem letzten Apply**. Sicherungen in `control-history\` werden nie automatisch angewendet.
 - Andere RGB- oder Tuningprogramme, auch der weiterhin installierte OMEN Gaming Hub, können Zustände unabhängig ändern. Der eigene Prozess-Mutex schließt nur Omen Hub++ selbst aus.

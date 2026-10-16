@@ -1,5 +1,8 @@
 //! Native dashboard presentation. It never reads or changes hardware.
-use crate::theme::{self, Theme};
+use crate::{
+    i18n::{t, tf},
+    theme::{self, Theme},
+};
 use omen_core::{CpuHardwareStatus, Snapshot};
 use std::ptr;
 use windows_sys::Win32::{
@@ -11,49 +14,38 @@ fn wide(s: &str) -> Vec<u16> {
 }
 unsafe fn text(hwnd: HWND, id: i32, value: &str) {
     unsafe {
-        SetWindowTextW(GetDlgItem(hwnd, id), wide(value).as_ptr());
+        SetWindowTextW(
+            GetDlgItem(hwnd, id),
+            wide(&crate::i18n::message(value)).as_ptr(),
+        );
     }
 }
-unsafe fn metric(hwnd: HWND, id: i32, t: &Theme, value: Option<String>) {
+unsafe fn metric(hwnd: HWND, id: i32, th: &Theme, value: Option<String>) {
     unsafe {
         let c = GetDlgItem(hwnd, id);
         SendMessageW(
             c,
             WM_SETFONT,
-            if value.is_some() { t.metric } else { t.body } as usize,
+            if value.is_some() { th.metric } else { th.body } as usize,
             1,
         );
         SetWindowTextW(
             c,
-            wide(value.as_deref().unwrap_or("Nicht verfügbar")).as_ptr(),
+            wide(value.as_deref().unwrap_or(t("common.unavailable"))).as_ptr(),
         );
     }
 }
 pub fn cpu_detail(s: &Snapshot) -> String {
+    // Measured values speak for themselves; only states that need attention
+    // get a line.
     match &s.cpu_hardware_status {
-        CpuHardwareStatus::Off => {
-            "CPU-Hardwaresensoren nicht aktiviert.\r\nZum Lesen Windows-Freigabe erteilen.".into()
-        }
-        CpuHardwareStatus::Starting => "Windows-Freigabe wird angefordert …".into(),
-        CpuHardwareStatus::Paused => "Sensoren pausiert. Neue Messbasis beim Öffnen.".into(),
+        CpuHardwareStatus::Off => t("dash.cpu_off").into(),
+        CpuHardwareStatus::Starting => t("dash.cpu_starting").into(),
+        CpuHardwareStatus::Paused | CpuHardwareStatus::Active => String::new(),
         CpuHardwareStatus::Error(e) => crate::ui::cpu_error_message(e).into(),
-        CpuHardwareStatus::Active => {
-            let interval = s
-                .cpu
-                .as_ref()
-                .and_then(|c| c.hardware.as_ref())
-                .and_then(|h| h.power_interval_ms)
-                .map_or("Energie-Baseline · Leistung wird gemessen".into(), |ms| {
-                    format!(
-                        "Mittelwert über {:.2} s · Temperatur: Tctl",
-                        ms as f64 / 1000.0
-                    )
-                });
-            format!("{interval}\r\nQuelle: CPU-Energiezähler und Tctl über PawnIO.")
-        }
     }
 }
-pub unsafe fn create(hwnd: HWND, t: &Theme) {
+pub unsafe fn create(hwnd: HWND, th: &Theme) {
     unsafe {
         let control = |id: i32,
                        class: &str,
@@ -88,146 +80,127 @@ pub unsafe fn create(hwnd: HWND, t: &Theme) {
         };
         let label =
             |id, value, font, panel, muted| control(id, "STATIC", value, 0, font, panel, muted);
-        label(120, "Omen Hub++", t.title, false, false);
-        label(121, "Systemübersicht", t.body, false, true);
-        label(122, "Versorgung wird gelesen …", t.body, false, true);
+        label(120, "Omen Hub++", th.title, false, false);
+        label(121, t("dash.subtitle"), th.body, false, true);
+        label(122, t("dash.power_reading"), th.body, false, true);
         for (id, value, font, panel, muted) in [
-            (130, "GPU · NVIDIA", t.heading, true, false),
-            (131, "GPU wird erkannt …", t.small, true, true),
-            (132, "Leistungsaufnahme", t.body, true, true),
-            (133, "Nicht verfügbar", t.body, true, false),
-            (134, "Temperatur", t.body, true, true),
-            (135, "Nicht verfügbar", t.body, true, false),
-            (136, "GPU-Takt: Nicht verfügbar", t.body, true, false),
-            (137, "Treiberlimits werden gelesen …", t.small, true, true),
-            (
-                138,
-                "Die Treiberobergrenze ist keine erreichte Dauerleistung.",
-                t.small,
-                true,
-                true,
-            ),
-            (140, "CPU", t.heading, true, false),
-            (139, "CPU wird erkannt …", t.small, true, true),
-            (147, "CPU-Paketleistung", t.body, true, true),
-            (141, "Nicht verfügbar", t.body, true, false),
-            (148, "CPU-Temperatur (Tctl)", t.body, true, true),
-            (142, "Nicht verfügbar", t.body, true, false),
-            (144, "Auslastung: Wird gemessen", t.body, true, false),
+            (130, t("dash.gpu_title"), th.heading, true, false),
+            (131, t("dash.gpu_detecting"), th.small, true, true),
+            (132, t("dash.power_draw"), th.body, true, true),
+            (133, t("common.unavailable"), th.body, true, false),
+            (134, t("dash.temperature"), th.body, true, true),
+            (135, t("common.unavailable"), th.body, true, false),
+            (136, t("dash.gpu_clock_unavailable"), th.body, true, false),
+            (140, t("dash.cpu_title"), th.heading, true, false),
+            (139, t("dash.cpu_detecting"), th.small, true, true),
+            (147, t("dash.cpu_package_power"), th.body, true, true),
+            (141, t("common.unavailable"), th.body, true, false),
+            (148, t("dash.cpu_temperature"), th.body, true, true),
+            (142, t("common.unavailable"), th.body, true, false),
+            (144, t("dash.load_measuring"), th.body, true, false),
             (
                 145,
-                "Windows-Takt: Nicht verfügbar · kein Boost-/Effektivtakt",
-                t.small,
+                t("dash.windows_clock_unavailable"),
+                th.small,
                 true,
                 true,
             ),
-            (
-                146,
-                "CPU-Hardwaresensoren nicht aktiviert.",
-                t.small,
-                true,
-                true,
-            ),
-            (150, "Steuerung", t.heading, false, false),
-            (160, "System", t.heading, false, false),
-            (161, "Leistungsmodus", t.body, false, false),
-            (
-                181,
-                "Balanced (Default): noch nicht verfügbar.",
-                t.small,
-                false,
-                true,
-            ),
-            (
-                162,
-                "Schließen: Tray. Tray-Menü: Beenden.",
-                t.small,
-                false,
-                true,
-            ),
+            (146, "", th.small, true, true),
+            (150, t("dash.controls"), th.heading, false, false),
+            (151, t("fan.quick.label"), th.body, false, true),
+            (160, t("dash.system"), th.heading, false, false),
+            (161, t("dash.mode"), th.body, false, false),
+            (181, t("mode.bios_unreadable"), th.small, false, true),
         ] {
             label(id, value, font, panel, muted);
         }
+        // Explains the four built-in modes (owner-drawn round "i").
         control(
-            101,
+            182,
             "BUTTON",
-            "Aktualisieren",
-            WS_TABSTOP,
-            t.body,
+            "i",
+            WS_TABSTOP | BS_OWNERDRAW as u32,
+            th.small,
             false,
             false,
         );
         control(
-            106,
+            101,
             "BUTTON",
-            "CPU-Sensoren …",
+            t("dash.refresh"),
             WS_TABSTOP,
-            t.body,
-            true,
+            th.body,
+            false,
             false,
         );
         control(
             103,
             "BUTTON",
-            "Leistungsprofile",
+            t("preset.title"),
             WS_TABSTOP,
-            t.body,
+            th.body,
             false,
             false,
         );
         control(
             104,
             "BUTTON",
-            "Lüfterkurve",
+            t("dash.fan_curve"),
             WS_TABSTOP,
-            t.body,
+            th.body,
             false,
             false,
         );
         control(
             105,
             "BUTTON",
-            "Beleuchtung",
+            t("dash.lighting"),
             WS_TABSTOP,
-            t.body,
+            th.body,
             false,
             false,
         );
+        for (id, label) in [(106, "fan.quick.auto"), (107, "fan.quick.max")] {
+            control(id, "BUTTON", t(label), WS_TABSTOP, th.body, false, false);
+        }
         let combo = control(
             102,
             "COMBOBOX",
             "",
             WS_TABSTOP | CBS_DROPDOWNLIST as u32,
-            t.body,
+            th.body,
             false,
             false,
         );
-        for value in [
-            "Quiet (Default)",
-            "Balanced (Default)",
-            "Performance (Default)",
+        for mode in [
+            "mode.quiet",
+            "mode.balanced",
+            "mode.performance",
+            "mode.unleashed",
         ] {
-            SendMessageW(combo, CB_ADDSTRING, 0, wide(value).as_ptr() as isize);
+            let value = tf("mode.default_entry", &[&t(mode)]);
+            SendMessageW(combo, CB_ADDSTRING, 0, wide(&value).as_ptr() as isize);
         }
         SendMessageW(combo, CB_SETCURSEL, 1, 0);
         control(
             180,
             "EDIT",
-            "Hardware wird erkannt …",
+            t("dash.hardware_detecting"),
             ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32 | WS_VSCROLL,
-            t.small,
+            th.small,
             false,
             false,
         );
         layout(hwnd);
     }
 }
+/// Lower edge of the GPU and CPU panels, shared by layout and painting.
+const PANEL_BOTTOM: i32 = 380;
 pub unsafe fn layout(hwnd: HWND) {
     unsafe {
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
         let width = r.right;
-        let h = r.bottom;
         let margin = 28;
         let gap = 20;
         let panel = (width - 2 * margin - gap) / 2;
@@ -257,28 +230,33 @@ pub unsafe fn layout(hwnd: HWND) {
             ]);
         }
         boxes.extend([
-            (136, [margin + 24, 300, content, 24]),
-            (137, [margin + 24, 331, content, 24]),
-            (138, [margin + 24, 360, content, 46]),
-            (144, [right + 24, 284, content, 24]),
-            (145, [right + 24, 310, content, 22]),
-            (146, [right + 24, 339, content, 38]),
-            (106, [right + 24, 383, content, 32]),
-            (150, [28, 446, width - 56, 30]),
+            (136, [margin + 24, 290, content, 24]),
+            (144, [right + 24, 290, content, 24]),
+            (145, [right + 24, 318, content, 22]),
+            (146, [right + 24, 344, content, 26]),
+            (150, [28, PANEL_BOTTOM + 24, width - 400, 30]),
+            // Fan quick switch, right-aligned on the Controls heading line.
+            (151, [width - 262, PANEL_BOTTOM + 28, 60, 24]),
+            (106, [width - 196, PANEL_BOTTOM + 20, 82, 34]),
+            (107, [width - 110, PANEL_BOTTOM + 20, 82, 34]),
         ]);
         let action = (width - 56 - 32) / 3;
         for (i, id) in [103, 104, 105].iter().enumerate() {
             let x = 28 + i as i32 * (action + 16);
-            boxes.push((*id, [x, 487, action, 44]));
+            boxes.push((*id, [x, PANEL_BOTTOM + 65, action, 44]));
         }
-        let bottom = (h - 180).max(578);
+        // Content stays top-aligned; a taller window only adds space below it.
+        let bottom = PANEL_BOTTOM + 150;
+        let label = GetDlgItem(hwnd, 161);
+        let font = SendMessageW(label, WM_GETFONT, 0, 0) as HFONT;
+        let mode_label = crate::native_ui::text_width(label, font, t("dash.mode")) + 4;
         boxes.extend([
             (160, [28, bottom, panel, 28]),
             (180, [28, bottom + 35, panel - 8, 74]),
-            (161, [right, bottom, panel, 28]),
+            (161, [right, bottom, mode_label, 28]),
+            (182, [right + mode_label + 6, bottom + 2, 24, 24]),
             (102, [right, bottom + 34, panel, 220]),
             (181, [right, bottom + 78, panel, 44]),
-            (162, [28, h - 29, width - 56, 22]),
         ]);
         for (id, b) in boxes {
             MoveWindow(GetDlgItem(hwnd, id), b[0], b[1], b[2], b[3], 1);
@@ -286,68 +264,59 @@ pub unsafe fn layout(hwnd: HWND) {
         InvalidateRect(hwnd, ptr::null(), 0);
     }
 }
-pub unsafe fn paint(hwnd: HWND, t: &Theme, dc: HDC) {
+pub unsafe fn paint(hwnd: HWND, th: &Theme, dc: HDC) {
     unsafe {
-        t.fill(hwnd, dc);
+        th.fill(hwnd, dc);
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
         let panel = (r.right - 76) / 2;
-        let old = SelectObject(dc, t.panel);
+        let old = SelectObject(dc, th.panel);
         let pen = CreatePen(
             PS_SOLID,
             1,
-            if t.high_contrast {
-                t.text()
+            if th.high_contrast {
+                th.text()
             } else {
                 theme::PANEL
             },
         );
         let previous = SelectObject(dc, pen);
         for x in [28, 48 + panel] {
-            RoundRect(dc, x, 108, x + panel, 429, 24, 24);
+            RoundRect(dc, x, 108, x + panel, PANEL_BOTTOM, 24, 24);
         }
         SelectObject(dc, old);
         SelectObject(dc, previous);
         DeleteObject(pen);
     }
 }
-pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
+pub unsafe fn update(hwnd: HWND, th: &Theme, s: &Snapshot) {
     unsafe {
         let gpu = s.gpu.as_ref();
         text(
             hwnd,
             131,
-            gpu.map_or("Nicht verfügbar", |g| g.name.as_str()),
+            gpu.map_or(t("common.unavailable"), |g| g.name.as_str()),
         );
         metric(
             hwnd,
             133,
-            t,
+            th,
             gpu.and_then(|g| g.power_w).map(|v| format!("{v:.1} W")),
         );
         metric(
             hwnd,
             135,
-            t,
+            th,
             gpu.and_then(|g| g.temperature_c).map(|v| format!("{v} °C")),
         );
         text(
             hwnd,
             136,
-            &format!(
-                "GPU-Takt: {}",
-                gpu.and_then(|g| g.clock_mhz)
-                    .map_or("Nicht verfügbar".into(), |v| format!("{v} MHz"))
-            ),
-        );
-        let limit = |v: Option<f64>| v.map_or("unbekannt".into(), |v| format!("{v:.0} W"));
-        text(
-            hwnd,
-            137,
-            &format!(
-                "Standardlimit: {} · Treiberobergrenze: {}",
-                limit(gpu.and_then(|g| g.default_limit_w)),
-                limit(gpu.and_then(|g| g.maximum_limit_w))
+            &tf(
+                "dash.gpu_clock",
+                &[&gpu
+                    .and_then(|g| g.clock_mhz)
+                    .map_or(t("common.unavailable").into(), |v| format!("{v} MHz"))],
             ),
         );
         text(
@@ -356,46 +325,46 @@ pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
             s.inventory
                 .cpus
                 .first()
-                .map_or("Nicht verfügbar", String::as_str),
+                .map_or(t("common.unavailable"), String::as_str),
         );
         let cpu = s.cpu.as_ref();
         metric(
             hwnd,
             141,
-            t,
+            th,
             cpu.and_then(|c| c.package_power_w)
                 .map(|v| format!("{v:.1} W")),
         );
         metric(
             hwnd,
             142,
-            t,
+            th,
             cpu.and_then(|c| c.temperature_c)
                 .map(|v| format!("{v:.1} °C")),
         );
         if matches!(s.cpu_hardware_status, CpuHardwareStatus::Active)
             && cpu.is_some_and(|c| c.hardware.is_some() && c.package_power_w.is_none())
         {
-            text(hwnd, 141, "Wird gemessen");
+            text(hwnd, 141, t("dash.measuring"));
         }
         text(
             hwnd,
             144,
-            &format!(
-                "Auslastung: {}",
-                cpu.and_then(|c| c.busy_percent)
-                    .map_or("Wird gemessen / nicht verfügbar".into(), |v| format!(
-                        "{v:.1} %"
-                    ))
+            &tf(
+                "dash.load",
+                &[&cpu
+                    .and_then(|c| c.busy_percent)
+                    .map_or(t("dash.load_unavailable").into(), |v| format!("{v:.1} %"))],
             ),
         );
         text(
             hwnd,
             145,
-            &format!(
-                "Windows-Takt: {} · kein Boost-/Effektivtakt",
-                cpu.and_then(|c| c.windows_clock_mhz)
-                    .map_or("Nicht verfügbar".into(), |v| format!("{v} MHz"))
+            &tf(
+                "dash.windows_clock",
+                &[&cpu
+                    .and_then(|c| c.windows_clock_mhz)
+                    .map_or(t("common.unavailable").into(), |v| format!("{v} MHz"))],
             ),
         );
         theme::error(
@@ -404,34 +373,39 @@ pub unsafe fn update(hwnd: HWND, t: &Theme, s: &Snapshot) {
         );
         text(hwnd, 146, &cpu_detail(s));
         let ac = match s.power.ac_connected {
-            Some(true) => "Netzbetrieb",
-            Some(false) => "Akkubetrieb",
-            None => "Versorgung unbekannt",
+            Some(true) => t("dash.ac"),
+            Some(false) => t("dash.battery"),
+            None => t("dash.power_unknown"),
         };
         text(
             hwnd,
             122,
-            &format!(
-                "{ac} · Akku {}",
-                s.power
-                    .battery_percent
-                    .map_or("unbekannt".into(), |v| format!("{v} %"))
+            &tf(
+                "dash.power_line",
+                &[
+                    &ac,
+                    &s.power
+                        .battery_percent
+                        .map_or(t("common.unknown").into(), |v| format!("{v} %")),
+                ],
             ),
         );
         text(
             hwnd,
             180,
-            &format!(
-                "{} {}\r\nBoard: {} · BIOS: {}\r\nHP-WMI: {}",
-                s.inventory.manufacturer,
-                s.inventory.model,
-                s.inventory.board,
-                s.inventory.bios,
-                if s.inventory.hp_bios_interface_present {
-                    "vorhanden"
-                } else {
-                    "nicht verfügbar"
-                }
+            &tf(
+                "dash.inventory",
+                &[
+                    &s.inventory.manufacturer,
+                    &s.inventory.model,
+                    &s.inventory.board,
+                    &s.inventory.bios,
+                    &if s.inventory.hp_bios_interface_present {
+                        t("dash.present")
+                    } else {
+                        t("dash.not_present")
+                    },
+                ],
             ),
         );
     }

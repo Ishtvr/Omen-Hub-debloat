@@ -2,6 +2,8 @@
 #requires -Version 5.1
 param()
 $ErrorActionPreference='Stop'
+# UI labels below are German; pin the app language so the checks stay stable.
+$env:OMEN_HUB_LANG = 'de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
 $taskExe=Join-Path $taskRepo 'dist\Omen Hub++.exe'
 $taskName='Preset UI '+[Guid]::NewGuid().ToString('N')
@@ -152,7 +154,7 @@ try{
  @($taskFresh.settings|Where-Object feature -eq 'keyboard_colors')[0].value.value[0][0]=22
  [IO.File]::WriteAllText($taskFile,($taskFresh|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
  Click $taskWindow 1202
- $taskPpt=[OmenPresetSmoke]::Labeled($taskWindow,'PPT (W)')
+ $taskPpt=[OmenPresetSmoke]::Labeled($taskWindow,'Fast-Limit (PPT) (W)')
  if($taskPpt-eq[IntPtr]::Zero){throw 'CPU PPT field is missing.'}
  $taskPptId=[OmenPresetSmoke]::Id($taskPpt)
  [void][OmenPresetSmoke]::Message($taskPpt,0x00F1,1);Click $taskWindow $taskPptId
