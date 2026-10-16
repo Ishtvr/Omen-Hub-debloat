@@ -93,7 +93,8 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [ ] Release-Speicherbudget, CPU-Leerlauf, Startzeit und Binärgröße reproduzierbar messen.
 - [x] Erstes Speicher-/CPU-Protokoll für den Diagnose-Release erstellen; aktuelles Tray-Ziel: 50 MB Working Set.
 - [x] Optionale Buildvorbereitung aus signiertem öffentlichen PawnIO.Modules 0.2.11, Größen-/Hashprüfung und LGPL-Quellen/Lizenzbeilage; keine Downloads oder Treiberpakete in der Runtime.
-- [ ] Hardwarematrix, Installationspaket, Abhängigkeitslizenzen und Wiederherstellungsanleitung.
+- [x] Hardwarematrix, Installationspaket mit Startmenü-/Desktopverknüpfung, Lizenztexte aller eingebundenen Rust-Abhängigkeiten und Wiederherstellungsanleitung ([HARDWARE_MATRIX.md](HARDWARE_MATRIX.md), [RECOVERY.md](RECOVERY.md)). Installation und Entfernen auf Windows noch nicht ausgeführt.
+- [x] Eigenes App-Symbol (dunkle Kachel, Mint-Instrument, Schriftzug „Hub“) mit Versionsinformationen ohne zusätzliche Build-Abhängigkeit in die EXE eingebettet; Fenster, Taskleiste und Tray verwenden es. Darstellung bei verschiedenen DPI auf Windows noch zu prüfen.
 
 Die fertiggestellte Anwendung soll keine Telemetrie, Hintergrund-Updates, Werbung, Overlays, Registrierung oder Netzwerkpflicht enthalten. Das Entfernen von HP-Komponenten ist eine spätere, getrennte Funktion mit Wiederherstellungsplan; der aktuelle Prototyp deinstalliert oder stoppt nichts.
 

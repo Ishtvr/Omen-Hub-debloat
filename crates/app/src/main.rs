@@ -33,6 +33,9 @@ mod telemetry_worker;
 mod theme;
 #[cfg(windows)]
 mod ui;
+#[cfg(test)]
+#[path = "../build_support/win_resource.rs"]
+mod win_resource;
 
 fn main() {
     if let Err(error) = run() {

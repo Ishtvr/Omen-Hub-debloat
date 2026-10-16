@@ -8,3 +8,5 @@
 /.gitignore text eol=lf
 /.impeccable/config.json text eol=lf
 /.impeccable/design.json text eol=lf
+*.ico binary
+*.png binary

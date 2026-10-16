@@ -1,5 +1,7 @@
 # Omen Hub++
 
+<img src="docs/assets/app-icon.png" alt="Omen Hub++ App-Symbol" width="96" align="right">
+
 Eine native, leichtgewichtige Open-Source-Alternative zum OMEN Gaming Hub in Rust. Ziel sind HP-Systemkontrolle und die relevanten Tuning-Möglichkeiten von UXTU in einer einzigen Anwendung: ohne Werbung, Overlay, Telemetrie, Konto oder Hintergrund-Updater.
 
 **Status: native Diagnose, qualifizierte GPU-/VRAM-Taktsteuerung und vollständige V/F-Kurven, direkte Vier-Zonen-Beleuchtung mit Ein/Aus, manuelles Max-Fan und gespeicherte Custom Presets; noch kein vollständiger Gaming-Hub-Ersatz.** Leistungsprofile trennt GPU-, CPU- und Windows-Optionen. APU-/iGPU-Tuning ist aus dem CPU-Bereich entfernt. Die GPU-Gruppe bietet Takt-Offsets, GPU-Leistungskurve, Max-Fan und Dynamic Boost. Unqualifizierte Spannungs-/Power-/Temperatur-/Locked-Clock-/cTGP-Regler und der FPS-Limiter sind entfernt. Dynamic Boost ist auf ausdrücklichen Nutzerwunsch wieder als speicherbare GPU-Option enthalten; die HP-Hardwareanwendung bleibt bis zum qualifizierten Power-/Heartbeat-/Restore-Pfad gesperrt. Alte Dynamic-Boost-Vorgaben werden beim Save erhalten. CPU-/Windows-Tuning, MUX und eigene Lüfterkurven bleiben noch nicht hardwareseitig freigegeben. Die drei HP-Defaults sind nicht verfügbar; eigene vollständig unterstützte Presets lassen sich anwenden.
@@ -39,7 +41,20 @@ cargo fmt --all -- --check
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
 ```
 
-Der Release-Build liegt danach in `dist/Omen Hub++.exe`. Er verwendet Windows und die vorhandenen NVIDIA-Treiberbibliotheken; keine separate Rust-Laufzeit und kein OMEN-Dienst werden für die implementierten Diagnosefunktionen benötigt. Fehlende Treiberabfragen ergeben „Nicht verfügbar“, keine erfundenen Messwerte. Das erste Inventar wird über Windows-WMI abgefragt.
+Der Release-Build liegt danach in `dist/Omen Hub++.exe`. Die EXE enthält das eigene App-Symbol und Versionsinformationen als Windows-Ressource; Explorer, Desktopverknüpfung, Taskleiste, Fenster und Tray verwenden dasselbe Symbol. Er verwendet Windows und die vorhandenen NVIDIA-Treiberbibliotheken; keine separate Rust-Laufzeit und kein OMEN-Dienst werden für die implementierten Diagnosefunktionen benötigt. Fehlende Treiberabfragen ergeben „Nicht verfügbar“, keine erfundenen Messwerte. Das erste Inventar wird über Windows-WMI abgefragt.
+
+### Installation
+
+`scripts/build-release.ps1` erzeugt zusätzlich ein vollständiges Paket in `dist/` und als `target/OmenHubPlusPlus-<Version>-x64.zip`: EXE, `Install.cmd`/`install-app.ps1`, Lizenz, [Hardwarematrix](docs/HARDWARE_MATRIX.md), [Wiederherstellungsanleitung](docs/RECOVERY.md) sowie unter `third-party/` die Lizenztexte aller eingebundenen Rust-Abhängigkeiten. Ein Doppelklick auf `Install.cmd` fragt einmal nach Windows-UAC, kopiert die EXE in den geschützten Ordner `%ProgramFiles%\OmenHubPlusPlus` (derselbe Ort wie beim Anmeldestart) und legt **Omen Hub++** im Startmenü und auf dem Desktop des aktuellen Benutzers an:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-app.ps1                    # installieren
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-app.ps1 -NoDesktopShortcut # nur Startmenü
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-app.ps1 -Mode Inspect
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-app.ps1 -Mode Remove
+```
+
+Die Installation wählt kein Profil, richtet keinen Anmeldestart ein und schreibt keine Hardware. Eine ersetzte EXE macht eine frühere Startup-Freigabe ausdrücklich ungültig. Entfernen löscht nur Programmdatei und eigene Verknüpfungen, nie Profile oder Journale; Details in [RECOVERY.md](docs/RECOVERY.md). Das Symbol entsteht reproduzierbar mit `python scripts/generate-icon.py` (Pillow, nur zur Entwicklungszeit).
 
 Die optionale CPU-Modulvorbereitung erfolgt **vor** dem Cargo-/Release-Build. Dieses Skript lädt ausschließlich das feste öffentliche Modulrelease samt entsprechenden Quellen und Lizenz nach ignorierter `.tools/pawnio/`; es greift nicht auf Hardware oder Treiberdienste zu:
 
@@ -141,7 +156,7 @@ Das Budget beträgt **50 MB Working Set im Tray-Leerlauf**, einschließlich eine
 * `docs`: Architektur, Fahrplan, Modellbefunde und Reverse-Engineering-Protokoll.
 * `scripts`: Reproduzierbare Release- und lokale Analysewerkzeuge.
 
-[Projektziel und Fahrplan](docs/ROADMAP.md) · [Architektur](docs/ARCHITECTURE.md) · [GPU und Profile](docs/GPU_PROFILES.md) · [Lüfter und Max-Fan](docs/FAN_CONTROL.md) · [HP-Analyse](docs/REVERSE_ENGINEERING.md) · [Referenzgerät 8E35](docs/models/8e35.md)
+[Projektziel und Fahrplan](docs/ROADMAP.md) · [Hardwarematrix](docs/HARDWARE_MATRIX.md) · [Wiederherstellung](docs/RECOVERY.md) · [Architektur](docs/ARCHITECTURE.md) · [GPU und Profile](docs/GPU_PROFILES.md) · [Lüfter und Max-Fan](docs/FAN_CONTROL.md) · [HP-Analyse](docs/REVERSE_ENGINEERING.md) · [Referenzgerät 8E35](docs/models/8e35.md)
 
 Die lokale Analyse von HP-Dateien liegt ausschließlich in `.local/`; Werkzeuge in `.tools/`. Beide Ordner sind von Git ausgeschlossen. Proprietäre DLLs, Treiber und dekompilierter HP-Quelltext werden nicht verteilt. Technische Projektnamen verwenden `omen-hub-plus-plus`/`omen-hub-pp`; der Produktname ist **Omen Hub++**. Die bestehende GitHub-URL bleibt `Ishtvr/Omen-Hub-debloat`.
 

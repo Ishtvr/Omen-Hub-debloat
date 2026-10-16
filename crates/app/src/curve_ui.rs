@@ -1457,15 +1457,18 @@ fn run_editor(
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
         let class = wide("OmenHubPPCurveEditor");
-        let mut registration: WNDCLASSW = std::mem::zeroed();
+        let mut registration: WNDCLASSEXW = std::mem::zeroed();
+        registration.cbSize = size_of::<WNDCLASSEXW>() as u32;
         registration.lpfnWndProc = Some(procedure);
         registration.hInstance = instance;
         registration.lpszClassName = class.as_ptr();
         registration.hCursor = LoadCursorW(ptr::null_mut(), IDC_ARROW);
+        registration.hIcon = crate::native_ui::app_icon(SM_CXICON);
+        registration.hIconSm = crate::native_ui::app_icon(SM_CXSMICON);
         // Every instance paints its own client. No class brush may outlive the
         // first modal editor, which can be reopened in the same preset process.
         registration.hbrBackground = ptr::null_mut();
-        if RegisterClassW(&registration) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+        if RegisterClassExW(&registration) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let hwnd = CreateWindowExW(

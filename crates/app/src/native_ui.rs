@@ -8,6 +8,31 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
+/// Resource ID of the icon group embedded by build.rs.
+const APP_ICON: u16 = 1;
+
+/// Embedded application icon at a system metric size. Shared icons belong to
+/// Windows; builds without the resource fall back to the system icon.
+pub fn app_icon(metric: SYSTEM_METRICS_INDEX) -> HICON {
+    // SAFETY: Loads a read-only shared image from this module's resources.
+    unsafe {
+        let size = GetSystemMetrics(metric);
+        let icon = LoadImageW(
+            GetModuleHandleW(ptr::null()),
+            APP_ICON as usize as *const u16,
+            IMAGE_ICON,
+            size,
+            size,
+            LR_SHARED,
+        );
+        if icon.is_null() {
+            LoadIconW(ptr::null_mut(), IDI_APPLICATION)
+        } else {
+            icon
+        }
+    }
+}
+
 pub fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -113,19 +138,22 @@ pub unsafe fn draw_text(
 }
 pub unsafe fn register(class: &str, procedure: WNDPROC) -> Result<(), String> {
     unsafe {
-        let wc = WNDCLASSW {
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: procedure,
             hInstance: GetModuleHandleW(ptr::null()),
             hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
+            hIcon: app_icon(SM_CXICON),
+            hIconSm: app_icon(SM_CXSMICON),
             ..std::mem::zeroed()
         };
-        // Keep the temporary class string alive through RegisterClassW.
+        // Keep the temporary class string alive through RegisterClassExW.
         let class_name = wide(class);
-        let wc = WNDCLASSW {
+        let wc = WNDCLASSEXW {
             lpszClassName: class_name.as_ptr(),
             ..wc
         };
-        if RegisterClassW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+        if RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
             return Err(std::io::Error::last_os_error().to_string());
         }
         Ok(())
