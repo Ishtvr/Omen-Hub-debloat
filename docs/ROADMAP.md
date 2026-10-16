@@ -54,7 +54,8 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [ ] Physische Undervolting-Wirkung und längere Stabilität unter Last messen; direkte GPU-/VRAM-Spannung nur mit eigenem belegtem Steuervertrag.
 - [ ] Zusätzliche Modelle, OEM-Power-/Voltage-/CPU-/Windows-Adapter jeweils mit eigener Gerätevalidierung.
 - [ ] Modellbezogener Heartbeat; keine universell angenommene 30-Sekunden-Schleife.
-- [ ] `libryzenadj` via dynamischer FFI: STAPM, Fast/Slow PPT, Temperatur; Familien-Support vorher prüfen.
+- [x] STAPM, Slow und Fast (PPT) mit Rücklesen und Restore: STAPM/Slow über HP `0x29`, Fast über RSMU `0x56` (gemessen 16. Oktober 2026, siehe models/8e35.md); `libryzenadj` ist dafür nicht nötig.
+- [x] Alle UI-Texte in Sprachdateien (de/en) mit Info-Erklärung je Einstellung, siehe LOCALIZATION.md.
 - [ ] Intel PL1/PL2 über einen geeigneten, signierten MSR-Backend; Privilegien/Driver-Support explizit.
 - [ ] Undervolting nur bei belegter CPU-/Firmware-Unterstützung, mit eigenen Grenzen und Readback.
 - [ ] NVAPI-Schreibfunktionen nur soweit öffentlich dokumentiert oder gesondert modellbezogen belegt.
@@ -71,11 +72,13 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Feste lokale CPU-IPC mit Benutzer-/SYSTEM-DACL, beiden Prozess-IDs, Sitzungs-Token, Schema/Sequenz und `Sample`/`Pause`/`Stop`; vorübergehender UAC-Launch und isoliertes begrenztes Inventar.
 - [x] Deutsche Support-/Freigabe-/Verbindungs-/Messfehler und passende Wiederherstellung, getrennte letzte technische Ursache ohne Hardwarejournaländerung.
 - [ ] Gemessene CPU-Boost-/Effektivtakte und CCD-/Kerntemperaturen anbinden; Windows-MHz und Tctl nicht dafür umdeuten.
+- [x] CCD-Affinität als Preset-Einstellung: der Hintergrunddienst pinnt das Vordergrundprogramm auf die gewählten CCDs und gibt die alte Maske zurück (noch ohne Hardwaretest).
+- [ ] Fester CPU-Takt/feste Spannung erst nach `cpu-smu-probe` (`oc_allowed`) und gemessenem OC-Modus-Restore; AMD-Boost-Profil und Spannungs-Offset gibt es für Dragon Range nicht.
 - [x] Vom Benutzer bestätigte moderne, saubere dunkle Oberfläche nativ umsetzen: GPU und CPU gemeinsam im ersten Blickfeld, prominente Editoraktionen danach; gemeinsame Felder und Buttons in GPU-, Beleuchtungs- und Kurveneditor.
 - [x] Dunkle Design-Tokens und native Control-/Darstellungsgrenzen in DESIGN.md, Sidecar und Surface-Briefs festhalten; Diagrammpalette und feste GPU-Anker behalten ihre eigene Regel.
 - [x] Dashboard-Kindcontrols im Tray freigeben und bei Rückkehr mit der bisherigen HP-Vorschauauswahl neu aufbauen; CPU-Freigabe und neue Energie-Baseline unabhängig im Worker behalten.
 - [x] Sichtbare NVIDIA-Lesesitzung auf einem wegwerfbaren Thread mit ursprünglicher FFI-/Library-Ownership, begrenztem Sample-Warten und gesundem Stop/Cleanup führen; Hersteller-Hang bleibt als gesonderter Störfall offen. CPU-Treiber-Hashprüfung bei identischer Begrenzung/Identität in 8-KiB-Blöcken streamen.
-- [x] Custom Presets mit Auswahl/Neu/Name, eigenständigen GPU-/CPU-/Windows-Bereichen und Anwenden/Speichern/Löschen; HP-Defaults bleiben nicht verfügbar. Leistungsmodus listet die drei Defaults und eigene Profile. Die GPU-Gruppe enthält Takt-/V/F-/Max-Fan-Funktionen und die auf ausdrücklichen Nutzerwunsch wiederhergestellte Dynamic-Boost-Vorgabe. Andere unqualifizierte Spannungs-, FPS- und Leistungsregler bleiben entfernt. Dynamic Boost braucht weiterhin einen qualifizierten HP-Adapter.
+- [x] Custom Presets mit Auswahl/Neu/Name, eigenständigen GPU-/CPU-/Windows-Bereichen und Anwenden/Speichern/Löschen; Leistungsmodus listet vier Defaults und eigene Profile; alle vier HP-Modi sind anwendbar (Quiet und Performance seit 16. Oktober, noch ohne Hardwaretest). Die GPU-Gruppe enthält Takt-/V/F-/Max-Fan-Funktionen und die auf ausdrücklichen Nutzerwunsch wiederhergestellte Dynamic-Boost-Vorgabe. Andere unqualifizierte Spannungs-, FPS- und Leistungsregler bleiben entfernt. Dynamic Boost und die Windows-Optionen sind seit 16. Oktober anwendbar; CPU-Limits, PBO, Curve Optimizer und Lüfterkurven noch nicht.
 - [x] Native V/F-Kurvenbearbeitung mit vorhandenem Spannungsanker, Plateau-Frequenzziel und Erhalt eigener vollständiger Kurven bei Name-/VRAM-Änderungen.
 - [x] Gemeinsames natives Kurven-Widget mit GPU-V/F, CPU-/GPU-Lüfterentwürfen, Maus-/Tastatur-/Zahlenbedienung und eigener Profilspeicherung; Hardwareadapter für eigene Lüfterkurven bleibt offen.
 - [x] Optionales Max-Fan-Setting mit Checkbox und Ein/Aus im Custom Preset; Metadaten-Save, Apply-Sperre bei ungespeicherten Änderungen, Erhalt vollständiger GPU-Kurven, ausdrückliches UAC-Apply/Restore und Startup-Sperre bleiben erhalten.

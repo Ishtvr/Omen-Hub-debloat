@@ -1,6 +1,7 @@
 //! Pure curve editing. No OS access, sensor claims or hardware writes.
 use crate::{
     features::Feature,
+    message::msg,
     profiles::{FanPoint, Setting, Value, VfPoint},
     vf::VfState,
 };
@@ -21,6 +22,8 @@ struct Snapshot {
     selection: Option<(usize, usize)>,
 }
 const HISTORY_LIMIT: usize = 64;
+/// Fan curves accept up to one point per 2 °C over 0…110 °C.
+pub const MAX_FAN_POINTS: usize = 56;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -34,13 +37,6 @@ impl Kind {
             Self::Gpu => Feature::GpuVfCurve,
             Self::CpuFan => Feature::CpuFanCurve,
             Self::GpuFan => Feature::GpuFanCurve,
-        }
-    }
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Gpu => "GPU V/F",
-            Self::CpuFan => "CPU-Lüfter",
-            Self::GpuFan => "GPU-Lüfter",
         }
     }
     pub fn units(self) -> (&'static str, &'static str) {
@@ -72,15 +68,17 @@ impl Curve {
     pub fn gpu(state: VfState, value: Option<&Value>) -> Result<Self, String> {
         let value = value.cloned().map_or_else(|| state.value(), Ok)?;
         let Value::VfCurve(points) = value else {
-            return Err("Keine vollständige GPU-Kurve vorhanden.".into());
+            return Err(msg("curve.err.incomplete_gpu", &[]));
         };
         state.target_deltas(&points)?;
         let points = points
             .iter()
             .map(|p| {
                 Ok(Point {
-                    x: i32::try_from(p.voltage_mv).map_err(|_| "Spannungsanker zu groß")?,
-                    y: i32::try_from(p.frequency_mhz).map_err(|_| "Frequenz zu groß")?,
+                    x: i32::try_from(p.voltage_mv)
+                        .map_err(|_| msg("curve.err.anchor_too_large", &[]))?,
+                    y: i32::try_from(p.frequency_mhz)
+                        .map_err(|_| msg("curve.err.frequency_too_large", &[]))?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -102,7 +100,7 @@ impl Curve {
     }
     pub fn fan(kind: Kind, value: Option<&Value>) -> Result<Self, String> {
         if kind == Kind::Gpu {
-            return Err("Lüfterkurventyp erwartet.".into());
+            return Err(msg("curve.err.fan_expected", &[]));
         }
         let points = match value {
             Some(Value::FanCurve(points)) => points
@@ -118,7 +116,7 @@ impl Curve {
                 Point { x: 75, y: 70 },
                 Point { x: 90, y: 100 },
             ],
-            _ => return Err("Lüfterkurve hat einen falschen Datentyp.".into()),
+            _ => return Err(msg("curve.err.fan_type", &[])),
         };
         let curve = Self {
             kind,
@@ -142,23 +140,26 @@ impl Curve {
                     .map(|p| {
                         Ok(VfPoint {
                             voltage_mv: u32::try_from(p.x)
-                                .map_err(|_| "Ungültiger Spannungsanker")?,
-                            frequency_mhz: u32::try_from(p.y).map_err(|_| "Ungültige Frequenz")?,
+                                .map_err(|_| msg("curve.err.invalid_anchor", &[]))?,
+                            frequency_mhz: u32::try_from(p.y)
+                                .map_err(|_| msg("curve.err.invalid_frequency", &[]))?,
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,
             )
         } else {
             if self.points.iter().any(|p| !(0..=110).contains(&p.x)) {
-                return Err("Temperaturen müssen zwischen 0 und 110 °C liegen.".into());
+                return Err(msg("curve.err.temperature_range", &[]));
             }
             Value::FanCurve(
                 self.points
                     .iter()
                     .map(|p| {
                         Ok(FanPoint {
-                            temperature_c: u8::try_from(p.x).map_err(|_| "Ungültige Temperatur")?,
-                            duty_percent: u8::try_from(p.y).map_err(|_| "Ungültiger Lüfterwert")?,
+                            temperature_c: u8::try_from(p.x)
+                                .map_err(|_| msg("curve.err.invalid_temperature", &[]))?,
+                            duty_percent: u8::try_from(p.y)
+                                .map_err(|_| msg("curve.err.invalid_fan", &[]))?,
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,
@@ -175,7 +176,10 @@ impl Curve {
         Ok(value)
     }
     pub fn limits(&self, index: usize) -> Result<(Point, Point), String> {
-        let p = *self.points.get(index).ok_or("Kein Punkt ausgewählt.")?;
+        let p = *self
+            .points
+            .get(index)
+            .ok_or_else(|| msg("curve.err.no_point", &[]))?;
         let mut lo = Point { x: 0, y: 0 };
         let mut hi = Point { x: 110, y: 100 };
         if let Some(gpu) = &self.gpu {
@@ -188,11 +192,11 @@ impl Curve {
             let max = (base + i64::from(gpu.maximum_delta_khz)).div_euclid(1000);
             lo = Point {
                 x: p.x,
-                y: i32::try_from(min).map_err(|_| "Ungültige GPU-Untergrenze")?,
+                y: i32::try_from(min).map_err(|_| msg("curve.err.gpu_lower", &[]))?,
             };
             hi = Point {
                 x: p.x,
-                y: i32::try_from(max).map_err(|_| "Ungültige GPU-Obergrenze")?,
+                y: i32::try_from(max).map_err(|_| msg("curve.err.gpu_upper", &[]))?,
             };
         }
         if let Some(previous) = index.checked_sub(1).and_then(|i| self.points.get(i)) {
@@ -208,14 +212,14 @@ impl Curve {
             }
         }
         if lo.x > hi.x || lo.y > hi.y {
-            return Err("Die Nachbarpunkte lassen keine gültige Änderung zu.".into());
+            return Err(msg("curve.err.neighbours", &[]));
         }
         Ok((lo, hi))
     }
     pub fn set(&mut self, index: usize, p: Point, clamp: bool) -> Result<bool, String> {
         let (lo, hi) = self.limits(index)?;
         if self.kind == Kind::Gpu && p.x != lo.x {
-            return Err("GPU-Spannungsanker bleiben unverändert.".into());
+            return Err(msg("curve.err.anchors_fixed", &[]));
         }
         let p = if clamp {
             Point {
@@ -224,11 +228,9 @@ impl Curve {
             }
         } else {
             if p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y {
-                return Err(format!(
-                    "Punkt außerhalb der Grenzen: {} bis {} {}.",
-                    lo.y,
-                    hi.y,
-                    self.kind.units().1
+                return Err(msg(
+                    "curve.err.out_of_bounds",
+                    &[&lo.y, &hi.y, &self.kind.units().1],
                 ));
             }
             p
@@ -239,10 +241,10 @@ impl Curve {
     }
     pub fn plateau(&mut self, frequency: i32) -> Result<bool, String> {
         if self.kind != Kind::Gpu {
-            return Err("Ein Plateau ist nur für die GPU-Kurve verfügbar.".into());
+            return Err(msg("curve.err.plateau_gpu", &[]));
         }
         if self.selected >= self.points.len() {
-            return Err("Kein Punkt ausgewählt.".into());
+            return Err(msg("curve.err.no_point", &[]));
         }
         let mut points = self.points.clone();
         for p in &mut points[self.selected..] {
@@ -252,18 +254,18 @@ impl Curve {
     }
     pub fn insert(&mut self) -> Result<(), String> {
         if self.kind == Kind::Gpu {
-            return Err("GPU-Spannungsanker sind durch den Treiber festgelegt.".into());
+            return Err(msg("curve.err.anchors_driver", &[]));
         }
-        if self.points.len() >= 32 {
-            return Err("Höchstens 32 Lüfterpunkte sind möglich.".into());
+        if self.points.len() >= MAX_FAN_POINTS {
+            return Err(msg("curve.err.max_points", &[&MAX_FAN_POINTS]));
         }
         let a = *self
             .points
             .get(self.selected)
-            .ok_or("Kein Punkt ausgewählt.")?;
+            .ok_or_else(|| msg("curve.err.no_point", &[]))?;
         let point = if let Some(b) = self.points.get(self.selected + 1) {
             if b.x - a.x < 2 {
-                return Err("Zwischen diesen Temperaturen ist kein weiterer Punkt möglich.".into());
+                return Err(msg("curve.err.no_room", &[]));
             }
             Point {
                 x: (a.x + b.x) / 2,
@@ -271,7 +273,7 @@ impl Curve {
             }
         } else {
             if a.x >= 110 {
-                return Err("Am rechten Rand ist kein weiterer Punkt möglich.".into());
+                return Err(msg("curve.err.right_edge", &[]));
             }
             Point {
                 x: (a.x + 10).min(110),
@@ -285,15 +287,47 @@ impl Curve {
         self.select(selected, false);
         Ok(())
     }
+    /// Adds a fan point at a chart position. The duty is clamped between its
+    /// neighbours so the curve stays non-decreasing.
+    pub fn insert_at(&mut self, at: Point) -> Result<(), String> {
+        if self.kind == Kind::Gpu {
+            return Err(msg("curve.err.anchors_driver", &[]));
+        }
+        if self.points.len() >= MAX_FAN_POINTS {
+            return Err(msg("curve.err.max_points", &[&MAX_FAN_POINTS]));
+        }
+        let x = at.x.clamp(0, 110);
+        if self.points.iter().any(|p| p.x == x) {
+            return Err(msg("curve.err.duplicate", &[]));
+        }
+        let index = self
+            .points
+            .iter()
+            .position(|p| p.x > x)
+            .unwrap_or(self.points.len());
+        let low = index.checked_sub(1).map_or(0, |i| self.points[i].y);
+        let high = self.points.get(index).map_or(100, |p| p.y);
+        let mut points = self.points.clone();
+        points.insert(
+            index,
+            Point {
+                x,
+                y: at.y.clamp(low, high),
+            },
+        );
+        self.replace(points)?;
+        self.select(index, false);
+        Ok(())
+    }
     pub fn remove(&mut self) -> Result<(), String> {
         if self.kind == Kind::Gpu {
-            return Err("GPU-Spannungsanker können nicht entfernt werden.".into());
+            return Err(msg("curve.err.anchor_remove", &[]));
         }
         if self.points.len() <= 2 {
-            return Err("Mindestens zwei Lüfterpunkte müssen erhalten bleiben.".into());
+            return Err(msg("curve.err.min_points", &[]));
         }
         if self.selected >= self.points.len() {
-            return Err("Kein Punkt ausgewählt.".into());
+            return Err(msg("curve.err.no_point", &[]));
         }
         let mut points = self.points.clone();
         points.remove(self.selected);
@@ -446,7 +480,7 @@ impl Curve {
             || start.len() != self.points.len()
             || start.iter().zip(&self.points).any(|(a, b)| a.x != b.x)
         {
-            return Err("Vollständiger unveränderter GPU-Spannungsraster erforderlich.".into());
+            return Err(msg("curve.err.grid", &[]));
         }
         let selected = self.selected;
         if mode == DragMode::Point && self.selection.is_none() {
@@ -473,7 +507,7 @@ impl Curve {
             for p in &mut points {
                 let change = i64::from(delta) * i64::from(p.x - start[pivot].x) / divisor;
                 p.y = i32::try_from(i64::from(p.y) + change)
-                    .map_err(|_| "Frequenz außerhalb des Wertebereichs.")?;
+                    .map_err(|_| msg("curve.err.frequency_range", &[]))?;
             }
             return self.replace(points);
         }
@@ -513,13 +547,13 @@ impl Curve {
         let mut points = start.to_vec();
         for i in first..=last {
             points[i].y = i32::try_from(i64::from(basis[i].y) + offset)
-                .map_err(|_| "Frequenz außerhalb des Wertebereichs.")?;
+                .map_err(|_| msg("curve.err.frequency_range", &[]))?;
         }
         self.replace(points)
     }
     pub fn flatten_selection(&mut self) -> Result<bool, String> {
         if self.kind != Kind::Gpu {
-            return Err("Nur GPU-Frequenzbereiche können abgeflacht werden.".into());
+            return Err(msg("curve.err.flatten_gpu", &[]));
         }
         let Some((first, last)) = self.selection else {
             return self.plateau(self.points[self.selected].y);
@@ -745,5 +779,24 @@ mod tests {
             curve.remove().unwrap();
         }
         assert!(curve.remove().is_err());
+    }
+    #[test]
+    fn fan_points_insert_at_chart_position_and_stay_monotonic() {
+        let mut curve = Curve::fan(Kind::CpuFan, None).unwrap();
+        curve.insert_at(Point { x: 40, y: 99 }).unwrap();
+        // Between 30 °C/30 % and 55 °C/45 %: duty clamps to the right neighbour.
+        assert_eq!(curve.points[1], Point { x: 40, y: 45 });
+        assert_eq!(curve.selected, 1);
+        assert!(curve.insert_at(Point { x: 40, y: 40 }).is_err());
+        curve.insert_at(Point { x: 100, y: 0 }).unwrap();
+        assert_eq!(*curve.points.last().unwrap(), Point { x: 100, y: 100 });
+        while curve.points.len() < MAX_FAN_POINTS {
+            let x = (0..=110)
+                .find(|x| curve.points.iter().all(|p| p.x != *x))
+                .unwrap();
+            curve.insert_at(Point { x, y: 50 }).unwrap();
+        }
+        assert!(curve.insert_at(Point { x: 1, y: 50 }).is_err());
+        assert!(curve.value().is_ok());
     }
 }

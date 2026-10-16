@@ -254,6 +254,32 @@ impl Drop for Apartment {
     }
 }
 
+/// Whether the logon fan service is installed from this exact build (receipt
+/// written by scripts/install-fan-service.ps1 in the protected directory).
+pub fn fan_service_installed() -> bool {
+    (|| -> Result<bool, String> {
+        let root =
+            PathBuf::from(std::env::var_os("ProgramFiles").ok_or("Program Files unavailable")?)
+                .join("OmenHubPlusPlus");
+        let sid = current_user_sid()?;
+        let mut bytes = vec![];
+        File::open(root.join(format!("fan-service-{sid}.json")))
+            .map_err(|e| e.to_string())?
+            .take(65537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        let receipt: serde_json::Value =
+            serde_json::from_slice(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
+                .map_err(|e| e.to_string())?;
+        let current = file_hash(&std::env::current_exe().map_err(|e| e.to_string())?)?;
+        Ok(receipt["schema"] == 1
+            && receipt["sha256"]
+                .as_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&current)))
+    })()
+    .unwrap_or(false)
+}
+
 /// Requires the protected installed binary, the same current build and the exact
 /// per-user interactive logon action. This is a read; installation is explicit.
 pub fn verify_startup_installation() -> Result<StartupInstallation, String> {

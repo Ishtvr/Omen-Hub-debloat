@@ -256,7 +256,7 @@ impl Setting {
             }
             Value::FanCurve(points) => {
                 if points.len() < 2
-                    || points.len() > 32
+                    || points.len() > crate::curve_editor::MAX_FAN_POINTS
                     || points
                         .iter()
                         .any(|p| p.duty_percent > 100 || !(0..=110).contains(&p.temperature_c))

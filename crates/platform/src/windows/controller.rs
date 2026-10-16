@@ -57,6 +57,22 @@ pub enum RestoreState {
         state: omen_core::vf::VfState,
         core_offset: OffsetState,
     },
+    Windows {
+        image: super::windows_settings::WindowsImage,
+    },
+    /// HP cTGP/PPAB flags (0x21 GET, 0x22 SET); PPAB is Dynamic Boost.
+    HpGpuPower {
+        custom_tgp: bool,
+        ppab: bool,
+    },
+    /// Curve Optimizer margins or PBO scalar read through the SMU.
+    AmdSmu {
+        image: super::cpu_tuning::SmuImage,
+    },
+    /// BIOS graphics (MUX) mode byte; effective after a restart.
+    HpGraphicsMode {
+        mode: u8,
+    },
 }
 
 pub struct Controller {
@@ -76,6 +92,9 @@ pub struct Controller {
     fan_target: Option<omen_core::cooling::MaxFanState>,
     fan_calibration: bool,
     fan_observations: Vec<super::cooling::FanReport>,
+    /// Windows targets written in this transaction (accepted by later checks).
+    windows_targets: BTreeMap<Feature, Value>,
+    smu: Option<super::smu::Smu>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -83,6 +102,25 @@ fn uses_nvidia(feature: Feature) -> bool {
         feature.descriptor().category,
         omen_core::features::Category::Gpu
     )
+}
+fn mux_choice(mode: u8) -> Choice {
+    match mode {
+        0 => Choice::Hybrid,
+        1 => Choice::DiscreteOnly,
+        3 => Choice::IntegratedOnly,
+        _ => Choice::Manual,
+    }
+}
+fn mux_mode(choice: Choice) -> Result<u8, String> {
+    match choice {
+        Choice::Hybrid => Ok(0),
+        Choice::DiscreteOnly => Ok(1),
+        Choice::IntegratedOnly => Ok(3),
+        _ => Err("Unbekannter Grafikmodus".into()),
+    }
+}
+fn uses_hp_gpu_power(feature: Feature) -> bool {
+    matches!(feature, Feature::GpuUnleashed | Feature::GpuDynamicBoost)
 }
 fn uses_keyboard(feature: Feature) -> bool {
     matches!(feature, Feature::KeyboardColors | Feature::KeyboardEffect)
@@ -143,6 +181,8 @@ impl Controller {
             fan_target: None,
             fan_calibration: false,
             fan_observations: vec![],
+            windows_targets: BTreeMap::new(),
+            smu: None,
         })
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
@@ -167,6 +207,12 @@ impl Controller {
     }
     pub fn keyboard_state(&mut self) -> Result<KeyboardState, String> {
         self.keyboard()?.read()
+    }
+    fn smu(&mut self) -> Result<&super::smu::Smu, String> {
+        if self.smu.is_none() {
+            self.smu = Some(super::smu::Smu::new(&self.inventory)?);
+        }
+        self.smu.as_ref().ok_or("Missing SMU connection".into())
     }
     fn fan(&mut self) -> Result<&super::cooling::FanControl, String> {
         if self.fan.is_none() {
@@ -611,6 +657,77 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if feature == Feature::GraphicsMode {
+            return if self.inventory.manufacturer == "HP"
+                && self.inventory.board == "8E35"
+                && self.inventory.bios == "F.13"
+            {
+                Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "HP BIOS graphics mode; takes effect after a restart".into(),
+                    integer_range: None,
+                    requires_ac: false,
+                    startup_safe: true,
+                }
+            } else {
+                Capability::unsupported(feature, "Graphics mode is qualified only on HP8E35/F.13")
+            };
+        }
+        if super::cpu_tuning::handles(feature) {
+            return match super::cpu_tuning::qualified(&self.inventory) {
+                Ok(()) => Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "AMD SMU message with exact per-core/scalar readback".into(),
+                    integer_range: Some(super::cpu_tuning::range(feature)),
+                    requires_ac: false,
+                    startup_safe: true,
+                },
+                Err(reason) => Capability::unsupported(feature, reason),
+            };
+        }
+        if uses_hp_gpu_power(feature) {
+            // Board-qualified only; the live flags need elevation and are read at capture.
+            return if self.inventory.manufacturer == "HP"
+                && self.inventory.board == "8E35"
+                && self.inventory.bios == "F.13"
+            {
+                Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: "HP Dynamic Boost (PPAB) flag with readback; cTGP stays as found"
+                        .into(),
+                    integer_range: None,
+                    requires_ac: false,
+                    startup_safe: true,
+                }
+            } else {
+                Capability::unsupported(feature, "Dynamic Boost is qualified only on HP8E35/F.13")
+            };
+        }
+        if super::windows_settings::handles(feature) {
+            // Documented Windows GETs give exact readback and restore; the
+            // settings are harmless at logon, so startup may apply them.
+            return match super::windows_settings::range(feature)
+                .and_then(|range| super::windows_settings::read(feature).map(|_| range))
+            {
+                Ok(integer_range) => Capability {
+                    feature,
+                    access: Access::ReadWrite,
+                    reason: if feature == Feature::CpuCcdAffinity {
+                        "Saved for the Omen Hub++ background service, which pins the foreground program to the selected CCDs and restores it at all CCDs"
+                    } else {
+                        "Windows setting with exact readback and restore"
+                    }
+                    .into(),
+                    integer_range,
+                    requires_ac: false,
+                    startup_safe: true,
+                },
+                Err(reason) => Capability::unsupported(feature, reason),
+            };
+        }
         if feature == Feature::MaxFan {
             // Capabilities describe qualified board support. Permission, live
             // table/opaque state and durable originals are checked at capture,
@@ -624,11 +741,11 @@ impl Backend for Controller {
                     "Max-Fan is qualified only on HP8E35/F.13",
                 );
             }
-            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac:true,startup_safe:false};
+            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
         }
         if feature == Feature::KeyboardEffect {
             return match self.keyboard_state() {
-                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe:false},
+                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe: true},
                 Ok(_)=>Capability::unsupported(feature,"Mode restore is not qualified at this raw brightness level"),
                 Err(reason)=>Capability::unsupported(feature,reason),
             };
@@ -637,7 +754,7 @@ impl Backend for Controller {
             return match self.keyboard_state() {
                 Ok(_)=>Capability {feature,access:if KEYBOARD_COLOR_WRITE_VERIFIED||self.keyboard_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},
                     reason:"Direct board8E35/F.13 classic four-zone RGB; complete opaque/brightness state must remain unchanged. Animations and independent HP-controller replacement are not qualified".into(),
-                    integer_range:None,requires_ac:false,startup_safe:false},
+                    integer_range:None,requires_ac:false,startup_safe: true},
                 Err(reason)=>Capability::unsupported(feature,reason),
             };
         }
@@ -647,7 +764,7 @@ impl Backend for Controller {
                 state.value()?;
                 Ok(state)
             })();
-            return match state {Ok(_)=>Capability{feature,access:if CURVE_WRITE_VERIFIED||self.curve_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified".into(),integer_range:None,requires_ac:true,startup_safe:CURVE_WRITE_VERIFIED&&!self.curve_calibration},Err(reason)=>Capability::unsupported(feature,reason)};
+            return match state {Ok(_)=>Capability{feature,access:if CURVE_WRITE_VERIFIED||self.curve_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified".into(),integer_range:None,requires_ac: false,startup_safe:CURVE_WRITE_VERIFIED&&!self.curve_calibration},Err(reason)=>Capability::unsupported(feature,reason)};
         }
         if matches!(
             feature,
@@ -725,7 +842,7 @@ impl Backend for Controller {
                                 .into()
                         },
                         integer_range: Some(range),
-                        requires_ac: true,
+                        requires_ac: false,
                         startup_safe: CLOCK_WRITE_VERIFIED && !self.calibration,
                     }
                 }
@@ -754,6 +871,12 @@ impl Backend for Controller {
             Feature::GpuPowerLimitMw => {
                 "Current power-limit readback/restore and model write validation are missing; a maximum constraint is not the current limit"
             }
+            Feature::AmdCpuClockMhz | Feature::AmdCpuVoltageMv => {
+                "A fixed CPU clock or voltage needs the SMU OC mode. Firmware permission (cpu-smu-probe: oc_allowed) and a measured enable/restore on 8E35/F.13 are pending; the original Hub reaches it only through an HP service"
+            }
+            Feature::CpuBoostProfile | Feature::CpuAllCoreVoltageOffsetMv => {
+                "No such control exists for Dragon Range: neither the SMU nor the original Hub offers a boost profile or an all-core millivolt offset. Use EPP/processor boost and Curve Optimizer"
+            }
             _ => {
                 "Profile data is supported; no validated hardware/Windows adapter for this feature yet"
             }
@@ -762,6 +885,23 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if feature == Feature::GraphicsMode {
+            return Ok(Value::Choice(mux_choice(super::read_hp_graphics_mode(
+                &self.inventory,
+            )?)));
+        }
+        if super::cpu_tuning::handles(feature) {
+            let image = super::cpu_tuning::capture(self.smu()?, feature)?;
+            return super::cpu_tuning::value(feature, &image);
+        }
+        if uses_hp_gpu_power(feature) {
+            return Ok(Value::Boolean(
+                super::read_hp_gpu_status(&self.inventory)?.ppab_enabled,
+            ));
+        }
+        if super::windows_settings::handles(feature) {
+            return super::windows_settings::read(feature);
+        }
         if feature == Feature::MaxFan {
             return Ok(Value::Boolean(self.fan()?.capture()?.state.enabled));
         }
@@ -777,6 +917,49 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if feature == Feature::GraphicsMode {
+            let mode = super::read_hp_graphics_mode(&self.inventory)?;
+            let saved = Captured {
+                feature,
+                value: Value::Choice(mux_choice(mode)),
+                restore: RestoreState::HpGraphicsMode { mode },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
+        if super::cpu_tuning::handles(feature) {
+            let image = super::cpu_tuning::capture(self.smu()?, feature)?;
+            let saved = Captured {
+                feature,
+                value: super::cpu_tuning::value(feature, &image)?,
+                restore: RestoreState::AmdSmu { image },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
+        if uses_hp_gpu_power(feature) {
+            let status = super::read_hp_gpu_status(&self.inventory)?;
+            let saved = Captured {
+                feature,
+                value: Value::Boolean(status.ppab_enabled),
+                restore: RestoreState::HpGpuPower {
+                    custom_tgp: status.custom_tgp_enabled,
+                    ppab: status.ppab_enabled,
+                },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
+        if super::windows_settings::handles(feature) {
+            let image = super::windows_settings::capture(feature)?;
+            let saved = Captured {
+                feature,
+                value: super::windows_settings::value(feature, &image)?,
+                restore: RestoreState::Windows { image },
+            };
+            self.captured.insert(feature, saved.clone());
+            return Ok(saved);
+        }
         if feature == Feature::MaxFan {
             let state = self.fan()?.capture()?;
             let saved = Captured {
@@ -789,6 +972,9 @@ impl Backend for Controller {
         }
         if uses_keyboard(feature) {
             let state = self.keyboard_state()?;
+            // A setting equal to its original is never written; the captured
+            // complete state is then this transaction's verified target.
+            self.keyboard_target = Some(state.clone());
             let saved = Captured {
                 feature,
                 value: keyboard_value(feature, &state)?,
@@ -851,6 +1037,24 @@ impl Backend for Controller {
     fn restore(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Restore state was not captured by this controller session".into());
+        }
+        if let RestoreState::Windows { image } = &saved.restore {
+            return super::windows_settings::restore(saved.feature, image);
+        }
+        if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+            super::write_hp_gpu_power(&self.inventory, *custom_tgp, *ppab)?;
+            return Ok(());
+        }
+        if let RestoreState::AmdSmu { image } = &saved.restore {
+            let feature = saved.feature;
+            return super::cpu_tuning::restore(self.smu()?, feature, image);
+        }
+        if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+            super::write_hp_graphics_mode(&self.inventory, *mode)?;
+            if super::read_hp_graphics_mode(&self.inventory)? != *mode {
+                return Err("BIOS graphics mode did not return to its original".into());
+            }
+            return Ok(());
         }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
@@ -955,6 +1159,45 @@ impl Backend for Controller {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Control verification image is not owned by this session".into());
         }
+        if let RestoreState::Windows { image } = &saved.restore {
+            let live = super::windows_settings::capture(saved.feature)?;
+            let value = super::windows_settings::value(saved.feature, &live)?;
+            if live != *image && self.windows_targets.get(&saved.feature) != Some(&value) {
+                return Err("Windows setting differs from its original and target".into());
+            }
+            return Ok(());
+        }
+        if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+            let live = super::read_hp_graphics_mode(&self.inventory)?;
+            if live != *mode
+                && self.windows_targets.get(&saved.feature)
+                    != Some(&Value::Choice(mux_choice(live)))
+            {
+                return Err("BIOS graphics mode differs from its original and target".into());
+            }
+            return Ok(());
+        }
+        if let RestoreState::AmdSmu { image } = &saved.restore {
+            let feature = saved.feature;
+            let live = super::cpu_tuning::capture(self.smu()?, feature)?;
+            let owned = match self.windows_targets.get(&feature).cloned() {
+                Some(target) => super::cpu_tuning::matches(self.smu()?, feature, &target)?,
+                None => false,
+            };
+            if live != *image && !owned {
+                return Err("SMU setting differs from its original and target".into());
+            }
+            return Ok(());
+        }
+        if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+            let live = super::read_hp_gpu_status(&self.inventory)?;
+            let owned = self.windows_targets.get(&saved.feature)
+                == Some(&Value::Boolean(live.ppab_enabled));
+            if live.custom_tgp_enabled != *custom_tgp || (live.ppab_enabled != *ppab && !owned) {
+                return Err("HP GPU-power flags differ from original and target".into());
+            }
+            return Ok(());
+        }
         if let RestoreState::HpMaxFan { state } = &saved.restore {
             if saved.feature != Feature::MaxFan
                 || saved.value != Value::Boolean(state.state.enabled)
@@ -989,7 +1232,12 @@ impl Backend for Controller {
             RestoreState::NvidiaVfCurve {
                 state, core_offset, ..
             } => (core_offset, Some(state), None),
-            RestoreState::HpKeyboardColors { .. } | RestoreState::HpMaxFan { .. } => unreachable!(),
+            RestoreState::HpKeyboardColors { .. }
+            | RestoreState::HpMaxFan { .. }
+            | RestoreState::Windows { .. }
+            | RestoreState::HpGpuPower { .. }
+            | RestoreState::AmdSmu { .. }
+            | RestoreState::HpGraphicsMode { .. } => unreachable!(),
         };
         if self.gpu()?.offset(offset.feature)? != *offset {
             return Err("Captured global offset controls differ".into());
@@ -1039,6 +1287,40 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if setting.feature == Feature::GraphicsMode {
+            let actual = self.read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err("BIOS graphics mode readback differs".into())
+            };
+        }
+        if super::cpu_tuning::handles(setting.feature) {
+            return if super::cpu_tuning::matches(self.smu()?, setting.feature, &setting.value)? {
+                Ok(setting.value.clone())
+            } else {
+                Err(format!("SMU readback differs for {:?}", setting.feature))
+            };
+        }
+        if uses_hp_gpu_power(setting.feature) {
+            let actual = self.read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err("Dynamic Boost readback differs".into())
+            };
+        }
+        if super::windows_settings::handles(setting.feature) {
+            let actual = super::windows_settings::read(setting.feature)?;
+            return if actual == setting.value {
+                Ok(actual)
+            } else {
+                Err(format!(
+                    "Readback mismatch for {:?}: requested {:?}, obtained {:?}",
+                    setting.feature, setting.value, actual
+                ))
+            };
+        }
         if setting.feature == Feature::MaxFan {
             let Value::Boolean(enabled) = setting.value else {
                 return Err("Max-fan target is not boolean".into());
@@ -1152,12 +1434,71 @@ impl Backend for Controller {
         if transaction.requested.iter().any(|s| uses_nvidia(s.feature)) {
             self.qualifies()?;
         }
-        if !transaction.binding.matches(&self.context()?.binding) {
+        // Same rule as plan/apply/recover: an incidental NVIDIA identity in a
+        // non-GPU transaction is not checked (and the GPU is not opened).
+        if !transaction
+            .binding
+            .for_settings(&transaction.requested)
+            .matches(&self.context()?.binding)
+        {
             return Err("Recovery device binding differs".into());
         }
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
+                let live = super::read_hp_graphics_mode(&self.inventory)?;
+                if requested.feature != saved.feature
+                    || (live != *mode && Value::Choice(mux_choice(live)) != requested.value)
+                {
+                    return Err(
+                        "BIOS graphics mode differs from recorded original and target".into(),
+                    );
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
+            if let RestoreState::AmdSmu { image } = &saved.restore {
+                let feature = saved.feature;
+                let live = super::cpu_tuning::capture(self.smu()?, feature)?;
+                if requested.feature != feature
+                    || (live != *image
+                        && !super::cpu_tuning::matches(self.smu()?, feature, &requested.value)?)
+                {
+                    return Err("SMU setting differs from recorded original and target".into());
+                }
+                self.windows_targets
+                    .insert(feature, requested.value.clone());
+                continue;
+            }
+            if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
+                let live = super::read_hp_gpu_status(&self.inventory)?;
+                if requested.feature != saved.feature
+                    || live.custom_tgp_enabled != *custom_tgp
+                    || (Value::Boolean(live.ppab_enabled) != requested.value
+                        && live.ppab_enabled != *ppab)
+                {
+                    return Err(
+                        "HP GPU-power flags differ from recorded original and target".into(),
+                    );
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
+            if let RestoreState::Windows { image } = &saved.restore {
+                let live = super::windows_settings::capture(saved.feature)?;
+                let value = super::windows_settings::value(saved.feature, &live)?;
+                if requested.feature != saved.feature
+                    || (live != *image && value != requested.value)
+                {
+                    return Err("Windows setting differs from recorded original and target".into());
+                }
+                self.windows_targets
+                    .insert(saved.feature, requested.value.clone());
+                continue;
+            }
             if let RestoreState::HpMaxFan { state } = &saved.restore {
                 if saved.feature != Feature::MaxFan
                     || requested.feature != Feature::MaxFan
@@ -1415,6 +1756,51 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if setting.feature == Feature::GraphicsMode {
+            let Value::Choice(choice) = setting.value else {
+                return Err("Graphics mode needs a choice".into());
+            };
+            if !self.captured.contains_key(&setting.feature) {
+                return Err("No captured graphics mode".into());
+            }
+            super::write_hp_graphics_mode(&self.inventory, mux_mode(choice)?)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
+        if super::cpu_tuning::handles(setting.feature) {
+            if !self.captured.contains_key(&setting.feature) {
+                return Err("No captured SMU original".into());
+            }
+            super::cpu_tuning::write(self.smu()?, setting.feature, &setting.value)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
+        if uses_hp_gpu_power(setting.feature) {
+            let Value::Boolean(on) = setting.value else {
+                return Err("Dynamic Boost needs on/off".into());
+            };
+            let live = super::read_hp_gpu_status(&self.inventory)?;
+            super::write_hp_gpu_power(&self.inventory, live.custom_tgp_enabled, on)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
+        if super::windows_settings::handles(setting.feature) {
+            let saved = self
+                .captured
+                .get(&setting.feature)
+                .ok_or("No captured Windows original")?
+                .clone();
+            let RestoreState::Windows { image } = &saved.restore else {
+                return Err("Windows capture has another adapter".into());
+            };
+            super::windows_settings::write(setting.feature, image, &setting.value)?;
+            self.windows_targets
+                .insert(setting.feature, setting.value.clone());
+            return Ok(());
+        }
         if setting.feature == Feature::MaxFan {
             let Value::Boolean(enabled) = setting.value else {
                 return Err("Max-fan target requires a boolean".into());
@@ -1551,6 +1937,18 @@ impl Backend for Controller {
     }
     fn validate_setting(&mut self, setting: &Setting) -> Result<(), String> {
         setting.validate()?;
+        if super::windows_settings::handles(setting.feature) {
+            return super::windows_settings::validate(setting.feature, &setting.value);
+        }
+        if super::cpu_tuning::handles(setting.feature) {
+            return super::cpu_tuning::validate(setting.feature, &setting.value);
+        }
+        if setting.feature == Feature::GraphicsMode {
+            let Value::Choice(choice) = setting.value else {
+                return Err("Graphics mode needs a choice".into());
+            };
+            return mux_mode(choice).map(|_| ());
+        }
         if setting.feature == Feature::KeyboardEffect {
             let Value::Choice(mode) = setting.value else {
                 return Err("Typed keyboard mode missing".into());

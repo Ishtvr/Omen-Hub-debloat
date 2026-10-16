@@ -1,29 +1,41 @@
+mod ccd;
 mod control_lease;
 mod controller;
 mod cooling;
 mod cpu;
 mod cpu_hardware;
+mod cpu_tuning;
+mod fan_service;
 mod gpu;
 mod hp;
 mod lighting;
 mod nvidia;
+mod smu;
 mod startup;
 mod thermal;
 mod user_data;
 mod vf;
+mod windows_settings;
 pub use control_lease::ControlLease;
 pub use controller::{Controller, RestoreState};
 pub use cooling::{FanReport, MaxFanImage, read_hp_fans};
 pub use cpu::Cpu;
 pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
+pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
-pub use hp::{read_hp_gpu_status, read_hp_keyboard_state, read_hp_system_design};
+pub use hp::{
+    HpModeReport, apply_hp_mode, read_hp_gpu_status, read_hp_graphics_mode, read_hp_keyboard_state,
+    read_hp_system_design, write_hp_gpu_power, write_hp_graphics_mode,
+};
 pub use lighting::DirectLighting;
 pub use nvidia::Nvidia;
 use omen_core::{Inventory, PowerStatus};
+pub use smu::{
+    LimitCalibration, SmuProbe, calibrate_limits as smu_calibrate_limits, probe as smu_probe,
+};
 pub use startup::{
-    StartupInstallation, authorize_startup_profile, current_user_sid, verify_startup_installation,
-    verify_startup_profile,
+    StartupInstallation, authorize_startup_profile, current_user_sid, fan_service_installed,
+    verify_startup_installation, verify_startup_profile,
 };
 use std::collections::HashMap;
 pub use thermal::{CoolingSnapshot, read_cooling_snapshot};

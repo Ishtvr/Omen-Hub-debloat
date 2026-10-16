@@ -1,4 +1,5 @@
 //! Reusable native GDI curve canvas. Every edit changes a draft only.
+use crate::i18n::{t, tf};
 use omen_core::{
     curve_editor::{Curve, DragMode, Kind, Point as DataPoint},
     curve_input::{self, Key, Modifiers},
@@ -52,6 +53,8 @@ struct State {
     hover: Cell<Option<usize>>,
     error: RefCell<String>,
     ownership: Rc<Cell<u8>>,
+    /// Partial wheel delta: high-resolution devices send fractions of 120.
+    wheel: Cell<i32>,
 }
 impl Drop for State {
     fn drop(&mut self) {
@@ -78,7 +81,7 @@ pub fn error(hwnd: HWND) -> String {
 }
 pub fn set(hwnd: HWND, model: Option<Curve>) {
     if let Some(s) = unsafe { state(hwnd) } {
-        s.viewport.set(model.as_ref().map(Viewport::fit));
+        s.viewport.set(model.as_ref().map(Viewport::initial));
         *s.drag.borrow_mut() = None;
         s.hover.set(None);
         *s.model.borrow_mut() = model;
@@ -89,10 +92,10 @@ pub fn mutate(
     hwnd: HWND,
     action: impl FnOnce(&mut Curve) -> Result<bool, String>,
 ) -> Result<bool, String> {
-    let s = unsafe { state(hwnd) }.ok_or("Kurvenansicht fehlt.")?;
+    let s = unsafe { state(hwnd) }.ok_or(t("widget.missing"))?;
     let result = {
         let mut model = s.model.borrow_mut();
-        action(model.as_mut().ok_or("Kurve noch nicht verfügbar.")?)
+        action(model.as_mut().ok_or(t("widget.not_ready"))?)
     };
     if result.is_ok() {
         refresh(hwnd);
@@ -100,20 +103,33 @@ pub fn mutate(
     result
 }
 fn refresh(hwnd: HWND) {
-    let caption = curve(hwnd).map_or("Kurve nicht verfügbar".into(), |c| {
+    let caption = curve(hwnd).map_or(t("widget.unavailable").into(), |c| {
         let p = c.points[c.selected];
         let (x, y) = c.kind.units();
-        let view=unsafe {state(hwnd)}.and_then(|s|s.viewport.get()).map_or(String::new(),|v|format!(" Ansicht: {}–{} {}, {}–{} {}.",v.lo.x,v.hi.x,x,v.lo.y,v.hi.y,y));
-        let selection = c.selection().map_or(String::new(), |(a,b)| format!(" Auswahl: {}–{} {} ({} Punkte).",c.points[a].x,c.points[b].x,x,b-a+1));
-        format!(
-            "{}: Punkt {} von {}, {} {}, {} {}.{}{} Shift + Ziehen verschiebt Kurve/Auswahl. Strg + Z: Rückgängig.",
-            c.kind.title(),
-            c.selected + 1,
-            c.points.len(),
-            p.x,
-            x,
-            p.y,
-            y,selection,view
+        let view = unsafe { state(hwnd) }
+            .and_then(|s| s.viewport.get())
+            .map_or(String::new(), |v| {
+                tf("widget.view", &[&v.lo.x, &v.hi.x, &x, &v.lo.y, &v.hi.y, &y])
+            });
+        let selection = c.selection().map_or(String::new(), |(a, b)| {
+            tf(
+                "widget.range",
+                &[&c.points[a].x, &c.points[b].x, &x, &(b - a + 1)],
+            )
+        });
+        tf(
+            "widget.caption",
+            &[
+                &t(&format!("curve.kind.{:?}", c.kind)),
+                &(c.selected + 1),
+                &c.points.len(),
+                &p.x,
+                &x,
+                &p.y,
+                &y,
+                &selection,
+                &view,
+            ],
         )
     });
     // SAFETY: Our native control copies the bounded terminated caption.
@@ -198,6 +214,62 @@ fn deliver_result(hwnd: HWND, result: Result<bool, String>) {
             notify(hwnd, 2);
         }
     }
+}
+/// Fan curves: right-click adds a point on free space or deletes the clicked one.
+fn fan_menu(hwnd: HWND, l: LPARAM) {
+    let Some(s) = (unsafe { state(hwnd) }) else {
+        return;
+    };
+    finish_drag(hwnd, true);
+    let (x, y) = coordinate(l);
+    let target = {
+        let model = s.model.borrow();
+        let Some(c) = model.as_ref().filter(|c| c.kind != Kind::Gpu) else {
+            return;
+        };
+        let g = geometry(hwnd, c);
+        if let Some(i) = nearest(g, c, x, y) {
+            Err(i)
+        } else if (g.area.left..=g.area.right).contains(&x)
+            && (g.area.top..=g.area.bottom).contains(&y)
+        {
+            Ok(g.data(x, y))
+        } else {
+            return;
+        }
+    };
+    const ADD: usize = 1;
+    const DELETE: usize = 2;
+    let chosen = unsafe {
+        let menu = CreatePopupMenu();
+        let (id, label) = match target {
+            Ok(_) => (ADD, t("widget.add_point")),
+            Err(_) => (DELETE, t("widget.delete_point")),
+        };
+        AppendMenuW(menu, MF_STRING, id, wide(label).as_ptr());
+        let mut point = POINT { x, y };
+        ClientToScreen(hwnd, &mut point);
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            0,
+            hwnd,
+            ptr::null(),
+        ) as usize;
+        DestroyMenu(menu);
+        chosen
+    };
+    let result = match (chosen, target) {
+        (ADD, Ok(at)) => mutate(hwnd, |c| c.insert_at(at).map(|_| true)),
+        (DELETE, Err(i)) => mutate(hwnd, |c| {
+            c.select(i, false);
+            c.remove().map(|_| true)
+        }),
+        _ => return,
+    };
+    deliver_result(hwnd, result);
 }
 fn modifiers(s: &State, mouse: usize) -> Modifiers {
     let keys = s.modifiers.get();
@@ -330,7 +402,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         s.font,
                         GetFocus() == hwnd,
                         s.viewport.get(),
-                        s.hover.get(),
+                        readout(s),
                     );
                     BitBlt(dc, 0, 0, rect.right, rect.bottom, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, old);
@@ -342,7 +414,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         s.font,
                         GetFocus() == hwnd,
                         s.viewport.get(),
-                        s.hover.get(),
+                        readout(s),
                     );
                 }
                 if !bitmap.is_null() {
@@ -466,8 +538,27 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 finish_drag(hwnd, false);
                 0
             }
+            WM_RBUTTONUP => {
+                fan_menu(hwnd, l);
+                0
+            }
             WM_LBUTTONDBLCLK => {
                 finish_drag(hwnd, true);
+                // Fan curves: a double-click on free chart space adds a point there.
+                let (x, y) = coordinate(l);
+                let target = s.model.borrow().as_ref().and_then(|c| {
+                    let g = geometry(hwnd, c);
+                    (c.kind != Kind::Gpu
+                        && nearest(g, c, x, y).is_none()
+                        && (g.area.left..=g.area.right).contains(&x)
+                        && (g.area.top..=g.area.bottom).contains(&y))
+                    .then(|| g.data(x, y))
+                });
+                if let Some(at) = target {
+                    let result = mutate(hwnd, |c| c.insert_at(at).map(|_| true));
+                    deliver_result(hwnd, result);
+                    return 0;
+                }
                 let _ = mutate(hwnd, |c| {
                     c.clear_selection();
                     Ok(false)
@@ -480,24 +571,30 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     return 0;
                 }
                 let keys = modifiers(s, w & 0xffff);
-                let inward = (w >> 16) as u16 as i16 > 0;
+                // One zoom/pan step per WHEEL_DELTA, not per message.
+                let delta = s.wheel.get() + i32::from((w >> 16) as u16 as i16);
+                s.wheel.set(delta % 120);
+                let steps = delta / 120;
+                let inward = steps > 0;
                 let (x, y) = coordinate(l);
                 let mut pos = POINT { x, y };
                 ScreenToClient(hwnd, &mut pos);
-                if keys.shift {
-                    if let Some(c) = s.model.borrow().as_ref() {
-                        let mut v = s.viewport.get().unwrap_or_else(|| Viewport::fit(c));
-                        v.pan(c, if inward { -1 } else { 1 });
-                        s.viewport.set(Some(v));
+                for _ in 0..steps.unsigned_abs() {
+                    if keys.shift {
+                        if let Some(c) = s.model.borrow().as_ref() {
+                            let mut v = s.viewport.get().unwrap_or_else(|| Viewport::fit(c));
+                            v.pan(c, if inward { -1 } else { 1 });
+                            s.viewport.set(Some(v));
+                        }
+                        refresh(hwnd);
+                    } else {
+                        let at = s
+                            .model
+                            .borrow()
+                            .as_ref()
+                            .map(|c| geometry(hwnd, c).data(pos.x, pos.y));
+                        zoom(hwnd, keys.ctrl, inward, at);
                     }
-                    refresh(hwnd);
-                } else {
-                    let at = s
-                        .model
-                        .borrow()
-                        .as_ref()
-                        .map(|c| geometry(hwnd, c).data(pos.x, pos.y));
-                    zoom(hwnd, keys.ctrl, inward, at);
                 }
                 0
             }
@@ -627,11 +724,12 @@ pub fn create(parent: HWND, id: usize, _font: HFONT) -> Result<HWND, String> {
             hover: Cell::new(None),
             error: RefCell::new(String::new()),
             ownership: ownership.clone(),
+            wheel: Cell::new(0),
         }));
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Kurvenansicht").as_ptr(),
+            wide(t("widget.name")).as_ptr(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             0,
             0,
@@ -675,6 +773,15 @@ unsafe fn width(dc: HDC, value: &str) -> i32 {
     }
     size.cx
 }
+/// The readout box follows the dragged point (with its change since the
+/// mouse went down) or, otherwise, the hovered point.
+fn readout(s: &State) -> Option<(usize, Option<i32>)> {
+    if let Some(Drag::Point { start, .. }) = s.drag.borrow().as_ref() {
+        let selected = s.model.borrow().as_ref()?.selected;
+        return Some((selected, start.get(selected).map(|p| p.y)));
+    }
+    s.hover.get().map(|i| (i, None))
+}
 unsafe fn draw(
     dc: HDC,
     rect: RECT,
@@ -682,7 +789,7 @@ unsafe fn draw(
     font: HFONT,
     focus: bool,
     view: Option<Viewport>,
-    hover: Option<usize>,
+    readout: Option<(usize, Option<i32>)>,
 ) {
     // SAFETY: A living window or owned memory DC; every selected object is restored.
     unsafe {
@@ -749,10 +856,20 @@ unsafe fn draw(
                 SelectObject(dc, old);
                 DeleteObject(pen);
             }
+            // Fan curves draw only the current line; the loaded line would linger
+            // behind added or removed points.
+            let reference: &[DataPoint] = if curve.kind == Kind::Gpu {
+                curve.reference()
+            } else {
+                &[]
+            };
             for (nodes, color, style) in [
-                (curve.reference(), REFERENCE, PS_DOT),
+                (reference, REFERENCE, PS_DOT),
                 (&curve.points[..], DRAFT, PS_SOLID),
             ] {
+                if nodes.is_empty() {
+                    continue;
+                }
                 let points = nodes.iter().map(|p| g.screen(*p)).collect::<Vec<_>>();
                 let pen = CreatePen(style, 1, color);
                 let old = SelectObject(dc, pen);
@@ -790,11 +907,15 @@ unsafe fn draw(
                 SelectObject(dc, old);
                 DeleteObject(pen);
             }
-            if let Some(i) = hover.filter(|i| *i < curve.points.len()) {
+            if let Some((i, from)) = readout.filter(|(i, _)| *i < curve.points.len()) {
                 let point = curve.points[i];
                 let pos = g.screen(point);
                 let (x, y) = curve.kind.units();
-                let value = format!("{} {} · {} {}", point.x, x, point.y, y);
+                let mut value = format!("{} {} · {} {}", point.x, x, point.y, y);
+                // While dragging, show how far the point moved since mouse-down.
+                if let Some(from) = from {
+                    value.push_str(&format!(" · {:+} {}", point.y - from, y));
+                }
                 let size = width(dc, &value) + 20;
                 let left = (pos.x + 14).clamp(g.area.left, (g.area.right - size).max(g.area.left));
                 let top = (pos.y - 30).clamp(g.area.top, (g.area.bottom - 24).max(g.area.top));
@@ -837,14 +958,14 @@ unsafe fn draw(
             }
             let (x, y) = curve.kind.units();
             let ylabel = if curve.kind == Kind::Gpu {
-                "Taktrate, MHz"
+                t("widget.y_clock")
             } else {
-                "Lüfterwert, %"
+                t("widget.y_fan")
             };
             let xlabel = if curve.kind == Kind::Gpu {
-                "Spannung, mV"
+                t("widget.x_voltage")
             } else {
-                "Temperatur, °C"
+                t("widget.x_temperature")
             };
             label(dc, g.area.left, 10, ylabel);
             label(
@@ -854,26 +975,22 @@ unsafe fn draw(
                 xlabel,
             );
             let selection = curve.selection().map_or(String::new(), |(a, b)| {
-                format!(" · Auswahl: {} Punkte", b - a + 1)
+                tf("widget.selection", &[&(b - a + 1)])
             });
-            let point = format!(
-                "Ausgewählt: {} {} · {} {}{}",
-                node.x, x, node.y, y, selection
-            );
+            let point = tf("widget.selected", &[&node.x, &x, &node.y, &y, &selection]);
             label(dc, g.area.right - width(dc, &point), 10, &point);
             label(
                 dc,
                 g.area.left,
                 rect.bottom - 21,
-                "Quadrate: Entwurf   ·   Gepunktet: beim Laden",
+                if curve.kind == Kind::Gpu {
+                    t("widget.gpu_legend")
+                } else {
+                    t("widget.fan_legend")
+                },
             );
         } else {
-            label(
-                dc,
-                24,
-                30,
-                "Kurve nicht verfügbar. Lüfter-Entwürfe können weiterhin bearbeitet werden.",
-            );
+            label(dc, 24, 30, t("widget.unavailable_long"));
         }
         if focus {
             let mut r = rect;
@@ -973,12 +1090,12 @@ pub fn render_window(hwnd: HWND, path: &Path) -> Result<(), String> {
 }
 fn bitmap(path: &Path, w: i32, h: i32, paint: impl FnOnce(HDC, RECT)) -> Result<(), String> {
     if !(1..=4096).contains(&w) || !(1..=4096).contains(&h) {
-        return Err("Ungültige Render-Größe.".into());
+        return Err(t("widget.render_size").into());
     }
     unsafe {
         let dc = CreateCompatibleDC(ptr::null_mut());
         if dc.is_null() {
-            return Err("Kein Render-Kontext verfügbar.".into());
+            return Err(t("widget.render_context").into());
         }
         let mut info: BITMAPINFO = std::mem::zeroed();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
@@ -990,7 +1107,7 @@ fn bitmap(path: &Path, w: i32, h: i32, paint: impl FnOnce(HDC, RECT)) -> Result<
         let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
         if bitmap.is_null() || bits.is_null() {
             DeleteDC(dc);
-            return Err("Render-Bitmap fehlt.".into());
+            return Err(t("widget.render_bitmap").into());
         }
         let old = SelectObject(dc, bitmap);
         paint(
