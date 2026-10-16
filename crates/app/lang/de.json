@@ -404,5 +404,8 @@
   "fan.quick.max_active": "Lüfter laufen mit Maximum.",
   "fan.quick.auto_active": "Lüfter folgen der gespeicherten Kurve.",
   "fan.quick.auto_bios": "Keine Lüfterkurve gespeichert; das BIOS regelt die Lüfter.",
-  "fan.quick.failed": "Lüfterschalter nicht übernommen: {0}"
+  "fan.quick.failed": "Lüfterschalter nicht übernommen: {0}",
+  "preset.startup_on_save": "Autostart wird beim Speichern angewendet und eingerichtet.",
+  "preset.saved_startup": "Preset gespeichert, angewendet und für den Windows-Start eingerichtet.",
+  "preset.startup_blocked": "Dieses Preset enthält Einstellungen, die noch nicht für den Windows-Start freigegeben sind."
 }

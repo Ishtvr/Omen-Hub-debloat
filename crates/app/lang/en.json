@@ -404,5 +404,8 @@
   "fan.quick.max_active": "Fans run at maximum.",
   "fan.quick.auto_active": "Fans follow the saved curve.",
   "fan.quick.auto_bios": "No fan curve saved; the BIOS controls the fans.",
-  "fan.quick.failed": "Fan switch not applied: {0}"
+  "fan.quick.failed": "Fan switch not applied: {0}",
+  "preset.startup_on_save": "Autostart is applied and set up when you save.",
+  "preset.saved_startup": "Preset saved, applied and set up for Windows startup.",
+  "preset.startup_blocked": "This preset contains settings that are not yet enabled for Windows startup."
 }

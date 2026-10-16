@@ -70,7 +70,6 @@ struct View {
     pending: bool,
     applicable: bool,
     blockers: usize,
-    startup_allowed: bool,
     startup_enabled: bool,
     startup_valid: bool,
 }
@@ -103,10 +102,6 @@ fn load(id: Option<&str>) -> Result<View, String> {
     let plan = selected
         .as_ref()
         .map(|p| transaction::plan(p, &mut controller, false));
-    let startup_allowed = selected.as_ref().is_some_and(|p| {
-        transaction::plan(p, &mut controller, true).applicable
-            && store.startup_eligibility(&p.id).is_ok()
-    });
     let selection = store.startup()?;
     let startup_enabled = selection.enabled
         && selected
@@ -128,7 +123,6 @@ fn load(id: Option<&str>) -> Result<View, String> {
         pending: store.pending()?,
         applicable: plan.as_ref().is_some_and(|p| p.applicable),
         blockers: plan.map_or(0, |p| p.blockers.len()),
-        startup_allowed,
         startup_enabled,
         startup_valid,
     })
@@ -138,6 +132,8 @@ struct SaveData {
     binding: DeviceBinding,
     name: String,
     edits: Vec<(Feature, Option<Value>)>,
+    /// Autostart chosen in the draft; `None` leaves it unchanged.
+    startup: Option<bool>,
 }
 enum Request {
     Load(Option<String>),
@@ -199,9 +195,27 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     }
                     profile.binding = profile.binding.for_settings(&profile.settings);
                     store.save(&profile)?;
+                    // Autostart ticked while creating or editing: apply the saved
+                    // preset, then enable it, with the existing approved commands.
+                    let message = match data.startup {
+                        Some(true) => {
+                            let mut controller = Controller::new(true, None)?;
+                            if !transaction::plan(&profile, &mut controller, true).applicable {
+                                return Err(t("preset.startup_blocked").into());
+                            }
+                            elevation::run(Some(&profile.id), Action::Apply, || false)?;
+                            elevation::run(Some(&profile.id), Action::Startup, || false)?;
+                            t("preset.saved_startup")
+                        }
+                        Some(false) => {
+                            store.disable_startup()?;
+                            t("preset.saved")
+                        }
+                        None => t("preset.saved"),
+                    };
                     Ok(Update::View(
                         Box::new(load(Some(&profile.id))?),
-                        t("preset.saved").into(),
+                        message.into(),
                     ))
                 }
                 Request::Apply(id) => {
@@ -227,6 +241,17 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                 }
                 Request::Startup(id, enabled) => {
                     if enabled {
+                        // Not applied in this exact revision yet: apply it first.
+                        let store = ProfileStore::user_data()?;
+                        if store.startup_eligibility(&id).is_err() {
+                            let mut controller = Controller::new(true, None)?;
+                            if !transaction::plan(&store.load(&id)?, &mut controller, true)
+                                .applicable
+                            {
+                                return Err(t("preset.startup_blocked").into());
+                            }
+                            elevation::run(Some(&id), Action::Apply, || false)?;
+                        }
                         elevation::run(Some(&id), Action::Startup, || false)?;
                     } else {
                         ProfileStore::user_data()?.disable_startup()?;
@@ -349,15 +374,7 @@ fn enable(hwnd: HWND, state: &State) {
                         && !state.dirty.get()
                         && view.as_ref().is_some_and(|v| v.applicable)))) as i32,
         );
-        EnableWindow(
-            GetDlgItem(hwnd, STARTUP as i32),
-            (ready
-                && saved
-                && !state.dirty.get()
-                && view
-                    .as_ref()
-                    .is_some_and(|v| v.startup_allowed || v.startup_enabled)) as i32,
-        );
+        EnableWindow(GetDlgItem(hwnd, STARTUP as i32), ready as i32);
         for row in state.rows.borrow().iter() {
             EnableWindow(row.check, ready as i32);
             let included = ready && checked(row.check);
@@ -754,11 +771,13 @@ fn collect(state: &State) -> Result<SaveData, String> {
                 .map(|s| (s.feature, None)),
         );
     }
+    let wanted = checked(unsafe { GetDlgItem(hwnd, STARTUP as i32) });
     Ok(SaveData {
         baseline: view.selected.clone(),
         binding: view.binding.clone(),
         name,
         edits,
+        startup: (wanted != view.startup_enabled).then_some(wanted),
     })
 }
 unsafe fn show(handle: HWND, visible: bool) {
@@ -1561,6 +1580,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                         if let Some(id) = selected(state) {
                             dispatch(hwnd, state, Request::Delete(id), t("preset.deleting"));
                         }
+                    }
+                    STARTUP if selected(state).is_none() || state.dirty.get() => {
+                        // Part of the draft; Save applies and enables it.
+                        dirty(hwnd, state);
+                        status(hwnd, state, t("preset.startup_on_save"), false);
                     }
                     STARTUP => {
                         if let Some(id) = selected(state) {
