@@ -263,3 +263,63 @@ pub fn run(
         std::thread::sleep(CYCLE.saturating_sub(started.elapsed()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn curve_of_validates_and_interpolates() {
+        let valid = vec![
+            FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+            FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+        ];
+        let curve = curve_of(&valid).unwrap();
+        assert_eq!(curve.target(Some(60)), 60);
+
+        let single = vec![FanPoint {
+            temperature_c: 40,
+            duty_percent: 30,
+        }];
+        assert!(curve_of(&single).is_err());
+
+        let non_monotonic = vec![
+            FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+            FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+        ];
+        assert!(curve_of(&non_monotonic).is_err());
+    }
+
+    #[test]
+    fn fan_service_status_serializes_with_schema() {
+        let status = FanServiceStatus {
+            schema: 1,
+            state: "curve",
+            detail: String::new(),
+            cpu_c: Some(65.5),
+            gpu_c: Some(58),
+            ir_c: Some(42),
+            protection: 0,
+            cpu_level: 25,
+            gpu_level: 25,
+            ccd_pinned: 1,
+            updated_unix_s: 1234567890,
+        };
+        let text = serde_json::to_string(&status).unwrap();
+        assert!(text.contains(r#""schema":1"#));
+        assert!(text.contains(r#""state":"curve""#));
+        assert!(text.contains(r#""cpu_level":25"#));
+    }
+}
