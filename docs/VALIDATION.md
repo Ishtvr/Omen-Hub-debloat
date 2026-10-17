@@ -403,6 +403,12 @@ Auf Nutzerwunsch stehen rechts neben **Steuerung** zwei Positionsschalter mit de
 
 Geprüft in der Linux-Cloud: `cargo fmt`, Clippy für `x86_64-pc-windows-msvc` und die vollständige Testsuite als Windows-Binaries unter Wine 9.0: **142 Tests** (86 Core / 40 Platform / 16 App), darunter neue Tests für Modi, Neustartlogik, Speicherung und Schaltergeometrie sowie die vom Nutzer am 17. Oktober ergänzten Tests für Lüfterdienst, SMU-Tuning, Windows-Einstellungen, CCD und Notfallkühlung. Unter Wine laufen die Tests ohne HP-Firmware; sie prüfen Logik, keine Hardware. Ein mit `lld-link` gebauter Release lief unter Wine 9.0 mit Xvfb; Screenshots zeigten beide Schalter, Beschriftungen in Deutsch und Englisch, die Auswahl aus gespeicherten Dateien und den Neustarthinweis. Nicht geprüft: tatsächliches Schreiben des Grafikmodus und Neustart auf dem Referenzgerät, Lüfterdienst-Aktualisierung, andere DPI.
 
+## Anwenden, Autostart und Tray-Einstellung — 17. Oktober 2026 (Cloud-Build, ungemessen)
+
+Auf Nutzerwunsch übernimmt das Dashboard einen Leistungsmodus erst mit **Anwenden**; die Auswahl allein zeigt nur einen Hinweis. **Mit Windows starten** schreibt oder löscht den Benutzer-Autostarteintrag `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Omen Hub++` mit `"<exe>" --tray`; **Beim Schließen in den Tray minimieren** (Standard an) steht in `app-settings.json`. Fester CPU-Takt, Core-Ratios und feste Spannungen sind aus dem Preset-Editor entfernt; gespeicherte Werte bleiben lesbar und fallen beim Speichern weg.
+
+Unter Wine 9.0 + Xvfb geprüft: Darstellung von Anwenden-Schaltfläche und Einstellungen; Moduswahl ohne Anwenden schreibt nichts; der Autostart-Klick erzeugte den erwarteten Registry-Eintrag; ein WM_DELETE_WINDOW versteckte das Fenster bei aktiver Tray-Einstellung (Prozess lief weiter) und beendete die App bei ausgeschalteter Einstellung. Nicht geprüft: echter Windows-Start mit Autostart, Anwenden eines Modus auf dem Referenzgerät.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.

@@ -27,7 +27,7 @@ Omen Hub++ soll alle praktisch nutzbaren OMEN-Hardwarefunktionen in einer native
 - [x] IR-Selektor 0 auf 25C1 bis zur Celsius-Ausgabe verfolgen; gespeicherte Auto-Auswahl von Software-/BIOS-Zuständigkeit unterscheiden. Einmalige CPU-/GPU-/IR-/Lüfterdiagnose mit expliziten Alters-/Berechtigungsfehlern implementiert und gelesen.
 - [x] Max-Fan-Get/Set-Paar ohne OMEN-DLL implementieren und manuelles Ein-/Readback-/Original-Restore sowie persistierte Recovery in getrennten Prozessen messen; HP-Dienste liefen weiter.
 - [ ] Gekoppelte Leistungs-/BIOS-Lüfterzuständigkeit, zusätzliche thermische Sensoranforderung und vollständige Modus-Readback-/Restore-Semantik für eigene Kurven qualifizieren; Max-Fan ist kein Ersatzbeweis.
-- [ ] MUX: Get/Set-Paare, Rückgabecodes und Zustandsübergänge identifizieren.
+- [x] MUX: BIOS-Grafikmodus lesen/schreiben (Konfigurationsbefehl 0x52) als Preset-Einstellung und Dashboard-Schalter Hybrid/GPU only mit Rücklesen implementiert; der tatsächliche Wechsel nach Neustart ist auf 8E35 noch ungemessen.
 - [ ] Originalzustände, Gaming-Hub-Verhalten und Lastmessungen vergleichen: Netzteil, BIOS, Temperaturen, CPU-Watt, GPU-Watt, Akkudrain und Throttle-Gründe.
 - [ ] Verhalten nach Standby, Netzteilwechsel und Ausfall eines Controllers dokumentieren.
 
@@ -43,15 +43,15 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [x] Typisierter lesender HP-WMI-Transport mit festen GETs, Begrenzung auf 8E35/F.13 sowie strengen Datentyp-/Längen-/Rückgabecode-Prüfungen; Größe-0-Eingabe am Gerät validiert.
 - [x] Typisierter direkter HP-BIOS-Tastaturadapter für Capability `[1,0,0,0]`: vollständige RGB-Bilder, exakte Modusbytes 0x64/0xE4, dauerhafte Originale, Readback und Recovery; übrige Steuerbytes erhalten.
 - [x] Typisierter direkter Max-Fan-Adapter für 8E35/F.13: Netzbetrieb, Tabellenhash, Topologie, Thermalpolicy und vollständige Schalterbytes vor SET prüfen; boolesches Ziel, vollständiger Readback und persistierter Original-Restore, fremde Zustände verwerfen.
-- [ ] Beleuchtungssettings für automatisches Anwenden freigeben, erst nach belegtem Lifecycle und Controller-Ownership; derzeit `startup_safe = false`.
-- [ ] Max-Fan bei echten AC-, Fehler-, Standby-/Resume- und Reboot-Übergängen sowie ohne ursprüngliche HP-Controller prüfen; automatischer Profilstart bleibt `startup_safe = false`. Eingeschwungene maximale Nenndrehzahl und Dauerstabilität separat messen.
-- [ ] Eigene Lüfterkurven erst mit qualifizierter Modusübernahme/Restore und koordiniertem thermischem Sicherheitsweg anwenden; Software-Level und zustandswirksamen FanCount-/Heartbeat-Pfad separat qualifizieren.
+- [x] Beleuchtungssettings für den Anmeldestart freigegeben (16. Oktober 2026, Nutzerwunsch). Lifecycle bei Resume, Hotkeys und Controller-Ownership bleibt ungemessen.
+- [ ] Max-Fan bei echten AC-, Fehler-, Standby-/Resume- und Reboot-Übergängen sowie ohne ursprüngliche HP-Controller prüfen; automatischer Profilstart ist seit 16. Oktober auf Nutzerwunsch erlaubt. Eingeschwungene maximale Nenndrehzahl und Dauerstabilität separat messen.
+- [ ] Eigene Lüfterkurven laufen seit 16. Oktober über den Lüfterdienst (Dashboard-Schalter **Kurve**, Notfall-Vollkühlung, BIOS bei **Auto**); Verhalten unter Last, Modusübernahme und Lifecycle auf dem Gerät noch messen.
 - [x] Typisierte Gesamt-Transaktionen mit 91 semantischen Profil-Features, dauerhaften Originalbildern und Sperren bei nicht unterstützten Settings. Formatbreite bedeutet keine Schreibfreigabe für alle Features.
 - [x] NVIDIA-Core-/VRAM-Offsets auf dem Referenzgerät: GET/SET, exakter Readback, Teilfehler-Rollback und persistierte Recovery.
 - [x] Exakte NVIDIA-Graphics-V/F-ABI mit Ghidra und lesenden Proben belegen; alle 127 Frequenz-Deltas schreiben, zurücklesen und vollständig restaurieren.
 - [x] Kurvenziele von direkten mV-Offsets trennen; komplexe Preflight-Prüfung, einzelne immutable Spannungsanker und vollständige gespeicherte Kurven.
 - [x] Gemessene VRAM-Setter-/Graphics-Kurven-Kopplung abbilden: Dependency-Reihenfolge, vollständige Originale und Erhalt der Graphics-Einstellungen.
-- [ ] Physische Undervolting-Wirkung und längere Stabilität unter Last messen; direkte GPU-/VRAM-Spannung nur mit eigenem belegtem Steuervertrag.
+- [ ] Physische Undervolting-Wirkung der V/F-Kurve und des Curve Optimizers sowie längere Stabilität unter Last messen. Direkte GPU-/VRAM-Spannung ist auf Nutzerwunsch verworfen.
 - [ ] Zusätzliche Modelle, OEM-Power-/Voltage-/CPU-/Windows-Adapter jeweils mit eigener Gerätevalidierung.
 - [ ] Modellbezogener Heartbeat; keine universell angenommene 30-Sekunden-Schleife.
 - [x] STAPM, Slow und Fast (PPT) mit Rücklesen und Restore: STAPM/Slow über HP `0x29`, Fast über RSMU `0x56` (gemessen 16. Oktober 2026, siehe models/8e35.md); `libryzenadj` ist dafür nicht nötig.
@@ -73,7 +73,8 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Deutsche Support-/Freigabe-/Verbindungs-/Messfehler und passende Wiederherstellung, getrennte letzte technische Ursache ohne Hardwarejournaländerung.
 - [ ] Gemessene CPU-Boost-/Effektivtakte und CCD-/Kerntemperaturen anbinden; Windows-MHz und Tctl nicht dafür umdeuten.
 - [x] CCD-Affinität als Preset-Einstellung: der Hintergrunddienst pinnt das Vordergrundprogramm auf die gewählten CCDs und gibt die alte Maske zurück (noch ohne Hardwaretest).
-- [ ] Fester CPU-Takt/feste Spannung erst nach `cpu-smu-probe` (`oc_allowed`) und gemessenem OC-Modus-Restore; AMD-Boost-Profil und Spannungs-Offset gibt es für Dragon Range nicht.
+- [x] ~~Fester CPU-Takt/feste Spannung~~: am 17. Oktober 2026 auf Nutzerwunsch verworfen, weil die meisten Laptops diese Kontrolle sperren; Editorfelder (AMD-Takt/-Spannung, Intel-Core-Ratios, Cache-/SA-Spannung) entfernt. Der Fokus liegt auf den UXTU-Einstellungen: STAPM/Slow/Fast, TDC/EDC, Tctl-Limit, PBO und Curve Optimizer.
+- [x] Dashboard: **Anwenden**-Schaltfläche für den Leistungsmodus (Auswahl allein schreibt nichts), Einstellungen **Mit Windows starten** (Autostart im Tray) und **Beim Schließen in den Tray minimieren**.
 - [x] Vom Benutzer bestätigte moderne, saubere dunkle Oberfläche nativ umsetzen: GPU und CPU gemeinsam im ersten Blickfeld, prominente Editoraktionen danach; gemeinsame Felder und Buttons in GPU-, Beleuchtungs- und Kurveneditor.
 - [x] Dunkle Design-Tokens und native Control-/Darstellungsgrenzen in DESIGN.md, Sidecar und Surface-Briefs festhalten; Diagrammpalette und feste GPU-Anker behalten ihre eigene Regel.
 - [x] Dashboard-Kindcontrols im Tray freigeben und bei Rückkehr mit der bisherigen HP-Vorschauauswahl neu aufbauen; CPU-Freigabe und neue Energie-Baseline unabhängig im Worker behalten.
@@ -85,7 +86,7 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] Direkte Beleuchtung mit vier anklickbaren Zonen samt Nummernblock, nativem Farbwähler und Ein/Aus; eigener dauerhafter Transaktionsspeicher, voller Readback/Restore und vom Benutzer bestätigte sichtbare Ein/Aus-Wirkung.
 - [x] Exakte CPU-Anzeigeeinheiten, konfliktprüfender Preset-Merge, archiviertes Löschen mit erhaltenem Hardwarejournal, abgelehnter Presetwechsel mit erhaltener Identität sowie feste Startup-Einrichtung nach vollem Preflight.
 - [x] GPU-Chart aus neuen/dirty Presets ohne Save-Voraussetzung öffnen, Änderungen im Speicher übernehmen/abbrechen und andere Entwurfsfelder erhalten; zehn alte GPU-/FPS- und 26 APU/iGPU-Schlüssel erst bei ausdrücklichem Save bereinigen und beide Dynamic-Boost-Schlüssel erhalten.
-- [ ] Lüfterkurven auf Hardware anwenden und MUX samt nötigem Neustartverhalten qualifizieren; Max-Fan-Lifecycle bleibt eine eigene offene Prüfung.
+- [ ] Lüfterkurven und MUX samt Neustart auf der Hardware qualifizieren (beide implementiert, noch ungemessen); Max-Fan-Lifecycle bleibt eine eigene offene Prüfung.
 - [ ] Erweiterte Tastaturbeleuchtung mit validierter Helligkeit, Animationen und unabhängigem Power-/Hotkey-Lifecycle; Ein/Aus ist auf 8E35/F.13 inzwischen bestätigt.
 - [x] Versionierte Profile, atomarer Speicher außerhalb MSIX-AppData, kontrollierte Migration und geschützter Windows-Anmeldungseinstieg für bestätigte Revisionen.
 - [ ] Tatsächlichen Reboot, Suspend/Resume, AC-Wechsel und langfristige Stabilität mit ausgewähltem Profil messen.

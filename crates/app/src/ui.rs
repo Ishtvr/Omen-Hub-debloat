@@ -16,7 +16,11 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
     System::{LibraryLoader::GetModuleHandleW, Power::*, SystemServices::GUID_ACDC_POWER_SOURCE},
-    UI::{Shell::*, WindowsAndMessaging::*},
+    UI::{
+        Controls::{BST_CHECKED, BST_UNCHECKED},
+        Shell::*,
+        WindowsAndMessaging::*,
+    },
 };
 
 const UPDATE: u32 = WM_APP + 1;
@@ -32,6 +36,9 @@ const KEYBOARD: usize = 105;
 const FAN_SWITCH: usize = 106;
 const MUX_SWITCH: usize = 107;
 const MUX_NOTE: i32 = 153;
+const APPLY: usize = 108;
+const AUTOSTART: usize = 190;
+const CLOSE_TO_TRAY: usize = 191;
 /// Round "i" next to the performance-mode label.
 const MODE_INFO: usize = 182;
 const SHOW: u32 = 201;
@@ -73,6 +80,7 @@ struct State {
     mode_result: Arc<Mutex<Option<String>>>,
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
+    close_to_tray: Cell<bool>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -377,6 +385,20 @@ unsafe fn sync_switches(hwnd: HWND) {
             graphics.map(|r| r.mode).unwrap_or_default().index(),
         );
         let pending = graphics.is_some_and(|r| r.restart_pending(omen_platform::boot_unix_s()));
+        for (id, checked) in [
+            (AUTOSTART, crate::autostart::enabled()),
+            (
+                CLOSE_TO_TRAY,
+                store.as_ref().is_none_or(|s| s.close_to_tray()),
+            ),
+        ] {
+            SendMessageW(
+                GetDlgItem(hwnd, id as i32),
+                BM_SETCHECK,
+                if checked { BST_CHECKED } else { BST_UNCHECKED } as usize,
+                0,
+            );
+        }
         SetWindowTextW(
             GetDlgItem(hwnd, MUX_NOTE),
             wide(if pending { t("mux.restart_note") } else { "" }).as_ptr(),
@@ -424,10 +446,12 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                 state.preview.get(),
                 wide(&state.mode_status.borrow()).as_ptr(),
             );
-            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                state.profile.get(),
-                (!state.applying_preset.get()) as i32,
-            );
+            for control in [state.profile.get(), GetDlgItem(hwnd, APPLY as i32)] {
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                    control,
+                    (!state.applying_preset.get()) as i32,
+                );
+            }
         } else {
             SetWindowTextW(
                 GetDlgItem(hwnd, 181),
@@ -583,9 +607,11 @@ unsafe extern "system" fn window_proc(
                     state.theme.info(item);
                     1
                 } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
-                    state
-                        .theme
-                        .button(item, state.theme.body, item.CtlID == GPU_PROFILES as u32);
+                    state.theme.button(
+                        item,
+                        state.theme.body,
+                        item.CtlID == GPU_PROFILES as u32 || item.CtlID == APPLY as u32,
+                    );
                     1
                 } else {
                     DefWindowProcW(hwnd, message, wparam, lparam)
@@ -593,7 +619,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 960, y: 715 };
+                info.ptMinTrackSize = POINT { x: 960, y: 750 };
                 0
             }
             WM_COMMAND => {
@@ -646,17 +672,19 @@ unsafe extern "system" fn window_proc(
                         }
                     }
                 }
-                if id == PROFILE
-                    && (wparam >> 16) as u32 == CBN_SELENDOK
-                    && !state.applying_preset.get()
-                {
+                if id == PROFILE && (wparam >> 16) as u32 == CBN_SELENDOK {
+                    // Choosing only selects; "Anwenden" applies.
+                    SetWindowTextW(state.preview.get(), wide(t("mode.apply_hint")).as_ptr());
+                }
+                if id == APPLY && !state.applying_preset.get() {
                     let index = SendMessageW(state.profile.get(), CB_GETCURSEL, 0, 0);
                     let begin = |request: Request| {
                         state.applying_preset.set(true);
-                        windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                            state.profile.get(),
-                            0,
-                        );
+                        for control in [state.profile.get(), GetDlgItem(hwnd, APPLY as i32)] {
+                            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                                control, 0,
+                            );
+                        }
                         SetWindowTextW(state.preview.get(), wide(t("common.uac")).as_ptr());
                         *state.mode_status.borrow_mut() = t("common.uac").into();
                         let _ = state.tx.send(request);
@@ -677,6 +705,45 @@ unsafe extern "system" fn window_proc(
                         begin(Request::ApplyMode(DEFAULT_MODES[index as usize].1));
                     }
                 }
+                if id == AUTOSTART {
+                    let check = GetDlgItem(hwnd, AUTOSTART as i32);
+                    let enable = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
+                    let message = match crate::autostart::set(enable) {
+                        Ok(()) if enable => t("settings.autostart_on").to_owned(),
+                        Ok(()) => t("settings.autostart_off").to_owned(),
+                        Err(error) => {
+                            SendMessageW(
+                                check,
+                                BM_SETCHECK,
+                                if enable { BST_UNCHECKED } else { BST_CHECKED } as usize,
+                                0,
+                            );
+                            tf("settings.failed", &[&error])
+                        }
+                    };
+                    SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
+                }
+                if id == CLOSE_TO_TRAY {
+                    let check = GetDlgItem(hwnd, CLOSE_TO_TRAY as i32);
+                    let enable = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
+                    match omen_platform::profile_store::ProfileStore::user_data()
+                        .and_then(|s| s.save_close_to_tray(enable))
+                    {
+                        Ok(()) => state.close_to_tray.set(enable),
+                        Err(error) => {
+                            SendMessageW(
+                                check,
+                                BM_SETCHECK,
+                                if enable { BST_UNCHECKED } else { BST_CHECKED } as usize,
+                                0,
+                            );
+                            SetWindowTextW(
+                                state.preview.get(),
+                                wide(&tf("settings.failed", &[&error])).as_ptr(),
+                            );
+                        }
+                    }
+                }
                 if id == SHOW as usize {
                     show_dashboard(hwnd, state);
                 }
@@ -692,10 +759,9 @@ unsafe extern "system" fn window_proc(
             MODE_RESULT => {
                 state.applying_preset.set(false);
                 if !state.profile.get().is_null() {
-                    windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
-                        state.profile.get(),
-                        1,
-                    );
+                    for control in [state.profile.get(), GetDlgItem(hwnd, APPLY as i32)] {
+                        windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(control, 1);
+                    }
                 }
                 if let Some(message) = state
                     .mode_result
@@ -780,7 +846,11 @@ unsafe extern "system" fn window_proc(
                 }
                 0
             }
-            WM_SIZE if wparam == SIZE_MINIMIZED as usize && state.tray.get() => {
+            WM_SIZE
+                if wparam == SIZE_MINIMIZED as usize
+                    && state.tray.get()
+                    && state.close_to_tray.get() =>
+            {
                 hide_dashboard(hwnd, state);
                 0
             }
@@ -789,7 +859,7 @@ unsafe extern "system" fn window_proc(
                 0
             }
             WM_CLOSE => {
-                if state.tray.get() {
+                if state.tray.get() && state.close_to_tray.get() {
                     hide_dashboard(hwnd, state);
                 } else {
                     DestroyWindow(hwnd);
@@ -810,13 +880,13 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None, [1140, 745])
+    run_window(start_in_tray, None, [1140, 780])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path), [1140, 745])
+    run_window(false, Some(path), [1140, 780])
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
-    if size[0] < 960 || size[1] < 715 || size[0] > 2000 || size[1] > 1400 {
+    if size[0] < 960 || size[1] < 750 || size[0] > 2000 || size[1] > 1400 {
         return Err(t("error.preview_size").into());
     }
     run_window(false, Some(path), size)
@@ -843,6 +913,10 @@ fn run_window(
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
         mode_status: RefCell::new(t("mode.bios_unreadable").into()),
+        close_to_tray: Cell::new(
+            omen_platform::profile_store::ProfileStore::user_data()
+                .is_ok_and(|s| s.close_to_tray()),
+        ),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
