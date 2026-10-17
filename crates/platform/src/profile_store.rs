@@ -858,4 +858,54 @@ mod tests {
         assert!(target.0.migrate_from(source.0.root()).is_err());
         assert_eq!(target.0.load("test").unwrap(), profile());
     }
+    #[test]
+    fn active_fan_curve_and_fan_max_round_trip() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.active_fan_curve().unwrap(), None);
+        assert!(!store.fan_max());
+
+        let points = vec![
+            omen_core::profiles::FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+            omen_core::profiles::FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+        ];
+        store.save_active_fan_curve(&points).unwrap();
+        assert_eq!(
+            store.active_fan_curve().unwrap().as_deref(),
+            Some(points.as_slice())
+        );
+
+        let invalid = vec![
+            omen_core::profiles::FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+            omen_core::profiles::FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+        ];
+        assert!(store.save_active_fan_curve(&invalid).is_err());
+
+        store.save_fan_max(true).unwrap();
+        assert!(store.fan_max());
+        store.save_fan_max(false).unwrap();
+        assert!(!store.fan_max());
+
+        store.clear_active_fan_curve().unwrap();
+        assert_eq!(store.active_fan_curve().unwrap(), None);
+
+        assert_eq!(store.fan_status().unwrap(), None);
+        store
+            .save_fan_status(&serde_json::json!({"state": "curve", "schema": 1}))
+            .unwrap();
+        let status = store.fan_status().unwrap().unwrap();
+        assert_eq!(status["state"], "curve");
+    }
 }

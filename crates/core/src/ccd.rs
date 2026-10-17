@@ -234,4 +234,49 @@ mod tests {
         assert_eq!(fake.masks[&key(1)], 0xffff_ffff);
         assert_eq!(enforcer.pinned(), 0);
     }
+
+    #[test]
+    fn multi_ccd_topology_and_bounds_validation() {
+        let three_ccds = [0x000f, 0x00f0, 0x0f00];
+        assert_eq!(all(3), 7);
+        assert_eq!(affinity(1, &three_ccds).unwrap(), Some(0x000f));
+        assert_eq!(affinity(2, &three_ccds).unwrap(), Some(0x00f0));
+        assert_eq!(affinity(4, &three_ccds).unwrap(), Some(0x0f00));
+        assert_eq!(affinity(5, &three_ccds).unwrap(), Some(0x0f0f));
+        assert_eq!(affinity(7, &three_ccds).unwrap(), None);
+
+        assert!(validate(-1, 3).is_err());
+        assert!(validate(0, 3).is_err());
+        assert!(validate(8, 3).is_err());
+        assert!(validate(1, 1).is_err());
+        assert!(validate(1, 9).is_err());
+        assert_eq!(validate(3, 2).unwrap(), 3);
+    }
+
+    #[test]
+    fn prune_drops_dead_processes_when_capacity_reached() {
+        let mut fake = Fake::default();
+        let mut enforcer = Enforcer::default();
+        for pid in 1..=(MAX_TRACKED as u32) {
+            fake.masks.insert(key(pid), 0xffff_ffff);
+            fake.foreground = Some(key(pid));
+            assert!(enforcer.tick(&mut fake, Some(CCDS[0])).is_empty());
+        }
+        assert_eq!(enforcer.pinned(), MAX_TRACKED);
+
+        // A new process while all MAX_TRACKED are alive cannot be tracked
+        let extra_pid = (MAX_TRACKED as u32) + 1;
+        fake.masks.insert(key(extra_pid), 0xffff_ffff);
+        fake.foreground = Some(key(extra_pid));
+        assert!(enforcer.tick(&mut fake, Some(CCDS[0])).is_empty());
+        assert_eq!(enforcer.pinned(), MAX_TRACKED);
+        assert_eq!(fake.masks[&key(extra_pid)], 0xffff_ffff);
+
+        // Terminate process 1
+        fake.masks.remove(&key(1));
+        // Next tick triggers prune and allows extra_pid to be pinned
+        assert!(enforcer.tick(&mut fake, Some(CCDS[0])).is_empty());
+        assert_eq!(enforcer.pinned(), MAX_TRACKED);
+        assert_eq!(fake.masks[&key(extra_pid)], CCDS[0]);
+    }
 }
