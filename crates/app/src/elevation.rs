@@ -18,6 +18,7 @@ pub enum Action {
     Startup,
     Mode(omen_core::hp_mode::HpMode),
     FanService,
+    Graphics(omen_core::quick_switch::GraphicsMode),
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -27,6 +28,7 @@ impl Action {
             Self::Startup => "startup",
             Self::Mode(_) => "mode",
             Self::FanService => "fan",
+            Self::Graphics(_) => "mux",
         }
     }
 }
@@ -54,6 +56,7 @@ pub fn run(
         ),
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
         Action::FanService => format!("fan-service-install {nonce}"),
+        Action::Graphics(mode) => format!("mux-ui-apply {} {nonce}", mode.key()),
     };
     let file = wide(
         &std::env::current_exe()
@@ -106,7 +109,23 @@ pub fn run(
             return Err(t("elevation.no_record").into());
         }
         if code != 0 || record["result"].get("Err").is_some() {
-            return Err(tf("elevation.failed", &[&record["result"]["Err"]]));
+            // Show the child's message, not the JSON envelope around it.
+            let error = &record["result"]["Err"];
+            let rollback: Vec<String> = error["rollback_errors"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| {
+                    e.as_str()
+                        .map_or_else(|| e.to_string(), crate::i18n::message)
+                })
+                .collect();
+            let detail = match error["error"].as_str() {
+                Some(text) if rollback.is_empty() => crate::i18n::message(text),
+                Some(text) => format!("{} ({})", crate::i18n::message(text), rollback.join("; ")),
+                None => error.to_string(),
+            };
+            return Err(tf("elevation.failed", &[&detail]));
         }
         if record["result"].get("Ok").is_none() {
             return Err(t("elevation.unverified").into());

@@ -1,6 +1,10 @@
 //! Small native Win32 shell. Hardware queries stay on one worker thread.
 use crate::i18n::{t, tf};
-use omen_core::{APP_NAME, CpuHardwareStatus, Snapshot, hp_mode::HpMode};
+use omen_core::{
+    APP_NAME, CpuHardwareStatus, Snapshot,
+    hp_mode::HpMode,
+    quick_switch::{FanMode, GraphicsMode},
+};
 use std::{
     cell::{Cell, RefCell},
     ptr,
@@ -25,8 +29,9 @@ const GPU_PROFILES: usize = 103;
 const CURVES: usize = 104;
 const KEYBOARD: usize = 105;
 /// Fan quick switch on the Controls line: saved curve or both fans at maximum.
-const FAN_AUTO: usize = 106;
-const FAN_MAX: usize = 107;
+const FAN_SWITCH: usize = 106;
+const MUX_SWITCH: usize = 107;
+const MUX_NOTE: i32 = 153;
 /// Round "i" next to the performance-mode label.
 const MODE_INFO: usize = 182;
 const SHOW: u32 = 201;
@@ -48,7 +53,8 @@ enum Request {
     Power,
     ApplyPreset(String),
     ApplyMode(HpMode),
-    FanMode(bool),
+    FanMode(FanMode),
+    Graphics(GraphicsMode),
     Stop,
 }
 
@@ -67,7 +73,6 @@ struct State {
     mode_result: Arc<Mutex<Option<String>>>,
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
-    fan_max: Cell<bool>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -243,26 +248,48 @@ fn worker(
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
                 }
             }
-            Some(Request::FanMode(max)) => {
+            Some(Request::FanMode(mode)) => {
                 // The switch is a user file the elevated fan service reads; only
-                // its first installation needs Windows approval.
+                // installing or updating the service needs Windows approval. An
+                // outdated service is updated even for Auto, because older builds
+                // read every value except "max" as "follow the curve".
                 let result =
                     omen_platform::profile_store::ProfileStore::user_data().and_then(|store| {
-                        store.save_fan_max(max)?;
-                        if !omen_platform::fan_service_installed() {
-                            crate::elevation::run(
+                        let previous = store.fan_mode();
+                        store.save_fan_mode(mode)?;
+                        if (mode.needs_service() || omen_platform::fan_service_present())
+                            && !omen_platform::fan_service_installed()
+                        {
+                            if let Err(error) = crate::elevation::run(
                                 None,
                                 crate::elevation::Action::FanService,
                                 || false,
-                            )?;
+                            ) {
+                                store.save_fan_mode(previous)?;
+                                return Err(error);
+                            }
                         }
                         Ok(store.active_fan_curve().ok().flatten().is_some())
                     });
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(_) if max => t("fan.quick.max_active").into(),
-                    Ok(true) => t("fan.quick.auto_active").into(),
-                    Ok(false) => t("fan.quick.auto_bios").into(),
+                    Ok(_) if mode == FanMode::Bios => t("fan.quick.bios_active").into(),
+                    Ok(_) if mode == FanMode::Max => t("fan.quick.max_active").into(),
+                    Ok(true) => t("fan.quick.curve_active").into(),
+                    Ok(false) => t("fan.quick.curve_missing").into(),
                     Err(error) => tf("fan.quick.failed", &[&error]),
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
+            Some(Request::Graphics(mode)) => {
+                let result =
+                    crate::elevation::run(None, crate::elevation::Action::Graphics(mode), || false);
+                let name = graphics_name(mode);
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) if restart_pending() => tf("mux.pending", &[&name]),
+                    Ok(_) => tf("mux.active", &[&name]),
+                    Err(error) => tf("mux.failed", &[&error]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -324,6 +351,38 @@ fn worker(
     }
 }
 
+fn graphics_name(mode: GraphicsMode) -> &'static str {
+    match mode {
+        GraphicsMode::Hybrid => t("mux.hybrid"),
+        GraphicsMode::Discrete => t("mux.discrete"),
+    }
+}
+/// Whether the last graphics mode chosen in this boot still waits for a restart.
+fn restart_pending() -> bool {
+    omen_platform::profile_store::ProfileStore::user_data()
+        .ok()
+        .and_then(|store| store.graphics_mode())
+        .is_some_and(|record| record.restart_pending(omen_platform::boot_unix_s()))
+}
+/// Shows the saved fan and graphics choices; without a record the graphics
+/// switch shows the default Hybrid.
+unsafe fn sync_switches(hwnd: HWND) {
+    unsafe {
+        let store = omen_platform::profile_store::ProfileStore::user_data().ok();
+        let fan = store.as_ref().map(|s| s.fan_mode()).unwrap_or_default();
+        let graphics = store.as_ref().and_then(|s| s.graphics_mode());
+        crate::switch::select(GetDlgItem(hwnd, FAN_SWITCH as i32), fan.index());
+        crate::switch::select(
+            GetDlgItem(hwnd, MUX_SWITCH as i32),
+            graphics.map(|r| r.mode).unwrap_or_default().index(),
+        );
+        let pending = graphics.is_some_and(|r| r.restart_pending(omen_platform::boot_unix_s()));
+        SetWindowTextW(
+            GetDlgItem(hwnd, MUX_NOTE),
+            wide(if pending { t("mux.restart_note") } else { "" }).as_ptr(),
+        );
+    }
+}
 unsafe fn reload_modes(hwnd: HWND, state: &State) {
     unsafe {
         if state.profile.get().is_null() {
@@ -422,6 +481,7 @@ unsafe fn show_dashboard(hwnd: HWND, state: &State) {
             state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
             state.preview.set(GetDlgItem(hwnd, 181));
             reload_modes(hwnd, state);
+            sync_switches(hwnd);
             redraw(state);
         }
         ShowWindow(hwnd, SW_RESTORE);
@@ -485,6 +545,7 @@ unsafe extern "system" fn window_proc(
                 state.profile.set(GetDlgItem(hwnd, PROFILE as i32));
                 state.preview.set(GetDlgItem(hwnd, 181));
                 reload_modes(hwnd, state);
+                sync_switches(hwnd);
                 if [
                     state.details.get(),
                     state.profile.get(),
@@ -522,17 +583,9 @@ unsafe extern "system" fn window_proc(
                     state.theme.info(item);
                     1
                 } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
-                    state.theme.button(
-                        item,
-                        state.theme.body,
-                        item.CtlID == GPU_PROFILES as u32
-                            || item.CtlID
-                                == if state.fan_max.get() {
-                                    FAN_MAX
-                                } else {
-                                    FAN_AUTO
-                                } as u32,
-                    );
+                    state
+                        .theme
+                        .button(item, state.theme.body, item.CtlID == GPU_PROFILES as u32);
                     1
                 } else {
                     DefWindowProcW(hwnd, message, wparam, lparam)
@@ -540,7 +593,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 960, y: 700 };
+                info.ptMinTrackSize = POINT { x: 960, y: 715 };
                 0
             }
             WM_COMMAND => {
@@ -562,14 +615,17 @@ unsafe extern "system" fn window_proc(
                     reload_modes(hwnd, state);
                     let _ = state.tx.send(Request::Refresh);
                 }
-                if (id == FAN_AUTO || id == FAN_MAX) && (wparam >> 16) as u32 == BN_CLICKED {
-                    let max = id == FAN_MAX;
-                    if state.fan_max.replace(max) != max {
-                        for button in [FAN_AUTO, FAN_MAX] {
-                            InvalidateRect(GetDlgItem(hwnd, button as i32), ptr::null(), 0);
-                        }
+                if id == FAN_SWITCH {
+                    let index = crate::switch::selection(lparam as HWND);
+                    if let Some(mode) = FanMode::from_index(index) {
+                        let _ = state.tx.send(Request::FanMode(mode));
                     }
-                    let _ = state.tx.send(Request::FanMode(max));
+                }
+                if id == MUX_SWITCH {
+                    let index = crate::switch::selection(lparam as HWND);
+                    if let Some(mode) = GraphicsMode::from_index(index) {
+                        let _ = state.tx.send(Request::Graphics(mode));
+                    }
                 }
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
@@ -647,6 +703,7 @@ unsafe extern "system" fn window_proc(
                     .unwrap_or_else(|e| e.into_inner())
                     .take()
                 {
+                    sync_switches(hwnd);
                     *state.mode_status.borrow_mut() = message.clone();
                     if !state.preview.get().is_null() {
                         SetWindowTextW(
@@ -753,13 +810,13 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None, [1140, 730])
+    run_window(start_in_tray, None, [1140, 745])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path), [1140, 730])
+    run_window(false, Some(path), [1140, 745])
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
-    if size[0] < 960 || size[1] < 700 || size[0] > 2000 || size[1] > 1400 {
+    if size[0] < 960 || size[1] < 715 || size[0] > 2000 || size[1] > 1400 {
         return Err(t("error.preview_size").into());
     }
     run_window(false, Some(path), size)
@@ -786,9 +843,6 @@ fn run_window(
         mode_result: Arc::new(Mutex::new(None)),
         applying_preset: Cell::new(false),
         mode_status: RefCell::new(t("mode.bios_unreadable").into()),
-        fan_max: Cell::new(
-            omen_platform::profile_store::ProfileStore::user_data().is_ok_and(|s| s.fan_max()),
-        ),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.

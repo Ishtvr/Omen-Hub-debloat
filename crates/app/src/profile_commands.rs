@@ -65,6 +65,7 @@ pub fn handles(command: &str) -> bool {
             | "mode-ui-apply"
             | "cpu-smu-probe"
             | "fan-service"
+            | "mux-ui-apply"
             | "fan-service-install"
             | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
@@ -90,6 +91,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
             Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
             Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
+            Some("mux-ui-apply") if args.len() == 3 => Some(("mux", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -126,13 +128,35 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
             return print(&report);
         }
+        Some("mux-ui-apply") if args.len() == 3 => {
+            validate_nonce(Some(&args[2]))?;
+            let mode = omen_core::quick_switch::GraphicsMode::parse(&args[1])
+                .ok_or("Unknown graphics mode")?;
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::apply_graphics_mode(&omen_platform::inventory(), mode)?;
+            let store = ProfileStore::user_data()?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            let record = omen_core::quick_switch::GraphicsRecord::after_write(
+                store.graphics_mode(),
+                mode,
+                report.previous,
+                now,
+                omen_platform::boot_unix_s(),
+            );
+            store.save_graphics_mode(&record)?;
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"mux","nonce":args[2],"result":{"Ok":report}}))?;
+            return print(&report);
+        }
         Some("fan-service") if args.len() == 1 => {
             // Runs for the whole logon session from the protected task copy.
             let store = ProfileStore::user_data()?;
             let status = ProfileStore::user_data()?;
             return omen_platform::run_fan_service(
                 &omen_platform::inventory(),
-                || store.fan_max(),
+                || store.fan_mode(),
                 || store.active_fan_curve(),
                 || store.ccd_selection(),
                 |s| {

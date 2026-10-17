@@ -12,6 +12,7 @@ mod dashboard;
 mod elevation;
 #[cfg(windows)]
 mod i18n;
+#[cfg(windows)]
 mod inventory;
 #[cfg(windows)]
 mod keyboard_ui;
@@ -25,8 +26,12 @@ mod preset_ui;
 mod profile_commands;
 #[cfg(windows)]
 mod read_process;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod segments;
 #[cfg(windows)]
 mod startup_setup;
+#[cfg(windows)]
+mod switch;
 #[cfg(windows)]
 mod telemetry_worker;
 #[cfg(windows)]

@@ -24,8 +24,9 @@ pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
 pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
 pub use hp::{
-    HpModeReport, apply_hp_mode, read_hp_gpu_status, read_hp_graphics_mode, read_hp_keyboard_state,
-    read_hp_system_design, write_hp_gpu_power, write_hp_graphics_mode,
+    GraphicsModeReport, HpModeReport, apply_graphics_mode, apply_hp_mode, read_hp_gpu_status,
+    read_hp_graphics_mode, read_hp_keyboard_state, read_hp_system_design, write_hp_gpu_power,
+    write_hp_graphics_mode,
 };
 pub use lighting::DirectLighting;
 pub use nvidia::Nvidia;
@@ -35,7 +36,7 @@ pub use smu::{
 };
 pub use startup::{
     StartupInstallation, authorize_startup_profile, current_user_sid, fan_service_installed,
-    verify_startup_installation, verify_startup_profile,
+    fan_service_present, verify_startup_installation, verify_startup_profile,
 };
 use std::collections::HashMap;
 pub use thermal::{CoolingSnapshot, read_cooling_snapshot};
@@ -43,6 +44,16 @@ pub(crate) use user_data::profile_directory;
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use wmi::{Variant, WMIConnection};
 
+/// Wall-clock time of the current boot, from the system uptime.
+pub fn boot_unix_s() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    // SAFETY: Parameterless public uptime query.
+    let uptime_s =
+        unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() } / 1000;
+    now.saturating_sub(uptime_s)
+}
 pub fn power_status() -> PowerStatus {
     let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
     // SAFETY: status is a writable, correctly sized Windows structure.

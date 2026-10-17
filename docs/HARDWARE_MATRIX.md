@@ -31,7 +31,7 @@ Legende: **Lesen** = Messwert oder Zustand wird angezeigt. **Schreiben** = Sette
 | Fester CPU-Takt / feste Spannung | – | Nein | Nein | Wartet auf `cpu-smu-probe` (`oc_allowed`) und gemessenen OC-Modus-Restore |
 | Windows-Energie-/Prozessorrichtlinien, Bildwiederholrate | Ja | Ja | Ja | Dokumentierte Windows-APIs mit exaktem Rücklesen |
 | CCD-Affinität | Ja | Ja, ungemessen | Ja | Lüfterdienst pinnt das Vordergrundprogramm; alte Maske wird zurückgegeben |
-| Grafikmodus (MUX) | Ja, erhöht | Ja | Ja | HP-BIOS; wirkt erst nach Neustart |
+| Grafikmodus (MUX) | Ja, erhöht | Ja, ungemessen | Ja | HP-BIOS; Preset oder Dashboard-Schalter Hybrid/GPU only mit Rücklesen; wirkt erst nach Neustart |
 | Max-Fan-Override | Ja, erhöht | Ja, gemessen | Ja | Exakte Lüftertabelle/Topologie |
 | Eigene Lüfterkurve | Ja, erhöht | Über den Lüfterdienst | Dienst bei Anmeldung | Gemeinsame Kurve, Notfall-Vollkühlung; wartet, solange der Original-Hub läuft |
 | Lüfterdrehzahlen, IR-Sensor | Ja, erhöht | – | – | Feste BIOS-WMI-GETs, `cooling-read` |

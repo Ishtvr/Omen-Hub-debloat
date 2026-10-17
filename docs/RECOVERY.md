@@ -8,7 +8,7 @@ Diese Anleitung beschreibt, was Omen Hub++ auf einem Gerät verändern kann, wie
 | --- | --- | --- |
 | Preset-Einstellungen: NVIDIA-Offsets/V/F-Kurve, Max-Fan, Dynamic Boost, CPU-Limits/Curve Optimizer/PBO (SMU), Windows-Richtlinien, Bildwiederholrate, CCD-Affinität, Grafikmodus (MUX) | Nur bei ausdrücklichem **Anwenden** eines gespeicherten Custom Presets (UAC) oder beim freigegebenen Anmeldestart | Vor jedem SET in `control-journal.json` gespeichert; Readback nach dem Schreiben, Rollback bei Teilfehlern |
 | HP-Leistungsmodus Quiet/Balanced/Performance/Unleashed samt PL1 | Auswahl im Dashboard (UAC) | Kein Journal: Der Thermalmodus hat keinen GET; zurück geht es durch Auswahl von **Balanced** |
-| Lüfterkurve, Auto/Max-Schalter, CCD-Affinität im Betrieb | Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`) | Ohne gespeicherte Kurve sendet er nichts; Entfernen gibt die Lüfter an das BIOS zurück |
+| Lüfterkurve, Lüfterschalter Auto/Kurve/Max, CCD-Affinität im Betrieb | Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`) | Ohne gespeicherte Kurve sendet er nichts; Entfernen gibt die Lüfter an das BIOS zurück |
 | Tastaturfarben und Ein/Aus | Nur durch Klick im Fenster **Beleuchtung** (UAC) | Eigenes Journal unter `keyboard-control\` |
 | Profile und Entwürfe | **Speichern** im Editor | Reine Metadaten, keine Hardwarewirkung |
 | Windows-Anmeldestart | Nur nach ausdrücklicher Freigabe eines bereits angewendeten, unterstützten Presets | Geplante Aufgabe `OmenHubPP-Profile-<SID>` |
@@ -18,7 +18,7 @@ Omen Hub++ stoppt oder entfernt keine HP-Dienste, installiert keinen Treiber und
 ## Speicherorte
 
 - **Benutzerdaten:** `%USERPROFILE%\.omen-hub-pp\` – `profiles\`, `deleted-profiles\` (archivierte Originalbytes), `control-journal.json` (Originalbild des letzten Apply), `control-history\` (Sicherungen früherer abgeschlossener Journale aus Qualifikationsläufen), `startup.json`, `last-*.json`, `keyboard-control\` (Beleuchtungsjournal).
-- **Lüfterdienst und CCD-Affinität:** `active-fan-curve.json`, `fan-mode.json` und `ccd-affinity.json` im selben Ordner.
+- **Lüfterdienst und CCD-Affinität:** `active-fan-curve.json`, `fan-mode.json` und `ccd-affinity.json` im selben Ordner; der Grafikschalter merkt sich seine letzte Auswahl in `graphics-mode.json`.
 - **Installation:** `%ProgramFiles%\OmenHubPlusPlus\` – `Omen Hub++.exe`, `installation.json` (Startup-Beleg), `startup-authorized-<SID>.json` sowie für den Lüfterdienst `Omen Hub++ Fan.exe` und `fan-service-<SID>.json`.
 - **Verknüpfungen:** `Omen Hub++.lnk` im Startmenü (Programme) und auf dem Desktop des installierenden Benutzers.
 
@@ -44,7 +44,11 @@ Im Dashboard **Balanced (Default)** wählen. Das schreibt den ausgelieferten Bal
 
 ### Lüfter
 
-Der Schnellschalter auf der Startseite stellt **Auto** (gespeicherte Kurve) oder **Max** ein. Um die Lüfter vollständig dem BIOS zu überlassen, den Lüfterdienst entfernen (siehe Deinstallation, Schritt 2).
+Der Lüfterschalter auf der Startseite auf **Auto** stellen: Der Dienst sendet dann nichts mehr und das BIOS regelt mit seiner Standardkurve. Um den Dienst ganz zu entfernen, siehe Deinstallation, Schritt 2.
+
+### Grafikmodus (MUX)
+
+Der Grafikschalter auf der Startseite schreibt **Hybrid** oder **GPU only** nach Windows-Freigabe ins BIOS und liest den Wert zurück; aktiv wird er erst nach einem Neustart. Zurück geht es mit **Hybrid** und einem weiteren Neustart. Die letzte Auswahl steht in `graphics-mode.json`.
 
 ### Tastaturbeleuchtung
 

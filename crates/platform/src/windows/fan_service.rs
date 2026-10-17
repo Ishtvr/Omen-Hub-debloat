@@ -11,6 +11,7 @@ use omen_core::{
     cooling::FirmwareIrTemperature,
     fan::{self, FanCurve, Smoother},
     profiles::FanPoint,
+    quick_switch::FanMode,
 };
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -98,13 +99,14 @@ fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
     .map_err(String::from)
 }
 
-/// Runs until the process ends. `max` is the dashboard quick switch (both
-/// fans at maximum); otherwise `load` returns the active shared curve (None:
-/// leave the BIOS in charge). `ccd` returns the saved CCD selection (None:
-/// every CCD). `report` persists each status.
+/// Runs until the process ends. `mode` is the dashboard fan switch: Auto
+/// leaves the BIOS table in charge, Curve follows `load` (the active shared
+/// curve; None also leaves the BIOS in charge) and Max runs both fans at
+/// maximum. `ccd` returns the saved CCD selection (None: every CCD).
+/// `report` persists each status.
 pub fn run(
     inventory: &Inventory,
-    mut max: impl FnMut() -> bool,
+    mut mode: impl FnMut() -> FanMode,
     mut load: impl FnMut() -> Result<Option<Vec<FanPoint>>, String>,
     mut ccd: impl FnMut() -> Result<Option<u8>, String>,
     mut report: impl FnMut(&FanServiceStatus),
@@ -168,7 +170,17 @@ pub fn run(
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
-        let max = max();
+        let mode = mode();
+        if mode == FanMode::Bios {
+            last_heartbeat = None;
+            report(&idle(
+                "bios",
+                omen_core::message::msg("fan.status.bios", &[]),
+            ));
+            std::thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+        let max = mode == FanMode::Max;
         let curve = match load().and_then(|p| p.map(|p| curve_of(&p)).transpose()) {
             Ok(curve) if max => curve,
             Ok(Some(curve)) => Some(curve),

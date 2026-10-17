@@ -107,7 +107,6 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
             ),
             (146, "", th.small, true, true),
             (150, t("dash.controls"), th.heading, false, false),
-            (151, t("fan.quick.label"), th.body, false, true),
             (160, t("dash.system"), th.heading, false, false),
             (161, t("dash.mode"), th.body, false, false),
             (181, t("mode.bios_unreadable"), th.small, false, true),
@@ -160,9 +159,41 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
             false,
             false,
         );
-        for (id, label) in [(106, "fan.quick.auto"), (107, "fan.quick.max")] {
-            control(id, "BUTTON", t(label), WS_TABSTOP, th.body, false, false);
+        // Switch captions hug their switch; the restart note sits under "Graphics".
+        for (id, value, font) in [
+            (151, t("fan.quick.label"), th.body),
+            (152, t("mux.label"), th.body),
+            (153, "", th.small),
+        ] {
+            control(
+                id,
+                "STATIC",
+                value,
+                windows_sys::Win32::System::SystemServices::SS_RIGHT,
+                font,
+                false,
+                true,
+            );
         }
+        // Position switches: fans Auto/Curve/Max, graphics Hybrid/GPU only.
+        crate::switch::create(
+            hwnd,
+            106,
+            t("fan.quick.label"),
+            &[
+                t("fan.quick.auto"),
+                t("fan.quick.curve"),
+                t("fan.quick.max"),
+            ],
+            th,
+        );
+        crate::switch::create(
+            hwnd,
+            107,
+            t("mux.label"),
+            &[t("mux.hybrid"), t("mux.discrete")],
+            th,
+        );
         let combo = control(
             102,
             "COMBOBOX",
@@ -234,19 +265,47 @@ pub unsafe fn layout(hwnd: HWND) {
             (144, [right + 24, 290, content, 24]),
             (145, [right + 24, 318, content, 22]),
             (146, [right + 24, 344, content, 26]),
-            (150, [28, PANEL_BOTTOM + 24, width - 400, 30]),
-            // Fan quick switch, right-aligned on the Controls heading line.
-            (151, [width - 262, PANEL_BOTTOM + 28, 60, 24]),
-            (106, [width - 196, PANEL_BOTTOM + 20, 82, 34]),
-            (107, [width - 110, PANEL_BOTTOM + 20, 82, 34]),
+            (150, [28, PANEL_BOTTOM + 24, width - 640, 30]),
+        ]);
+        // Fan and graphics switches, right-aligned on the Controls heading
+        // line; their option names sit underneath the stops.
+        let switch_top = PANEL_BOTTOM + 18;
+        let switch_height = crate::segments::TRACK + crate::segments::LABEL_GAP + 20;
+        let caption = |id: i32, value: &str| {
+            let label = GetDlgItem(hwnd, id);
+            let font = SendMessageW(label, WM_GETFONT, 0, 0) as HFONT;
+            crate::native_ui::text_width(label, font, value) + 12
+        };
+        let mux_width = 172;
+        let fan_width = 228;
+        let mux_x = width - 28 - mux_width;
+        // The restart note sits under the caption, so the column fits both.
+        let mux_caption = caption(152, t("mux.label")).max(caption(153, t("mux.restart_note")));
+        let fan_x = mux_x - mux_caption - 36 - fan_width;
+        let fan_caption = caption(151, t("fan.quick.label"));
+        boxes.extend([
+            (
+                151,
+                [fan_x - fan_caption, switch_top + 3, fan_caption - 10, 24],
+            ),
+            (106, [fan_x, switch_top, fan_width, switch_height]),
+            (
+                152,
+                [mux_x - mux_caption, switch_top + 3, mux_caption - 10, 24],
+            ),
+            (
+                153,
+                [mux_x - mux_caption, switch_top + 30, mux_caption - 10, 20],
+            ),
+            (107, [mux_x, switch_top, mux_width, switch_height]),
         ]);
         let action = (width - 56 - 32) / 3;
         for (i, id) in [103, 104, 105].iter().enumerate() {
             let x = 28 + i as i32 * (action + 16);
-            boxes.push((*id, [x, PANEL_BOTTOM + 65, action, 44]));
+            boxes.push((*id, [x, PANEL_BOTTOM + 80, action, 44]));
         }
         // Content stays top-aligned; a taller window only adds space below it.
-        let bottom = PANEL_BOTTOM + 150;
+        let bottom = PANEL_BOTTOM + 165;
         let label = GetDlgItem(hwnd, 161);
         let font = SendMessageW(label, WM_GETFONT, 0, 0) as HFONT;
         let mode_label = crate::native_ui::text_width(label, font, t("dash.mode")) + 4;
