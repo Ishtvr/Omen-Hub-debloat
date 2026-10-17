@@ -179,4 +179,16 @@ mod tests {
             assert!(FanCurve::new(points).is_err());
         }
     }
+    #[test]
+    fn emergency_triggers_on_nan_hot_gpu_or_surface() {
+        assert!(emergency(Some(f32::NAN), Some(50.0), None, 0));
+        assert!(emergency(Some(f32::INFINITY), Some(50.0), None, 0));
+        assert!(emergency(Some(70.0), Some(GPU_EMERGENCY_C), None, 0));
+        assert!(emergency(Some(70.0), Some(86.0), None, 0));
+        assert!(!emergency(Some(70.0), Some(84.9), None, 0));
+        assert!(emergency(Some(70.0), None, Some(IR_EMERGENCY_C), 0));
+        assert!(emergency(Some(70.0), None, Some(56), 0));
+        assert!(!emergency(Some(70.0), None, Some(54), 0));
+        assert!(emergency(Some(70.0), None, None, 1));
+    }
 }

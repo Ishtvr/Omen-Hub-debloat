@@ -1992,3 +1992,61 @@ impl Backend for Controller {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mux_choice_and_mode_bidirectional() {
+        assert_eq!(mux_choice(0), Choice::Hybrid);
+        assert_eq!(mux_choice(1), Choice::DiscreteOnly);
+        assert_eq!(mux_choice(3), Choice::IntegratedOnly);
+        assert_eq!(mux_choice(2), Choice::Manual);
+        assert_eq!(mux_choice(255), Choice::Manual);
+
+        assert_eq!(mux_mode(Choice::Hybrid).unwrap(), 0);
+        assert_eq!(mux_mode(Choice::DiscreteOnly).unwrap(), 1);
+        assert_eq!(mux_mode(Choice::IntegratedOnly).unwrap(), 3);
+        assert!(mux_mode(Choice::Manual).is_err());
+        assert!(mux_mode(Choice::Balanced).is_err());
+    }
+
+    #[test]
+    fn uses_nvidia_feature_categorization() {
+        assert!(uses_nvidia(Feature::GpuCoreOffsetMhz));
+        assert!(uses_nvidia(Feature::GpuMemoryOffsetMhz));
+        assert!(uses_nvidia(Feature::GpuVfCurve));
+
+        assert!(!uses_nvidia(Feature::WindowsPowerPlan));
+        assert!(!uses_nvidia(Feature::WindowsBoostMode));
+        assert!(!uses_nvidia(Feature::CpuCurveOptimizerAllCore));
+        assert!(!uses_nvidia(Feature::CpuPptLimitMw));
+        assert!(!uses_nvidia(Feature::KeyboardColors));
+        assert!(!uses_nvidia(Feature::CpuFanCurve));
+    }
+
+    #[test]
+    fn restore_state_round_trip() {
+        let states = [
+            RestoreState::HpGpuPower {
+                custom_tgp: true,
+                ppab: true,
+            },
+            RestoreState::HpGraphicsMode { mode: 1 },
+            RestoreState::AmdSmu {
+                image: crate::windows::cpu_tuning::SmuImage::Limit { value: 65_000 },
+            },
+            RestoreState::Windows {
+                image: crate::windows::windows_settings::WindowsImage::ActiveScheme {
+                    scheme: 0x1234_5678,
+                },
+            },
+        ];
+        for state in states {
+            let text = serde_json::to_string(&state).unwrap();
+            let parsed: RestoreState = serde_json::from_str(&text).unwrap();
+            assert_eq!(parsed, state);
+        }
+    }
+}

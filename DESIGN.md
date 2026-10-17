@@ -168,6 +168,10 @@ Actions are clear and direct. The native `BUTTON` role, labels, keyboard activat
 
 The dashboard's two sensor panels are flat tonal containers with gently curved corners and aligned internal values. Their measured values use metric typography; source, interval, clocks and limits use smaller supporting roles. Other windows use the shared client ground and field surfaces without adding decorative containers.
 
+### Position switches
+
+The dashboard's fan (**Auto / Kurve / Max**) and graphics (**Hybrid / GPU only**) switches are custom native controls in the shared palette. A `field` pill with a one-unit `border` rim holds a `border` rail with small `muted` stops; the selected stop is a larger `accent` knob. The option names sit underneath in the small role, the selected one in `foreground`. Hover enlarges and brightens a stop, keyboard focus turns the rim `accent`, and arrow/Home/End keys move the selection. Shapes are drawn at four times the size and halftone-scaled, so the circles stay smooth without anti-aliased GDI. Captions sit right-aligned beside each switch; **Neustart nötig** appears under the graphics caption while a chosen mode waits for a restart.
+
 ### Inputs / Fields
 
 Standard Win32 `EDIT` and `COMBOBOX` controls retain their native roles and interaction. Both use field slate and bright text. The selector paints its selected text, chevron and boundary in the shared palette; its native dropdown remains the selection mechanism. Read-only status and inventory fields use the same surface vocabulary. Disabled values remain disabled controls, rather than becoming draft values.

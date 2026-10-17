@@ -254,6 +254,18 @@ impl Drop for Apartment {
     }
 }
 
+/// Whether any build of the logon fan service is installed (its receipt
+/// exists), even one that predates the current executable.
+pub fn fan_service_present() -> bool {
+    std::env::var_os("ProgramFiles").is_some_and(|files| {
+        current_user_sid().is_ok_and(|sid| {
+            PathBuf::from(files)
+                .join("OmenHubPlusPlus")
+                .join(format!("fan-service-{sid}.json"))
+                .is_file()
+        })
+    })
+}
 /// Whether the logon fan service is installed from this exact build (receipt
 /// written by scripts/install-fan-service.ps1 in the protected directory).
 pub fn fan_service_installed() -> bool {

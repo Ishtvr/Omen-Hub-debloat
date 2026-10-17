@@ -65,21 +65,47 @@ pub fn handles(feature: Feature) -> bool {
     )
 }
 
+mod guid_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{value:032x}"))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let clean = s.replace('-', "");
+        u128::from_str_radix(&clean, 16)
+            .or_else(|_| clean.parse::<u128>())
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// Complete original of one control. Power indices keep AC and DC separately;
 /// a profile writes both, so the captured pair restores either power source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WindowsImage {
     PowerIndex {
+        #[serde(with = "guid_hex")]
         scheme: u128,
+        #[serde(with = "guid_hex")]
         setting: u128,
         ac: u32,
         dc: u32,
     },
     ActiveScheme {
+        #[serde(with = "guid_hex")]
         scheme: u128,
     },
     Overlay {
+        #[serde(with = "guid_hex")]
         overlay: u128,
     },
     Refresh {
@@ -399,7 +425,7 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
         (Feature::CpuCcdAffinity, Value::Integer(v)) => {
             ccd::validate(*v, super::ccd::ccd_masks()?.len()).map(|_| ())
         }
-        (f, Value::Integer(v)) if power_setting(f).is_some() => {
+        (f, Value::Integer(v)) if power_setting(f).is_some() && f != Feature::WindowsBoostMode => {
             if (0..=100).contains(v) {
                 Ok(())
             } else {
@@ -518,5 +544,133 @@ mod tests {
             value(Feature::WindowsBoostMode, &image).unwrap(),
             Value::Choice(Choice::Aggressive)
         );
+    }
+
+    #[test]
+    fn handles_all_ten_windows_features() {
+        for f in [
+            Feature::WindowsBoostMode,
+            Feature::WindowsEnergyMode,
+            Feature::WindowsPowerPlan,
+            Feature::WindowsMinimumProcessorPercent,
+            Feature::WindowsMaximumProcessorPercent,
+            Feature::WindowsProcessorEppPercent,
+            Feature::WindowsCoreParkingMinPercent,
+            Feature::WindowsCoreParkingMaxPercent,
+            Feature::DisplayRefreshRateHz,
+            Feature::CpuCcdAffinity,
+        ] {
+            assert!(handles(f), "{f:?} should be handled");
+        }
+        assert!(!handles(Feature::GpuCoreOffsetMhz));
+        assert!(!handles(Feature::CpuFanCurve));
+    }
+
+    #[test]
+    fn all_windows_images_round_trip_through_json() {
+        let images = [
+            WindowsImage::PowerIndex {
+                scheme: PLAN_BALANCED,
+                setting: MIN_STATE,
+                ac: 5,
+                dc: 5,
+            },
+            WindowsImage::ActiveScheme { scheme: PLAN_HIGH },
+            WindowsImage::Overlay {
+                overlay: OVERLAY_PERFORMANCE,
+            },
+            WindowsImage::Refresh {
+                width: 2560,
+                height: 1440,
+                hz: 165,
+            },
+        ];
+        for image in images {
+            let text = serde_json::to_string(&image).unwrap();
+            let parsed: WindowsImage = serde_json::from_str(&text).unwrap();
+            assert_eq!(parsed, image);
+        }
+    }
+
+    #[test]
+    fn value_mapping_for_schemes_overlays_and_refresh() {
+        for (scheme, expected) in [
+            (PLAN_POWER_SAVER, Choice::PowerSaver),
+            (PLAN_BALANCED, Choice::Balanced),
+            (PLAN_HIGH, Choice::HighPerformance),
+            (0x1234_5678, Choice::Manual),
+        ] {
+            let image = WindowsImage::ActiveScheme { scheme };
+            assert_eq!(
+                value(Feature::WindowsPowerPlan, &image).unwrap(),
+                Value::Choice(expected)
+            );
+        }
+
+        for (overlay, expected) in [
+            (OVERLAY_EFFICIENCY, Choice::BestEfficiency),
+            (OVERLAY_BALANCED, Choice::Balanced),
+            (OVERLAY_PERFORMANCE, Choice::BestPerformance),
+            (0x9999_8888, Choice::Manual),
+        ] {
+            let image = WindowsImage::Overlay { overlay };
+            assert_eq!(
+                value(Feature::WindowsEnergyMode, &image).unwrap(),
+                Value::Choice(expected)
+            );
+        }
+
+        let refresh_image = WindowsImage::Refresh {
+            width: 1920,
+            height: 1080,
+            hz: 144,
+        };
+        assert_eq!(
+            value(Feature::DisplayRefreshRateHz, &refresh_image).unwrap(),
+            Value::Integer(144)
+        );
+
+        let percent_image = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: MIN_STATE,
+            ac: 10,
+            dc: 5,
+        };
+        assert_eq!(
+            value(Feature::WindowsMinimumProcessorPercent, &percent_image).unwrap(),
+            Value::Integer(10)
+        );
+    }
+
+    #[test]
+    fn offline_validation_checks_boost_and_percentages() {
+        assert!(
+            validate(
+                Feature::WindowsBoostMode,
+                &Value::Choice(Choice::Aggressive)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                Feature::WindowsBoostMode,
+                &Value::Choice(Choice::HighPerformance)
+            )
+            .is_err()
+        );
+        assert!(validate(Feature::WindowsBoostMode, &Value::Integer(1)).is_err());
+
+        for percent_feat in [
+            Feature::WindowsMinimumProcessorPercent,
+            Feature::WindowsMaximumProcessorPercent,
+            Feature::WindowsProcessorEppPercent,
+            Feature::WindowsCoreParkingMinPercent,
+            Feature::WindowsCoreParkingMaxPercent,
+        ] {
+            assert!(validate(percent_feat, &Value::Integer(0)).is_ok());
+            assert!(validate(percent_feat, &Value::Integer(100)).is_ok());
+            assert!(validate(percent_feat, &Value::Integer(101)).is_err());
+            assert!(validate(percent_feat, &Value::Integer(-1)).is_err());
+        }
     }
 }

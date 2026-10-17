@@ -13,6 +13,7 @@ pub mod keyboard;
 pub mod message;
 pub mod preset;
 pub mod profiles;
+pub mod quick_switch;
 pub mod supervisor;
 pub mod transaction;
 pub mod vf;

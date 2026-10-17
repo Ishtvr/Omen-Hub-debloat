@@ -489,6 +489,39 @@ pub struct HpModeReport {
     pub cpu_limits_w: Option<(i64, i64)>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphicsModeReport {
+    pub previous: u8,
+    pub requested: u8,
+    pub readback: u8,
+    pub written: bool,
+}
+/// Dashboard MUX switch: writes the BIOS graphics mode only when it differs
+/// and reads it back. The BIOS applies the stored mode at the next restart.
+pub fn apply_graphics_mode(
+    inventory: &Inventory,
+    mode: omen_core::quick_switch::GraphicsMode,
+) -> Result<GraphicsModeReport, String> {
+    let requested = mode.bios_byte();
+    let previous = read_hp_graphics_mode(inventory)?;
+    let written = previous != requested;
+    if written {
+        write_hp_graphics_mode(inventory, requested)?;
+    }
+    let readback = read_hp_graphics_mode(inventory)?;
+    if readback != requested {
+        return Err(format!(
+            "BIOS graphics mode readback {readback} differs from requested {requested}"
+        ));
+    }
+    Ok(GraphicsModeReport {
+        previous,
+        requested,
+        readback,
+        written,
+    })
+}
+
 /// Switches the notebook to one of the Hub's modes. The thermal mode cannot
 /// be read back; the GPU cTGP/PPAB flags and, when the SMU is reachable, the
 /// CPU PL1 are verified afterwards. Any failed mode falls back to Balanced.

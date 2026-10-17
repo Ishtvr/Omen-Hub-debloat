@@ -372,4 +372,155 @@ mod tests {
         assert!(validate(Feature::CpuCurveOptimizerAllCore, &Value::Integer(-60)).is_err());
         assert!(validate(Feature::CpuPboScalar, &Value::Integer(11)).is_err());
     }
+
+    #[test]
+    fn handles_and_ranges_cover_all_tuning_domains() {
+        for f in [
+            Feature::CpuCurveOptimizerAllCore,
+            Feature::CpuCurveOptimizerPerCore,
+            Feature::CpuPboScalar,
+            Feature::CpuPptLimitMw,
+            Feature::CpuStapmLimitMw,
+            Feature::CpuSlowPptLimitMw,
+            Feature::CpuTdcMa,
+            Feature::CpuEdcMa,
+            Feature::CpuTemperatureLimitC,
+        ] {
+            assert!(handles(f), "{f:?} should be handled");
+        }
+        assert!(!handles(Feature::GpuCoreOffsetMhz));
+        assert!(!handles(Feature::WindowsBoostMode));
+
+        assert_eq!(range(Feature::CpuPboScalar), (1, 10));
+        assert_eq!(range(Feature::CpuPptLimitMw), (15_000, 160_000));
+        assert_eq!(range(Feature::CpuTdcMa), (30_000, 108_000));
+        assert_eq!(range(Feature::CpuEdcMa), (30_000, 160_000));
+        assert_eq!(range(Feature::CpuTemperatureLimitC), (60, 95));
+        assert_eq!(range(Feature::CpuCurveOptimizerAllCore), (-50, 30));
+    }
+
+    #[test]
+    fn limit_validation_checks_bounds_and_hp_whole_watts() {
+        assert!(validate(Feature::CpuPptLimitMw, &Value::Integer(45_000)).is_ok());
+        assert!(validate(Feature::CpuPptLimitMw, &Value::Integer(10_000)).is_err());
+        assert!(validate(Feature::CpuPptLimitMw, &Value::Integer(200_000)).is_err());
+
+        // HP limits (STAPM and Slow PPT) require whole watts (v % 1000 == 0)
+        assert!(validate(Feature::CpuStapmLimitMw, &Value::Integer(45_000)).is_ok());
+        assert!(validate(Feature::CpuStapmLimitMw, &Value::Integer(45_500)).is_err());
+        assert!(validate(Feature::CpuSlowPptLimitMw, &Value::Integer(30_000)).is_ok());
+        assert!(validate(Feature::CpuSlowPptLimitMw, &Value::Integer(30_250)).is_err());
+
+        assert!(validate(Feature::CpuTdcMa, &Value::Integer(80_000)).is_ok());
+        assert!(validate(Feature::CpuTdcMa, &Value::Integer(20_000)).is_err());
+        assert!(validate(Feature::CpuTdcMa, &Value::Integer(120_000)).is_err());
+
+        assert!(validate(Feature::CpuEdcMa, &Value::Integer(140_000)).is_ok());
+        assert!(validate(Feature::CpuEdcMa, &Value::Integer(20_000)).is_err());
+        assert!(validate(Feature::CpuEdcMa, &Value::Integer(180_000)).is_err());
+
+        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(85)).is_ok());
+        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(50)).is_err());
+        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(100)).is_err());
+
+        // Type mismatches
+        assert!(
+            validate(
+                Feature::CpuPptLimitMw,
+                &Value::Choice(omen_core::profiles::Choice::Manual)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn per_core_validation_rejects_invalid_ccd_core_or_steps() {
+        let valid_cores: Vec<_> = (0..16)
+            .map(|i| CoreDelta {
+                ccd: (i / 8) as u8,
+                core: (i % 8) as u8,
+                steps: -15,
+            })
+            .collect();
+        assert!(
+            validate(
+                Feature::CpuCurveOptimizerPerCore,
+                &Value::PerCore(valid_cores)
+            )
+            .is_ok()
+        );
+
+        let invalid_ccd = vec![CoreDelta {
+            ccd: 2,
+            core: 0,
+            steps: -10,
+        }];
+        assert!(
+            validate(
+                Feature::CpuCurveOptimizerPerCore,
+                &Value::PerCore(invalid_ccd)
+            )
+            .is_err()
+        );
+
+        let invalid_core = vec![CoreDelta {
+            ccd: 0,
+            core: 8,
+            steps: -10,
+        }];
+        assert!(
+            validate(
+                Feature::CpuCurveOptimizerPerCore,
+                &Value::PerCore(invalid_core)
+            )
+            .is_err()
+        );
+
+        let invalid_steps = vec![CoreDelta {
+            ccd: 0,
+            core: 0,
+            steps: -55,
+        }];
+        assert!(
+            validate(
+                Feature::CpuCurveOptimizerPerCore,
+                &Value::PerCore(invalid_steps)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn smu_image_round_trips_and_maps_values() {
+        for image in [
+            SmuImage::Margins {
+                margins: vec![-10, 0, 5, -30],
+            },
+            SmuImage::PboScalar {
+                bits: 2.0f32.to_bits(),
+            },
+            SmuImage::Limit { value: 65_000 },
+        ] {
+            let text = serde_json::to_string(&image).unwrap();
+            let parsed: SmuImage = serde_json::from_str(&text).unwrap();
+            assert_eq!(parsed, image);
+        }
+
+        assert_eq!(
+            value(Feature::CpuPptLimitMw, &SmuImage::Limit { value: 55_000 }).unwrap(),
+            Value::Integer(55_000)
+        );
+        assert_eq!(
+            value(
+                Feature::CpuCurveOptimizerAllCore,
+                &SmuImage::Margins {
+                    margins: vec![-25; 16]
+                }
+            )
+            .unwrap(),
+            Value::Integer(-25)
+        );
+
+        assert!(value(Feature::CpuPptLimitMw, &SmuImage::PboScalar { bits: 0 }).is_err());
+    }
 }

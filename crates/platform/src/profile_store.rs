@@ -1,6 +1,7 @@
 //! Bounded, versioned profile persistence and durable hardware transaction journal.
 use omen_core::{
     profiles::{PerformanceProfile, validate_id},
+    quick_switch::{FanMode, GraphicsMode, GraphicsRecord},
     transaction::{Completion, Journal, PendingTransaction},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -389,18 +390,44 @@ impl ProfileStore {
         }
         Ok(())
     }
-    /// Dashboard quick switch: `true` runs both fans at maximum, `false`
-    /// follows the saved curve (or the BIOS without one).
-    pub fn save_fan_max(&self, max: bool) -> Result<(), String> {
+    /// Dashboard fan switch, read by the elevated fan service every cycle.
+    pub fn save_fan_mode(&self, mode: FanMode) -> Result<(), String> {
         atomic_json(
             &self.root.join("fan-mode.json"),
-            &serde_json::json!({"schema": 1, "mode": if max { "max" } else { "auto" }}),
+            &serde_json::json!({"schema": 1, "mode": mode.key()}),
         )
     }
-    /// Absent or unreadable means Auto: the saved curve stays in charge.
-    pub fn fan_max(&self) -> bool {
+    /// Absent or unreadable means Auto: the BIOS keeps its own fan table.
+    pub fn fan_mode(&self) -> FanMode {
         read_json::<serde_json::Value>(&self.root.join("fan-mode.json"))
-            .is_ok_and(|v| v["schema"] == 1 && v["mode"] == "max")
+            .ok()
+            .filter(|v| v["schema"] == 1)
+            .and_then(|v| v["mode"].as_str().map(FanMode::parse))
+            .unwrap_or_default()
+    }
+    /// Graphics mode last written by the dashboard switch; the BIOS applies
+    /// it at the next restart.
+    pub fn save_graphics_mode(&self, record: &GraphicsRecord) -> Result<(), String> {
+        atomic_json(
+            &self.root.join("graphics-mode.json"),
+            &serde_json::json!({
+                "schema": 1,
+                "mode": record.mode.key(),
+                "written_unix_s": record.written_unix_s,
+                "boot_mode": record.boot_mode.map(GraphicsMode::key),
+            }),
+        )
+    }
+    pub fn graphics_mode(&self) -> Option<GraphicsRecord> {
+        let value = read_json::<serde_json::Value>(&self.root.join("graphics-mode.json")).ok()?;
+        if value["schema"] != 1 {
+            return None;
+        }
+        Some(GraphicsRecord {
+            mode: GraphicsMode::parse(value["mode"].as_str()?)?,
+            written_unix_s: value["written_unix_s"].as_u64()?,
+            boot_mode: value["boot_mode"].as_str().and_then(GraphicsMode::parse),
+        })
     }
     /// CCD selection the background service pins foreground programs to
     /// (bit 0 = first CCD). Absent means every CCD: Windows schedules freely.
@@ -612,6 +639,42 @@ mod tests {
             let _ = fs::remove_dir(root.join("control-history"));
             let _ = fs::remove_dir(root.join("deleted-profiles"));
             let _ = fs::remove_dir(root);
+        }
+    }
+    #[test]
+    fn quick_switches_persist_and_read_legacy_fan_files() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.fan_mode(), FanMode::Bios);
+        for mode in FanMode::ALL {
+            store.save_fan_mode(mode).unwrap();
+            assert_eq!(store.fan_mode(), mode);
+        }
+        // The two-way switch stored "auto" for following the saved curve.
+        atomic_json(
+            &store.root().join("fan-mode.json"),
+            &serde_json::json!({"schema": 1, "mode": "auto"}),
+        )
+        .unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Curve);
+        assert_eq!(store.graphics_mode(), None);
+        for record in [
+            GraphicsRecord {
+                mode: GraphicsMode::Discrete,
+                written_unix_s: 1_700,
+                boot_mode: Some(GraphicsMode::Hybrid),
+            },
+            GraphicsRecord {
+                mode: GraphicsMode::Hybrid,
+                written_unix_s: 1_800,
+                boot_mode: None,
+            },
+        ] {
+            store.save_graphics_mode(&record).unwrap();
+            assert_eq!(store.graphics_mode(), Some(record));
+        }
+        for name in ["fan-mode.json", "graphics-mode.json"] {
+            fs::remove_file(store.root().join(name)).unwrap();
         }
     }
     fn profile() -> PerformanceProfile {
@@ -857,5 +920,55 @@ mod tests {
         assert_eq!(fs::read(source.0.journal_path()).unwrap(), original_bytes);
         assert!(target.0.migrate_from(source.0.root()).is_err());
         assert_eq!(target.0.load("test").unwrap(), profile());
+    }
+    #[test]
+    fn active_fan_curve_and_fan_mode_round_trip() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.active_fan_curve().unwrap(), None);
+        assert_eq!(store.fan_mode(), FanMode::Bios);
+
+        let points = vec![
+            omen_core::profiles::FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+            omen_core::profiles::FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+        ];
+        store.save_active_fan_curve(&points).unwrap();
+        assert_eq!(
+            store.active_fan_curve().unwrap().as_deref(),
+            Some(points.as_slice())
+        );
+
+        let invalid = vec![
+            omen_core::profiles::FanPoint {
+                temperature_c: 80,
+                duty_percent: 90,
+            },
+            omen_core::profiles::FanPoint {
+                temperature_c: 40,
+                duty_percent: 30,
+            },
+        ];
+        assert!(store.save_active_fan_curve(&invalid).is_err());
+
+        store.save_fan_mode(FanMode::Max).unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Max);
+        store.save_fan_mode(FanMode::Bios).unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Bios);
+
+        store.clear_active_fan_curve().unwrap();
+        assert_eq!(store.active_fan_curve().unwrap(), None);
+
+        assert_eq!(store.fan_status().unwrap(), None);
+        store
+            .save_fan_status(&serde_json::json!({"state": "curve", "schema": 1}))
+            .unwrap();
+        let status = store.fan_status().unwrap().unwrap();
+        assert_eq!(status["state"], "curve");
     }
 }
