@@ -6,13 +6,12 @@ use omen_core::{
 };
 
 /// Language keys of the collapsible groups, in display order.
-pub const GROUPS: [&str; 9] = [
+pub const GROUPS: [&str; 8] = [
     "group.gpu",
     "group.limits",
     "group.pbo",
     "group.curve_optimizer",
     "group.curve_optimizer_per_core",
-    "group.clock_voltage",
     "group.intel",
     "group.processor",
     "group.energy_display",
@@ -21,7 +20,7 @@ pub const GROUPS: [&str; 9] = [
 pub const SECTIONS: &[(usize, &str)] = &[
     (0, "section.gpu"),
     (1, "section.cpu"),
-    (7, "section.windows"),
+    (6, "section.windows"),
 ];
 pub struct Field {
     pub feature: F,
@@ -74,8 +73,19 @@ pub const REMOVED_APU_OPTIONS: &[F] = &[
 ];
 /// No Dragon Range control exists for these: the SMU and the original Hub
 /// offer no AMD boost profile (Windows EPP/boost cover it) and no all-core
-/// millivolt offset (Curve Optimizer is the Zen 4 offset).
-pub const REMOVED_CPU_OPTIONS: &[F] = &[F::CpuBoostProfile, F::CpuAllCoreVoltageOffsetMv];
+/// millivolt offset (Curve Optimizer is the Zen 4 offset). Fixed clocks,
+/// core ratios and fixed voltages are removed at the user's request
+/// (17 October 2026): most laptop firmware locks them, so the editor keeps
+/// to the UXTU power, PBO and Curve Optimizer settings.
+pub const REMOVED_CPU_OPTIONS: &[F] = &[
+    F::CpuBoostProfile,
+    F::CpuAllCoreVoltageOffsetMv,
+    F::AmdCpuVoltageMv,
+    F::AmdCpuClockMhz,
+    F::IntelCoreRatios,
+    F::IntelCacheVoltageOffsetMv,
+    F::IntelSystemAgentVoltageOffsetMv,
+];
 pub fn retired(feature: F) -> bool {
     REMOVED_GPU_OPTIONS.contains(&feature)
         || REMOVED_APU_OPTIONS.contains(&feature)
@@ -97,27 +107,22 @@ pub fn fields() -> Vec<Field> {
         (F::CpuPboScalar, 2, 1),
         (F::CpuCurveOptimizerAllCore, 3, 0),
         (F::CpuCurveOptimizerPerCore, 4, 0),
-        (F::AmdCpuVoltageMv, 5, 1000),
-        (F::AmdCpuClockMhz, 5, 3000),
-        (F::IntelPl1Mw, 6, 45000),
-        (F::IntelPl2Mw, 6, 65000),
-        (F::IntelPl4Mw, 6, 90000),
-        (F::IntelIccMaxMa, 6, 90000),
-        (F::IntelCpuPowerBalance, 6, 0),
-        (F::IntelCacheVoltageOffsetMv, 6, 0),
-        (F::IntelSystemAgentVoltageOffsetMv, 6, 0),
-        (F::IntelCoreRatios, 6, 40),
-        (F::WindowsBoostMode, 7, 0),
-        (F::WindowsMinimumProcessorPercent, 7, 5),
-        (F::WindowsMaximumProcessorPercent, 7, 100),
-        (F::WindowsProcessorEppPercent, 7, 50),
-        (F::WindowsCoreParkingMinPercent, 7, 0),
-        (F::WindowsCoreParkingMaxPercent, 7, 100),
-        (F::CpuCcdAffinity, 7, 3),
-        (F::WindowsEnergyMode, 8, 0),
-        (F::WindowsPowerPlan, 8, 0),
-        (F::DisplayRefreshRateHz, 8, 60),
-        (F::GraphicsMode, 8, 0),
+        (F::IntelPl1Mw, 5, 45000),
+        (F::IntelPl2Mw, 5, 65000),
+        (F::IntelPl4Mw, 5, 90000),
+        (F::IntelIccMaxMa, 5, 90000),
+        (F::IntelCpuPowerBalance, 5, 0),
+        (F::WindowsBoostMode, 6, 0),
+        (F::WindowsMinimumProcessorPercent, 6, 5),
+        (F::WindowsMaximumProcessorPercent, 6, 100),
+        (F::WindowsProcessorEppPercent, 6, 50),
+        (F::WindowsCoreParkingMinPercent, 6, 0),
+        (F::WindowsCoreParkingMaxPercent, 6, 100),
+        (F::CpuCcdAffinity, 6, 3),
+        (F::WindowsEnergyMode, 7, 0),
+        (F::WindowsPowerPlan, 7, 0),
+        (F::DisplayRefreshRateHz, 7, 60),
+        (F::GraphicsMode, 7, 0),
     ];
     rows.iter()
         .map(|(feature, group, seed)| Field {

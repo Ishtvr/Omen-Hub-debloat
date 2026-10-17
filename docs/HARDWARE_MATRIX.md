@@ -28,7 +28,7 @@ Legende: **Lesen** = Messwert oder Zustand wird angezeigt. **Schreiben** = Sette
 | Dynamic Boost (PPAB) | Ja, erhöht | Ja | Ja | HP-GPU-Status-Bit mit Readback; cTGP bleibt unverändert |
 | CPU PPT/Fast, STAPM/Slow, TDC, EDC, Tctl-Limit | Ja, mit SMU-Modul | Ja, einmal kalibriert | Ja | Eingebettetes RyzenSMU 0.2.11; Preset-Apply unter Last ungetestet |
 | Curve Optimizer, PBO-Scalar | Ja, mit SMU-Modul | Ja, ungemessen | Ja | Eigene SMU-GETs; Werte werden vollständig erfasst und restauriert |
-| Fester CPU-Takt / feste Spannung | – | Nein | Nein | Wartet auf `cpu-smu-probe` (`oc_allowed`) und gemessenen OC-Modus-Restore |
+| Fester CPU-Takt / feste Spannung, Core-Ratios | – | – | – | Bewusst nicht vorgesehen (meist von der Laptop-Firmware gesperrt); Editorfelder entfernt |
 | Windows-Energie-/Prozessorrichtlinien, Bildwiederholrate | Ja | Ja | Ja | Dokumentierte Windows-APIs mit exaktem Rücklesen |
 | CCD-Affinität | Ja | Ja, ungemessen | Ja | Lüfterdienst pinnt das Vordergrundprogramm; alte Maske wird zurückgegeben |
 | Grafikmodus (MUX) | Ja, erhöht | Ja, ungemessen | Ja | HP-BIOS; Preset oder Dashboard-Schalter Hybrid/GPU only mit Rücklesen; wirkt erst nach Neustart |

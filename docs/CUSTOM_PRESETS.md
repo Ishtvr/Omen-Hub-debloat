@@ -17,7 +17,7 @@ Wird ein Presetwechsel mit ungespeicherten Änderungen abgelehnt, bleiben Auswah
 | Bereich | Gruppen und gespeicherte Optionen |
 | --- | --- |
 | GPU | GPU-/VRAM-Takt-Offsets, vollständige GPU-Leistungskurve, manuelles Max-Fan und die ausdrücklich gewünschte Dynamic-Boost-Vorgabe (Hardwareadapter noch ungeprüft); ein globaler Core-Offset ist bei aktiver individueller V/F-Kurve ausdrücklich gesperrt |
-| CPU | CPU-Temperatur, STAPM-, Slow- und Fast-Limit (PPT), CPU TDC/EDC, Precision Boost Overdrive, CPU Curve Optimizer, zwei CCD-Gruppen mit jeweils acht Kernwerten, fester CPU-Takt/feste Spannung (gesperrt bis zur Firmware-Probe) und Intel-CPU-Vorgaben |
+| CPU | CPU-Temperatur, STAPM-, Slow- und Fast-Limit (PPT), CPU TDC/EDC, Precision Boost Overdrive, CPU Curve Optimizer, zwei CCD-Gruppen mit jeweils acht Kernwerten und Intel-Leistungsgrenzen. Fester CPU-Takt, Core-Ratios und feste Spannungen sind seit 17. Oktober 2026 entfernt, weil die meisten Laptops sie sperren; alte Werte bleiben lesbar und fallen beim Speichern weg |
 | Windows | Eigener Abschnitt mit Prozessor-Boost, Min/Max, EPP, Core Parking und CCD-Affinität (der Hintergrunddienst pinnt das Vordergrundprogramm) sowie Energie-/Anzeigevorgaben |
 
 Super Resolution und Radeon Graphics Options erscheinen wie gewünscht nicht im Editor. Das versionierte Datenformat behält ältere Feature-Schlüssel, damit bereits vorhandene Profile beim Bearbeiten nicht gekürzt werden. Der Katalog umfasst jetzt **91 typisierte Schlüssel**; das ist eine Formatbreite und keine Zahl funktionsfähiger Hardwareadapter.

@@ -72,7 +72,7 @@ try {
     # Every default mode now writes the BIOS after UAC, so the smoke test never
     # selects one; it checks the selector and its info button instead.
     $taskCombo = [OmenUiSmoke]::GetDlgItem($taskWindow, 102)
-    if ([OmenUiSmoke]::SendMessage($taskCombo, 0x0147, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ne 1 -or [OmenUiSmoke]::GetDlgItem($taskWindow, 182) -eq [IntPtr]::Zero) { throw 'Leistungsmodus selector or its info button is missing.' }
+    if ([OmenUiSmoke]::SendMessage($taskCombo, 0x0147, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64() -ne 1 -or [OmenUiSmoke]::GetDlgItem($taskWindow, 182) -eq [IntPtr]::Zero -or [OmenUiSmoke]::GetDlgItem($taskWindow, 108) -eq [IntPtr]::Zero) { throw 'Leistungsmodus selector, its info button or the Apply button is missing.' }
     $taskLocal = Join-Path $taskRepo '.local'
     New-Item -ItemType Directory -Force -Path $taskLocal | Out-Null
     $taskText | Set-Content -LiteralPath (Join-Path $taskLocal 'ui-smoke-text.txt') -Encoding utf8

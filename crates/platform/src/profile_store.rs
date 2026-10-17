@@ -429,6 +429,21 @@ impl ProfileStore {
             boot_mode: value["boot_mode"].as_str().and_then(GraphicsMode::parse),
         })
     }
+    /// Closing the dashboard hides it in the tray unless the user turned
+    /// that off; absent or unreadable keeps the tray behaviour.
+    pub fn close_to_tray(&self) -> bool {
+        read_json::<serde_json::Value>(&self.root.join("app-settings.json"))
+            .ok()
+            .filter(|v| v["schema"] == 1)
+            .and_then(|v| v["close_to_tray"].as_bool())
+            .unwrap_or(true)
+    }
+    pub fn save_close_to_tray(&self, enabled: bool) -> Result<(), String> {
+        atomic_json(
+            &self.root.join("app-settings.json"),
+            &serde_json::json!({"schema": 1, "close_to_tray": enabled}),
+        )
+    }
     /// CCD selection the background service pins foreground programs to
     /// (bit 0 = first CCD). Absent means every CCD: Windows schedules freely.
     pub fn ccd_selection(&self) -> Result<Option<u8>, String> {
@@ -640,6 +655,17 @@ mod tests {
             let _ = fs::remove_dir(root.join("deleted-profiles"));
             let _ = fs::remove_dir(root);
         }
+    }
+    #[test]
+    fn close_to_tray_defaults_on_and_persists() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert!(store.close_to_tray());
+        store.save_close_to_tray(false).unwrap();
+        assert!(!store.close_to_tray());
+        store.save_close_to_tray(true).unwrap();
+        assert!(store.close_to_tray());
+        fs::remove_file(store.root().join("app-settings.json")).unwrap();
     }
     #[test]
     fn quick_switches_persist_and_read_legacy_fan_files() {
