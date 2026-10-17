@@ -81,6 +81,7 @@ try {
     $taskVersion = ($taskMetadata.packages | Where-Object { $_.id -eq $taskRoot }).version
     $taskZip = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-x64.zip"
     if (Test-Path -LiteralPath $taskZip) { Remove-Item -LiteralPath $taskZip }
+    Get-ChildItem -Recurse -LiteralPath $taskDist | Where-Object { $_.LastWriteTime.Year -lt 1980 } | ForEach-Object { $_.LastWriteTime = (Get-Date) }
     Compress-Archive -Path (Join-Path $taskDist '*') -DestinationPath $taskZip
     [pscustomobject]@{
         File = $taskOutput
