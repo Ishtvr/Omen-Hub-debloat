@@ -922,11 +922,11 @@ mod tests {
         assert_eq!(target.0.load("test").unwrap(), profile());
     }
     #[test]
-    fn active_fan_curve_and_fan_max_round_trip() {
+    fn active_fan_curve_and_fan_mode_round_trip() {
         let fixture = Fixture::new();
         let store = &fixture.0;
         assert_eq!(store.active_fan_curve().unwrap(), None);
-        assert!(!store.fan_max());
+        assert_eq!(store.fan_mode(), FanMode::Bios);
 
         let points = vec![
             omen_core::profiles::FanPoint {
@@ -956,10 +956,10 @@ mod tests {
         ];
         assert!(store.save_active_fan_curve(&invalid).is_err());
 
-        store.save_fan_max(true).unwrap();
-        assert!(store.fan_max());
-        store.save_fan_max(false).unwrap();
-        assert!(!store.fan_max());
+        store.save_fan_mode(FanMode::Max).unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Max);
+        store.save_fan_mode(FanMode::Bios).unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Bios);
 
         store.clear_active_fan_curve().unwrap();
         assert_eq!(store.active_fan_curve().unwrap(), None);
