@@ -289,7 +289,8 @@ fn run() -> Result<(), String> {
         #[cfg(windows)]
         Some("cpu-hardware-read") if args.len() == 1 => {
             let inventory = omen_platform::inventory();
-            let mut reader = omen_platform::CpuHardwareReader::new(&inventory)?;
+            let mut reader =
+                omen_platform::CpuHardwareReader::new(&inventory)?.with_clocks_and_ccds();
             let baseline = reader.sample()?;
             std::thread::sleep(std::time::Duration::from_millis(1100));
             let measured = reader.sample()?;

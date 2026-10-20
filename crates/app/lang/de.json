@@ -209,6 +209,8 @@
   "dash.load_unavailable": "Wird gemessen / nicht verfügbar",
   "dash.windows_clock_unavailable": "Windows-Takt: Nicht verfügbar",
   "dash.windows_clock": "Windows-Takt: {0}",
+  "dash.cpu_clock": "CPU-Takt (gemessen): max {0} · Ø {1}",
+  "dash.ccd_temperatures": "CCD-Temperaturen: {0}",
   "dash.controls": "Steuerung",
   "dash.system": "System",
   "dash.mode": "Leistungsmodus",

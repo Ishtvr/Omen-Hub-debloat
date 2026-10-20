@@ -86,7 +86,8 @@ Die sichtbare NVIDIA-Telemetrie läuft pro Abfrage in einem kurzlebigen eigenen 
 | Eigene Performanceprofile | Custom Presets mit getrennten GPU-/CPU-Gruppen, Auswahl/Name und Anwenden/Speichern/Löschen; Format mit 91 typisierten Schlüsseln. Nur qualifizierte Adapter schreiben Hardware; ein nicht unterstütztes Setting sperrt das ganze Apply |
 | Neustart-Wiederherstellung | Fester, geschützter Einstieg nach Windows-Benutzeranmeldung; überprüfter Task-Aufruf, kein echter Neustarttest |
 | CPU-Auslastung | Windows-CPU-Zeitdifferenzen, implementiert; derzeit 1–64 logische Prozessoren in einer Prozessorgruppe |
-| CPU-Takt (Windows) | Durchschnitt der von Windows gemeldeten MHz, implementiert; kein gemessener Boost-/Effektivtakt |
+| CPU-Takt | Mit aktivem CPU-Reader gemessen: höchster Takt im Wachzustand (P0 × ΔAPERF/ΔMPERF) und mittlerer Effektivtakt aller logischen Prozessoren; ohne Reader der Windows-Durchschnitt, der kein gemessener Takt ist. Abgleich auf 8E35 steht aus |
+| CCD-Temperaturen | Eine Temperatur je CCD aus den SMU-Thermikregistern (k10temp-Layout), mit aktivem CPU-Reader; Abgleich auf 8E35 steht aus |
 | CPU-Paketleistung und Tctl | Feste PawnIO-/AMD-RAPL-Leseoperationen auf 8E35/F.13/8940HX mit exakt geprüftem Treiber/Modul; nach expliziter UAC-Freigabe, Energie-Mittelwert samt Intervall, erste Baseline ohne Wattwert |
 | Native Oberfläche, Tray, AC-/Standby-Ereignisse | Implementiert; Suspend/Resume auf Hardware noch zu prüfen |
 | Leistungsmodus | Quiet (Default), Balanced (Default), Performance (Default) und Unleashed (Default) über den eigenen HP-Modusadapter anwendbar (Quiet/Performance noch ohne Hardwaretest); gespeicherte Custom Presets stehen im selben Dropdown. Dynamic Boost steht im GPU-Presetbereich und ist anwendbar |
@@ -104,7 +105,7 @@ Die sichtbare NVIDIA-Telemetrie läuft pro Abfrage in einem kurzlebigen eigenen 
 
 Sensoren beziehen sich derzeit auf die erste von NVIDIA enumerierte GPU. Bei unterschiedlichen NVAPI-/NVML-Namen werden die Messungen nicht zusammengeführt. Mehrere gleichnamige NVIDIA-GPUs benötigen später eine Zuordnung über PCI-Identität.
 
-CPU-Auslastung misst aktive Prozessorzeit und ist kein Wattwert. Der Windows-Takt bleibt ein OS-Wert und kein gemessener Boost-/Effektivtakt. CPU-Paketleistung/Tctl bleiben ohne qualifizierte Komponenten und gezielte Freigabe „Nicht verfügbar“. Ein CPU-Leistungslimit oder eine ACPI-Thermalzone wird nicht als Ersatzmesswert angezeigt. Fehler verwerfen alte Messwerte; deutsche Hinweise unterscheiden Support, Windows-Freigabe, Verbindung und Messung samt passender Wiederherstellung. Die exakte Ursache wird separat als `last-cpu-error.json` gespeichert und mit `cpu-sensor-status` ausgegeben; dieser letzte Fehler ist kein Live-Sitzungsstatus.
+CPU-Auslastung misst aktive Prozessorzeit und ist kein Wattwert. Der Windows-Takt bleibt ein OS-Wert und kein gemessener Boost-/Effektivtakt; mit aktivem CPU-Reader zeigt das Dashboard stattdessen gemessene Takte und die CCD-Temperaturen. CPU-Paketleistung/Tctl bleiben ohne qualifizierte Komponenten und gezielte Freigabe „Nicht verfügbar“. Ein CPU-Leistungslimit oder eine ACPI-Thermalzone wird nicht als Ersatzmesswert angezeigt. Fehler verwerfen alte Messwerte; deutsche Hinweise unterscheiden Support, Windows-Freigabe, Verbindung und Messung samt passender Wiederherstellung. Die exakte Ursache wird separat als `last-cpu-error.json` gespeichert und mit `cpu-sensor-status` ausgegeben; dieser letzte Fehler ist kein Live-Sitzungsstatus.
 
 Für eine separate feste CPU-Leseprobe im bereits erhöhten Terminal:
 

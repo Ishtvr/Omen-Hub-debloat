@@ -2,7 +2,10 @@
 //! write-MSR, free function names or caller-selected registers.
 use omen_core::{
     CpuHardwareSample, CpuHardwareSource, CpuTemperatureKind, Inventory,
-    cpu::{AmdPackageEnergy, amd_package_watts, amd_tctl_c},
+    cpu::{
+        AmdCoreCounters, AmdPackageEnergy, amd_ccd_temperature_c, amd_clock_summary,
+        amd_core_clock, amd_package_watts, amd_pstate_mhz, amd_tctl_c,
+    },
 };
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read as _, ptr, time::Instant};
@@ -20,8 +23,8 @@ use windows_sys::Win32::{
         Services::*,
         SystemInformation::GetWindowsDirectoryW,
         Threading::{
-            CreateMutexW, GetCurrentThread, ReleaseMutex, SetThreadAffinityMask,
-            WaitForSingleObject,
+            ALL_PROCESSOR_GROUPS, CreateMutexW, GetActiveProcessorCount, GetCurrentProcessorNumber,
+            GetCurrentThread, ReleaseMutex, SetThreadAffinityMask, WaitForSingleObject,
         },
     },
 };
@@ -60,6 +63,20 @@ impl Affinity {
         }
         Ok(Self(old))
     }
+    /// Moves this thread onto one logical processor of group 0, for MSRs
+    /// that exist per processor. The original mask returns on drop.
+    fn move_to(&self, cpu: usize) -> Result<(), String> {
+        if unsafe { SetThreadAffinityMask(GetCurrentThread(), 1 << cpu) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if unsafe { GetCurrentProcessorNumber() } as usize != cpu {
+            std::thread::yield_now();
+            if unsafe { GetCurrentProcessorNumber() } as usize != cpu {
+                return Err(format!("CPU reader could not run on processor {cpu}"));
+            }
+        }
+        Ok(())
+    }
 }
 impl Drop for Affinity {
     fn drop(&mut self) {
@@ -76,11 +93,19 @@ impl Drop for PciLease<'_> {
         }
     }
 }
+/// Most CCDs a THM_TCON CCD register block describes.
+const MAX_CCDS: u8 = 8;
 #[derive(Clone, Copy)]
 enum Read {
     EnergyUnits,
     PackageEnergy,
     Temperature,
+    /// P-state 0 definition; MPERF counts at this clock while awake.
+    PState0,
+    MperfReadOnly,
+    AperfReadOnly,
+    /// THM_TCON CCD temperature, family 19h models 60h…7Fh (k10temp).
+    CcdTemperature(u8),
 }
 impl Read {
     fn packet(self) -> [u8; 40] {
@@ -88,6 +113,13 @@ impl Read {
             Self::EnergyUnits => (b"ioctl_read_msr", 0xc0010299),
             Self::PackageEnergy => (b"ioctl_read_msr", 0xc001029b),
             Self::Temperature => (b"ioctl_read_smn", 0x59800),
+            Self::PState0 => (b"ioctl_read_msr", 0xc0010064),
+            Self::MperfReadOnly => (b"ioctl_read_msr", 0xc00000e7),
+            Self::AperfReadOnly => (b"ioctl_read_msr", 0xc00000e8),
+            Self::CcdTemperature(ccd) => (
+                b"ioctl_read_smn",
+                0x59800 + 0x308 + 4 * u64::from(ccd.min(MAX_CCDS - 1)),
+            ),
         };
         let mut packet = [0; 40];
         packet[..name.len()].copy_from_slice(name);
@@ -215,6 +247,15 @@ pub struct CpuHardwareReader {
     driver: Handle,
     pci: Handle,
     baseline: Option<(AmdPackageEnergy, Instant)>,
+    /// Logical processors of the single group 0, read one by one.
+    processors: usize,
+    /// L3 domains from Windows topology; 0 skips CCD temperatures.
+    ccds: u8,
+    /// Clocks and CCD temperatures wake every processor on each sample, so
+    /// only the dashboard reader asks for them, not the 2-s fan loop.
+    extras: bool,
+    p0_mhz: Option<u32>,
+    clock_baseline: Option<Vec<(AmdCoreCounters, Instant)>>,
 }
 impl CpuHardwareReader {
     pub fn new(inventory: &Inventory) -> Result<Self, String> {
@@ -283,11 +324,78 @@ impl CpuHardwareReader {
         if pci.is_null() {
             return Err(std::io::Error::last_os_error().to_string());
         }
+        let processors = unsafe { GetActiveProcessorCount(0) } as usize;
+        if processors == 0
+            || processors > usize::BITS as usize
+            || unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) } as usize != processors
+        {
+            return Err("CPU reader requires one processor group with 1…64 processors".into());
+        }
+        let ccds = super::ccd::ccd_masks()
+            .ok()
+            .and_then(|m| u8::try_from(m.len()).ok())
+            .filter(|n| *n <= MAX_CCDS)
+            .unwrap_or(0);
         Ok(Self {
             driver,
             pci: Handle(pci),
             baseline: None,
+            processors,
+            ccds,
+            extras: false,
+            p0_mhz: None,
+            clock_baseline: None,
         })
+    }
+    /// Also measure clocks and CCD temperatures on every sample.
+    pub fn with_clocks_and_ccds(mut self) -> Self {
+        self.extras = true;
+        self
+    }
+    /// APERF/MPERF of every logical processor, each on its own processor.
+    /// Returns (max active, mean effective) clock once a baseline exists.
+    fn clocks(&mut self, affinity: &Affinity) -> Result<Option<(Option<u32>, u32)>, String> {
+        let p0 = match self.p0_mhz {
+            Some(p0) => p0,
+            None => {
+                affinity.move_to(0)?;
+                let p0 = amd_pstate_mhz(self.read(Read::PState0)?)
+                    .ok_or("CPU P-state 0 definition is disabled or implausible")?;
+                *self.p0_mhz.insert(p0)
+            }
+        };
+        let mut current = Vec::with_capacity(self.processors);
+        for cpu in 0..self.processors {
+            affinity.move_to(cpu)?;
+            let mperf = self.read(Read::MperfReadOnly)?;
+            let aperf = self.read(Read::AperfReadOnly)?;
+            current.push((AmdCoreCounters { aperf, mperf }, Instant::now()));
+        }
+        let Some(previous) = self.clock_baseline.replace(current) else {
+            return Ok(None);
+        };
+        let current = self.clock_baseline.as_deref().unwrap_or_default();
+        let clocks = previous
+            .iter()
+            .zip(current)
+            .map(|((old, then), (new, now))| {
+                amd_core_clock(p0, *old, *new, now.duration_since(*then))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or("CPU clock counters reset or the interval is outside 0.2…10 s")?;
+        Ok(amd_clock_summary(&clocks))
+    }
+    /// One reading per CCD, or none when any CCD lacks a valid value.
+    fn ccd_temperatures(&self) -> Result<Vec<f64>, String> {
+        (0..self.ccds)
+            .map(|ccd| {
+                let raw = self.read(Read::CcdTemperature(ccd))?;
+                u32::try_from(raw)
+                    .ok()
+                    .and_then(amd_ccd_temperature_c)
+                    .ok_or_else(|| format!("CCD {} temperature is unavailable", ccd + 1))
+            })
+            .collect()
     }
     fn read(&self, what: Read) -> Result<u64, String> {
         let packet = what.packet();
@@ -298,7 +406,7 @@ impl CpuHardwareReader {
         Ok(u64::from_le_bytes(response))
     }
     pub fn sample(&mut self) -> Result<CpuHardwareSample, String> {
-        let _affinity = Affinity::cpu_zero()?;
+        let affinity = Affinity::cpu_zero()?;
         let result = (|| {
             let units = self.read(Read::EnergyUnits)?;
             if units == 0 || units == u64::MAX {
@@ -319,7 +427,7 @@ impl CpuHardwareReader {
             if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
                 return Err("CPU temperature reader could not acquire the shared PCI mutex".into());
             }
-            let _pci = PciLease(&self.pci);
+            let pci = PciLease(&self.pci);
             let raw = self.read(Read::Temperature)?;
             if raw > u64::from(u32::MAX) {
                 return Err("CPU temperature register has unexpected high bits".into());
@@ -328,13 +436,38 @@ impl CpuHardwareReader {
             if temperature_c.is_none() {
                 return Err("CPU Tctl response is unavailable or implausible".into());
             }
-            let warnings = if previous.is_some() && package_power_w.is_none() {
+            let mut warnings: Vec<String> = if previous.is_some() && package_power_w.is_none() {
                 vec![
                     "CPU energy units, counter or interval changed; a fresh baseline is required"
                         .into(),
                 ]
             } else {
                 vec![]
+            };
+            // Clocks and CCD temperatures are extras: a failure leaves them
+            // empty with a warning and keeps the qualified power/Tctl reading.
+            let ccd_temperatures_c = if self.extras {
+                self.ccd_temperatures().unwrap_or_else(|e| {
+                    warnings.push(e);
+                    vec![]
+                })
+            } else {
+                vec![]
+            };
+            drop(pci);
+            let clocks = if self.extras {
+                self.clocks(&affinity)
+            } else {
+                Ok(None)
+            };
+            let (max_core_clock_mhz, effective_clock_mhz) = match clocks {
+                Ok(Some((max, mean))) => (max, Some(mean)),
+                Ok(None) => (None, None),
+                Err(e) => {
+                    self.clock_baseline = None;
+                    warnings.push(e);
+                    (None, None)
+                }
             };
             let sample = CpuHardwareSample {
                 schema: 1,
@@ -343,6 +476,9 @@ impl CpuHardwareReader {
                 package_power_w,
                 temperature_c,
                 power_interval_ms,
+                max_core_clock_mhz,
+                effective_clock_mhz,
+                ccd_temperatures_c,
                 warnings,
             };
             sample.validate()?;
@@ -350,6 +486,7 @@ impl CpuHardwareReader {
         })();
         if result.is_err() {
             self.baseline = None;
+            self.clock_baseline = None;
         }
         result
     }
@@ -403,6 +540,12 @@ mod tests {
             (Read::EnergyUnits, "ioctl_read_msr", 0xc0010299u64),
             (Read::PackageEnergy, "ioctl_read_msr", 0xc001029bu64),
             (Read::Temperature, "ioctl_read_smn", 0x59800u64),
+            (Read::PState0, "ioctl_read_msr", 0xc0010064u64),
+            (Read::MperfReadOnly, "ioctl_read_msr", 0xc00000e7u64),
+            (Read::AperfReadOnly, "ioctl_read_msr", 0xc00000e8u64),
+            (Read::CcdTemperature(0), "ioctl_read_smn", 0x59b08u64),
+            (Read::CcdTemperature(1), "ioctl_read_smn", 0x59b0cu64),
+            (Read::CcdTemperature(200), "ioctl_read_smn", 0x59b24u64),
         ] {
             let packet = kind.packet();
             assert_eq!(&packet[..name.len()], name.as_bytes());

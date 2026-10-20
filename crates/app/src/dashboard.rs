@@ -45,6 +45,40 @@ pub fn cpu_detail(s: &Snapshot) -> String {
         CpuHardwareStatus::Error(e) => crate::ui::cpu_error_message(e).into(),
     }
 }
+/// Measured clocks from the CPU reader; Windows' figure only without them.
+pub fn cpu_clock(s: &Snapshot) -> String {
+    let cpu = s.cpu.as_ref();
+    let hardware = cpu.and_then(|c| c.hardware.as_ref());
+    if let Some(mean) = hardware.and_then(|h| h.effective_clock_mhz) {
+        let max = hardware
+            .and_then(|h| h.max_core_clock_mhz)
+            .map_or(t("common.unavailable").into(), |v| format!("{v} MHz"));
+        return tf("dash.cpu_clock", &[&max, &format!("{mean} MHz")]);
+    }
+    tf(
+        "dash.windows_clock",
+        &[&cpu
+            .and_then(|c| c.windows_clock_mhz)
+            .map_or(t("common.unavailable").into(), |v| format!("{v} MHz"))],
+    )
+}
+pub fn ccd_temperatures(s: &Snapshot) -> String {
+    let values = s
+        .cpu
+        .as_ref()
+        .and_then(|c| c.hardware.as_ref())
+        .map(|h| &h.ccd_temperatures_c[..])
+        .unwrap_or_default();
+    if values.is_empty() {
+        return String::new();
+    }
+    let joined = values
+        .iter()
+        .map(|v| format!("{v:.0} °C"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    tf("dash.ccd_temperatures", &[&joined])
+}
 pub unsafe fn create(hwnd: HWND, th: &Theme) {
     unsafe {
         let control = |id: i32,
@@ -465,21 +499,21 @@ pub unsafe fn update(hwnd: HWND, th: &Theme, s: &Snapshot) {
                     .map_or(t("dash.load_unavailable").into(), |v| format!("{v:.1} %"))],
             ),
         );
-        text(
-            hwnd,
-            145,
-            &tf(
-                "dash.windows_clock",
-                &[&cpu
-                    .and_then(|c| c.windows_clock_mhz)
-                    .map_or(t("common.unavailable").into(), |v| format!("{v} MHz"))],
-            ),
-        );
+        text(hwnd, 145, &cpu_clock(s));
         theme::error(
             GetDlgItem(hwnd, 146),
             matches!(s.cpu_hardware_status, CpuHardwareStatus::Error(_)),
         );
-        text(hwnd, 146, &cpu_detail(s));
+        let detail = cpu_detail(s);
+        text(
+            hwnd,
+            146,
+            &if detail.is_empty() {
+                ccd_temperatures(s)
+            } else {
+                detail
+            },
+        );
         let ac = match s.power.ac_connected {
             Some(true) => t("dash.ac"),
             Some(false) => t("dash.battery"),

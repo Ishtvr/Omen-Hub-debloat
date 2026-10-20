@@ -1067,4 +1067,34 @@ mod tests {
             t("dash.cpu_starting")
         );
     }
+    #[test]
+    fn measured_clock_replaces_the_windows_figure_only_when_present() {
+        let mut snapshot = Snapshot {
+            cpu: Some(omen_core::CpuSample {
+                windows_clock_mhz: Some(2400),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let windows = crate::dashboard::cpu_clock(&snapshot);
+        assert!(windows.contains("2400 MHz"));
+        assert!(crate::dashboard::ccd_temperatures(&snapshot).is_empty());
+        snapshot.cpu.as_mut().unwrap().hardware = Some(omen_core::CpuHardwareSample {
+            schema: 1,
+            source: omen_core::CpuHardwareSource::PawnioAmdRapl,
+            temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
+            package_power_w: None,
+            temperature_c: Some(60.0),
+            power_interval_ms: None,
+            max_core_clock_mhz: Some(5150),
+            effective_clock_mhz: Some(1320),
+            ccd_temperatures_c: vec![71.4, 66.0],
+            warnings: vec![],
+        });
+        let measured = crate::dashboard::cpu_clock(&snapshot);
+        assert!(measured.contains("5150 MHz") && measured.contains("1320 MHz"));
+        assert!(!measured.contains("2400"));
+        let ccd = crate::dashboard::ccd_temperatures(&snapshot);
+        assert!(ccd.contains("71 °C · 66 °C"));
+    }
 }

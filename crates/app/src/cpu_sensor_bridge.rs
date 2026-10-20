@@ -388,7 +388,9 @@ pub fn child(nonce: &str, parent: u32) -> Result<(), String> {
                 if reader.is_none() {
                     // WMI lives only in our bounded, disposable inventory
                     // process, never in the long-lived sensor helper.
-                    reader = Some(CpuHardwareReader::new(&crate::inventory::read())?);
+                    reader = Some(
+                        CpuHardwareReader::new(&crate::inventory::read())?.with_clocks_and_ccds(),
+                    );
                 }
                 reader
                     .as_mut()

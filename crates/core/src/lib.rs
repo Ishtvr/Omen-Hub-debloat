@@ -79,6 +79,17 @@ pub struct CpuHardwareSample {
     pub package_power_w: Option<f64>,
     pub temperature_c: Option<f64>,
     pub power_interval_ms: Option<u64>,
+    /// Highest per-processor clock while awake (P0 × ΔAPERF/ΔMPERF): the
+    /// boost clock actually reached. Needs a previous sample like the power.
+    #[serde(default)]
+    pub max_core_clock_mhz: Option<u32>,
+    /// Mean effective clock over all logical processors, idle counted as zero.
+    #[serde(default)]
+    pub effective_clock_mhz: Option<u32>,
+    /// One temperature per CCD from the SMU thermal registers; empty when any
+    /// CCD has no valid reading.
+    #[serde(default)]
+    pub ccd_temperatures_c: Vec<f64>,
     pub warnings: Vec<String>,
 }
 
@@ -107,6 +118,14 @@ impl CpuHardwareSample {
                 .power_interval_ms
                 .is_some_and(|v| !(200..=10_000).contains(&v))
             || self.package_power_w.is_some() != self.power_interval_ms.is_some()
+            || [self.max_core_clock_mhz, self.effective_clock_mhz]
+                .iter()
+                .any(|v| v.is_some_and(|v| v > 7000))
+            || self.ccd_temperatures_c.len() > 8
+            || self
+                .ccd_temperatures_c
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=125.0).contains(v))
             || self.warnings.len() > 8
             || self.warnings.iter().any(|w| w.len() > 512)
         {
