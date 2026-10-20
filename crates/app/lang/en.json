@@ -209,6 +209,8 @@
   "dash.load_unavailable": "Measuring / not available",
   "dash.windows_clock_unavailable": "Windows clock: not available",
   "dash.windows_clock": "Windows clock: {0}",
+  "dash.cpu_clock": "CPU clock (measured): max {0} · avg {1}",
+  "dash.ccd_temperatures": "CCD temperatures: {0}",
   "dash.controls": "Controls",
   "dash.system": "System",
   "dash.mode": "Performance mode",

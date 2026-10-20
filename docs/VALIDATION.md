@@ -409,6 +409,10 @@ Auf Nutzerwunsch übernimmt das Dashboard einen Leistungsmodus erst mit **Anwend
 
 Unter Wine 9.0 + Xvfb geprüft: Darstellung von Anwenden-Schaltfläche und Einstellungen; Moduswahl ohne Anwenden schreibt nichts; der Autostart-Klick erzeugte den erwarteten Registry-Eintrag; ein WM_DELETE_WINDOW versteckte das Fenster bei aktiver Tray-Einstellung (Prozess lief weiter) und beendete die App bei ausgeschalteter Einstellung. Nicht geprüft: echter Windows-Start mit Autostart, Anwenden eines Modus auf dem Referenzgerät.
 
+## Gemessener CPU-Takt und CCD-Temperaturen — 20. Oktober 2026 (Cloud-Build, ungemessen)
+
+Der CPU-Reader liefert jetzt zusätzlich den höchsten Takt im Wachzustand, den mittleren Effektivtakt und eine Temperatur je CCD; das Dashboard zeigt sie statt des Windows-Takts, sobald sie vorliegen (Quellen und Formeln in [CPU_SENSORS.md](CPU_SENSORS.md)). Nur lesende, im gepinnten Modul freigegebene MSR-/SMN-Zugriffe; kein Setter. Geprüft: `cargo fmt`, Clippy für `x86_64-pc-windows-msvc`, Linux-Tests einschließlich neuer Core-Tests für P-State-Dekodierung, Taktverhältnisse, Zählerrücksetzung und CCD-Gültigkeitsbit. Windows-Tests und Release-Build laufen in der CI; auf dem Gerät gemessen ist noch nichts.
+
 ## Noch ausstehend
 
 Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) sind auf 8E35/F.13 mit vollständigem Restore bestätigt; der Benutzer hat die sichtbare Ein/Aus-Wirkung am 15. Oktober bestätigt. Quellen, Payload-Unterschiede und die verbleibenden Freigabekriterien stehen in [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md). Herstellerdienste und Treiberzustände wurden nicht verändert; der native Analyseprozess führt die importierten Dateien nicht aus.
@@ -418,7 +422,7 @@ Tastatur-GETs sowie manuelle Vier-Zonen-Farben und statisch ein/aus (0xE4/0x64) 
 - OEM-Leistungsrahmen, Dynamic Boost, Netzteilanforderungen, CPU/GPU-Verteilung und Akkudrain unter vergleichbarer Last.
 - Echte Standby-/Resume-/AC-Wechsel, Display-Treiber-Neustart und MUX-Neustart. Lifecycle-Policy und Event-Handler sind implementiert, aber deren tatsächliche Hardwareübergänge nicht getestet.
 - Gezielt hängender WMI-Provider und verlorene Treibersitzung; Abgrenzung/Timeout/Backoff sind implementiert, die Störfälle noch nicht auf dem echten System provoziert.
-- CPU-Sensoren auf weiteren Geräten/Treiberversionen, gemessener Boost-/Effektivtakt und CCD-/Kerntemperaturen. Paketenergie-Mittelwert und Tctl sind auf der dokumentierten 8E35/F.13-/PawnIO-Kombination inzwischen bestätigt; keine ACPI-Zone und kein konfiguriertes Power-Limit werden als Messwert verwendet.
+- CPU-Sensoren auf weiteren Geräten/Treiberversionen; Abgleich des gemessenen Takts und der CCD-Temperaturen mit HWiNFO auf 8E35. Paketenergie-Mittelwert und Tctl sind auf der dokumentierten 8E35/F.13-/PawnIO-Kombination inzwischen bestätigt; keine ACPI-Zone und kein konfiguriertes Power-Limit werden als Messwert verwendet.
 - Quiet/Performance/Balanced/Unleashed mit PL1-Rücklesen, CCD-Affinität mit dem Hintergrunddienst und die OC-Felder von `cpu-smu-probe` auf 8E35/F.13.
 - Eigene Lüfterkurven, BIOS-Lüftermodus und zusätzlicher thermischer Sicherheitsweg; Max-Fan bei realen Power-Übergängen. Weitere Beleuchtungsvarianten, MUX, CPU-Tuning, GPU-/VRAM-Spannung und vollständiger Unleashed-Adapter. Tatsächlicher Reboot mit ausgewähltem Profil und ein gegebenenfalls nötiger privilegierter Dienst.
 - Visuelle Prüfung und Skalierung bei mehreren DPI-/Display-Konfigurationen; längere Tray- und Sensor-Dauerläufe.

@@ -21,6 +21,7 @@ Legende: **Lesen** = Messwert oder Zustand wird angezeigt. **Schreiben** = Sette
 | GPU-Watt, Temperatur, Takt | Ja | – | – | Öffentliche NVML/NVAPI im kurzlebigen Leseprozess |
 | CPU-Auslastung, Windows-MHz | Ja | – | – | Windows; MHz ist kein gemessener Boost |
 | CPU-Paketwatt, Tctl | Ja, nach UAC | – | – | Bereits laufendes PawnIO 2.2.0 und eingebettetes AMDFamily17 0.2.11 |
+| CPU-Takt (APERF/MPERF), CCD-Temperaturen | Ja, nach UAC, ungemessen | – | – | Derselbe Reader; Abgleich mit HWiNFO steht aus |
 | NVIDIA-Core-/VRAM-Offset | Ja | Ja, gemessen | Ja | Exakter Treiber/VBIOS; Core-Offset gesperrt bei aktiver V/F-Kurve |
 | NVIDIA V/F-Kurve (127 Anker) | Ja | Ja, gemessen | Ja | Exakter Treiber-SHA-256; Spannungsanker unveränderlich |
 | HP-Modus Balanced / Unleashed | – | Ja, Unleashed einmal gemessen | – | Dashboard-Auswahl; Unleashed nur im Netzbetrieb; Thermalmodus ohne GET, Rückweg ist ein expliziter Balanced-Write |
