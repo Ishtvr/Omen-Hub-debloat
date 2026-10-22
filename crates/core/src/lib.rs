@@ -79,6 +79,9 @@ pub struct CpuHardwareSample {
     pub package_power_w: Option<f64>,
     pub temperature_c: Option<f64>,
     pub power_interval_ms: Option<u64>,
+    /// Read-only per-logical-processor interval means; never Windows MHz.
+    #[serde(default)]
+    pub effective_clocks: Option<cpu::CpuEffectiveClocks>,
     pub warnings: Vec<String>,
 }
 
@@ -113,6 +116,9 @@ impl CpuHardwareSample {
             return Err(
                 "CPU sensor response schema, values or measured interval is invalid".into(),
             );
+        }
+        if let Some(clocks) = &self.effective_clocks {
+            clocks.validate()?;
         }
         Ok(())
     }

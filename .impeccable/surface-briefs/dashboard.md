@@ -2,6 +2,10 @@
 
 Mode: Operate. Code-first. User-pinned dark, modern, clean appearance. Preserve GPU-first / CPU-alongside priority, measured data, native Windows controls and offline Rust runtime. Open-window memory may exceed 50 MB; combined tray-idle remains capped at 50 MB, including a paused CPU reader.
 
+## Revision — 22 October 2026
+
+The CPU panel now shows the highest measured interval-effective clock alongside load, with Windows MHz on its own line and 32-logical-processor coverage/clock interval in the existing detail field. Clock baseline and unavailable states are explicit; successful package watts/Tctl stay visible on a clock-only fault. Native colors, font roles and sensor-panel geometry are retained. The latest main branch's Apply button, fan/graphics switches and startup/close-to-tray settings are preserved. The current source opens at 1140×780 outer dimensions, minimum 960×750. Real production client captures at 1124×741 and 944×711, 96 DPI, are `.local/review/cpu-clocks/cpu-clocks-1140.png` and `cpu-clocks-960.png`; both were checked for full status-line fit and action visibility by the implementing agent. There is no new independent Impeccable finish verdict. Current build, 152 passing tests, read-only hardware/UI verification and cold/combined-reader tray measurements belong to the 22 October entry in docs/VALIDATION.md. The earlier facts/captures/verdict below describe their earlier surfaces and binaries; they do not transfer as current dimensions or certification. Full replacement, actual standby/reboot, load stability, other DPI, titlebar, high contrast and comprehensive accessibility remain unproven by these captures.
+
 ## Direction contract
 
 THESIS: A precise dark instrument panel makes GPU wattage and temperature immediately legible, with CPU readings beside them and deliberate hardware actions below.

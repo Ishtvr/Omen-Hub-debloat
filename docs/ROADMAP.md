@@ -71,7 +71,8 @@ Abnahme: Unleashed aktiviert den OEM-Leistungsrahmen; tatsächliche GPU-Leistung
 - [x] CPU-Paketleistung mit Energie-Mittelwert/Intervall und Tctl über einen expliziten, sitzungsgebundenen UAC-Leseprozess anzeigen; Standardzustand bleibt nicht verfügbar, Pause verwirft Reader/Baseline, Rückkehr beginnt frisch.
 - [x] Feste lokale CPU-IPC mit Benutzer-/SYSTEM-DACL, beiden Prozess-IDs, Sitzungs-Token, Schema/Sequenz und `Sample`/`Pause`/`Stop`; vorübergehender UAC-Launch und isoliertes begrenztes Inventar.
 - [x] Deutsche Support-/Freigabe-/Verbindungs-/Messfehler und passende Wiederherstellung, getrennte letzte technische Ursache ohne Hardwarejournaländerung.
-- [ ] Gemessene CPU-Boost-/Effektivtakte und CCD-/Kerntemperaturen anbinden; Windows-MHz und Tctl nicht dafür umdeuten.
+- [x] Effektive CPU-Takte aus Read-Only-APERF/MPERF aller 32 logischen Prozessoren auf 8E35/F.13 messen, mit eigener Baseline, Abdeckungs-/Intervallprüfung und Anzeige des höchsten Intervallmittels; Windows-MHz bleiben getrennt.
+- [ ] Aktive CPU-Boost-/Spitzentakte und CCD-/Kerntemperaturen anbinden; Intervall-Effektivtakt und Tctl nicht dafür umdeuten.
 - [x] CCD-Affinität als Preset-Einstellung: der Hintergrunddienst pinnt das Vordergrundprogramm auf die gewählten CCDs und gibt die alte Maske zurück (noch ohne Hardwaretest).
 - [x] ~~Fester CPU-Takt/feste Spannung~~: am 17. Oktober 2026 auf Nutzerwunsch verworfen, weil die meisten Laptops diese Kontrolle sperren; Editorfelder (AMD-Takt/-Spannung, Intel-Core-Ratios, Cache-/SA-Spannung) entfernt. Der Fokus liegt auf den UXTU-Einstellungen: STAPM/Slow/Fast, TDC/EDC, Tctl-Limit, PBO und Curve Optimizer.
 - [x] Dashboard: **Anwenden**-Schaltfläche für den Leistungsmodus (Auswahl allein schreibt nichts), Einstellungen **Mit Windows starten** (Autostart im Tray) und **Beim Schließen in den Tray minimieren**.

@@ -1,4 +1,99 @@
-//! CPU busy-time calculation, independent of Windows and hardware adapters.
+//! CPU telemetry calculations, independent of Windows and hardware adapters.
+
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// Per-logical-processor read-only AMD performance counters. These are not
+/// requested frequencies, voltage settings or the writable APERF/MPERF aliases.
+#[derive(Debug, Clone, Copy)]
+pub struct AmdClockCounters {
+    pub logical_processor: u32,
+    pub actual_cycles: u64,
+    pub reference_cycles: u64,
+}
+
+/// Actual cycles per wall-clock interval, including time spent halted/idle.
+/// This is an interval mean, not an instantaneous or an active-only boost clock.
+pub fn amd_effective_mhz(
+    previous: AmdClockCounters,
+    current: AmdClockCounters,
+    elapsed: Duration,
+) -> Option<f64> {
+    if previous.logical_processor != current.logical_processor
+        || current.logical_processor >= 64
+        || !(Duration::from_millis(200)..=Duration::from_secs(10)).contains(&elapsed)
+        || [
+            previous.actual_cycles,
+            previous.reference_cycles,
+            current.actual_cycles,
+            current.reference_cycles,
+        ]
+        .contains(&u64::MAX)
+    {
+        return None;
+    }
+    // Unlike the 32-bit energy counter, a decreasing 64-bit cycle counter is
+    // treated as a reset. Do not turn it into a fabricated wraparound frequency.
+    let cycles = current.actual_cycles.checked_sub(previous.actual_cycles)?;
+    let reference = current
+        .reference_cycles
+        .checked_sub(previous.reference_cycles)?;
+    let mhz = cycles as f64 / elapsed.as_secs_f64() / 1_000_000.0;
+    let reference_mhz = reference as f64 / elapsed.as_secs_f64() / 1_000_000.0;
+    // A plausibility boundary only; this does not authorize a frequency setter.
+    ((0.0..=8000.0).contains(&mhz) && (0.0..=8000.0).contains(&reference_mhz) && reference != 0)
+        .then_some(mhz)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuClockSource {
+    AmdAperfReadOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuLogicalClock {
+    pub logical_processor: u32,
+    pub effective_mhz: f64,
+    pub interval_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuEffectiveClocks {
+    pub source: CpuClockSource,
+    pub logical_processor_count: u32,
+    /// Complete coverage of the single qualified processor group, in CPU order.
+    /// Partial coverage must not silently become a system maximum or mean.
+    pub processors: Vec<CpuLogicalClock>,
+}
+
+impl CpuEffectiveClocks {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.processors.is_empty()
+            || self.processors.len() > 64
+            || self.processors.len() != self.logical_processor_count as usize
+            || self.processors.iter().enumerate().any(|(index, clock)| {
+                clock.logical_processor as usize != index
+                    || !clock.effective_mhz.is_finite()
+                    || !(0.0..=8000.0).contains(&clock.effective_mhz)
+                    || !(200..=10_000).contains(&clock.interval_ms)
+            })
+        {
+            return Err("CPU effective clock coverage, values or interval is invalid".into());
+        }
+        Ok(())
+    }
+
+    /// Highest interval mean among the sampled logical processors.
+    pub fn max_mhz(&self) -> Option<f64> {
+        self.processors
+            .iter()
+            .map(|p| p.effective_mhz)
+            .reduce(f64::max)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct CpuTimes {
@@ -221,6 +316,7 @@ mod tests {
             package_power_w: Some(50.0),
             temperature_c: Some(80.0),
             power_interval_ms: Some(1100),
+            effective_clocks: None,
             warnings: vec![],
         };
         assert!(sample.validate().is_ok());
@@ -230,5 +326,123 @@ mod tests {
         assert!(sample.validate().is_ok());
         sample.temperature_c = Some(f64::NAN);
         assert!(sample.validate().is_err());
+    }
+
+    #[test]
+    fn effective_clock_counts_cycles_over_wall_time_including_idle() {
+        let old = AmdClockCounters {
+            logical_processor: 3,
+            actual_cycles: 5_000_000_000,
+            reference_cycles: 4_000_000_000,
+        };
+        let current = AmdClockCounters {
+            actual_cycles: old.actual_cycles + 2_100_000_000,
+            reference_cycles: old.reference_cycles + 1_800_000_000,
+            ..old
+        };
+        assert_eq!(
+            amd_effective_mhz(old, current, Duration::from_secs(1)),
+            Some(2100.0)
+        );
+        assert_eq!(
+            amd_effective_mhz(old, current, Duration::from_secs(2)),
+            Some(1050.0)
+        );
+        // A running reference counter distinguishes a zero-cycle interval from
+        // counters that have stopped or are unavailable.
+        let idle = AmdClockCounters {
+            reference_cycles: old.reference_cycles + 100_000,
+            ..old
+        };
+        assert_eq!(
+            amd_effective_mhz(old, idle, Duration::from_secs(1)),
+            Some(0.0)
+        );
+        assert_eq!(amd_effective_mhz(old, old, Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn effective_clock_rejects_resets_cpu_mismatch_stale_and_impossible_values() {
+        let old = AmdClockCounters {
+            logical_processor: 0,
+            actual_cycles: 10_000_000_000,
+            reference_cycles: 8_000_000_000,
+        };
+        let current = AmdClockCounters {
+            actual_cycles: old.actual_cycles + 4_000_000_000,
+            reference_cycles: old.reference_cycles + 3_000_000_000,
+            ..old
+        };
+        for bad in [
+            AmdClockCounters {
+                logical_processor: 1,
+                ..current
+            },
+            AmdClockCounters {
+                actual_cycles: 0,
+                ..current
+            },
+            AmdClockCounters {
+                reference_cycles: 0,
+                ..current
+            },
+            AmdClockCounters {
+                actual_cycles: u64::MAX,
+                ..current
+            },
+            AmdClockCounters {
+                reference_cycles: u64::MAX,
+                ..current
+            },
+            AmdClockCounters {
+                reference_cycles: old.reference_cycles,
+                ..current
+            },
+            AmdClockCounters {
+                actual_cycles: old.actual_cycles + 8_000_000_001,
+                ..current
+            },
+        ] {
+            assert!(amd_effective_mhz(old, bad, Duration::from_secs(1)).is_none());
+        }
+        assert!(amd_effective_mhz(old, current, Duration::from_millis(199)).is_none());
+        assert!(amd_effective_mhz(old, current, Duration::from_millis(10_001)).is_none());
+    }
+
+    #[test]
+    fn effective_clock_provenance_rejects_partial_duplicate_and_invalid_records() {
+        let mut clocks = CpuEffectiveClocks {
+            source: CpuClockSource::AmdAperfReadOnly,
+            logical_processor_count: 2,
+            processors: vec![
+                CpuLogicalClock {
+                    logical_processor: 0,
+                    effective_mhz: 125.0,
+                    interval_ms: 1000,
+                },
+                CpuLogicalClock {
+                    logical_processor: 1,
+                    effective_mhz: 4100.0,
+                    interval_ms: 1001,
+                },
+            ],
+        };
+        assert!(clocks.validate().is_ok());
+        assert_eq!(clocks.max_mhz(), Some(4100.0));
+        let last = clocks.processors.pop().unwrap();
+        assert!(clocks.validate().is_err());
+        clocks.processors.push(last);
+        clocks.processors[1].logical_processor = 0;
+        assert!(clocks.validate().is_err());
+        clocks.processors[1].logical_processor = 2;
+        assert!(clocks.validate().is_err());
+        clocks.processors[1].logical_processor = 1;
+        clocks.processors[1].effective_mhz = f64::NAN;
+        assert!(clocks.validate().is_err());
+        clocks.processors[1].effective_mhz = 4000.0;
+        clocks.processors[1].interval_ms = 10_001;
+        assert!(clocks.validate().is_err());
+        clocks.processors.clear();
+        assert!(clocks.validate().is_err());
     }
 }

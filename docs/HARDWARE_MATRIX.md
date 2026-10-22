@@ -1,12 +1,13 @@
 # Hardwarematrix
 
-Stand 16. Oktober 2026, nach Übernahme der HP-Modi, des SMU-Adapters und des Lüfterdienstes. Die Matrix fasst Code und vorhandene Nachweise zusammen; sie erweitert keine Freigabe. Details, Hashes und Messzeiten stehen in [models/8e35.md](models/8e35.md), [models/8e35-hub-modes.md](models/8e35-hub-modes.md), [FAN_CONTROL.md](FAN_CONTROL.md) und [VALIDATION.md](VALIDATION.md).
+Stand 22. Oktober 2026, einschließlich der lesenden CPU-Effektivtakte. Die Matrix fasst Code und vorhandene Nachweise zusammen; sie erweitert keine Schreibfreigabe. Details, Hashes und Messzeiten stehen in [models/8e35.md](models/8e35.md), [models/8e35-hub-modes.md](models/8e35-hub-modes.md), [FAN_CONTROL.md](FAN_CONTROL.md) und [VALIDATION.md](VALIDATION.md).
 
 ## Qualifizierte Geräte
 
 | Gerät | Board / BIOS | CPU | GPU / Treiber / VBIOS | Status |
 | --- | --- | --- | --- | --- |
 | HP OMEN 16-ap0xxx | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.14 / 98.06.2a.40.da | Referenzgerät, einzige qualifizierte Kombination |
+| Dasselbe Referenzgerät am 22. Oktober | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.42 | CPU-Sensoren einschließlich 32 Effektivtakten und öffentliche GPU-GETs gemessen; GPU-OC-/V/F-Schreibfreigabe für 617.14 wird nicht übertragen |
 | Alle anderen | – | – | – | Nur lesende Windows-/NVIDIA-Werte; HP-, SMU- und GPU-Schreibaktionen werden blockiert |
 
 Ein anderes BIOS, ein anderer NVIDIA-Treiber oder ein anderes VBIOS verlangt eine neue Qualifikation, auch auf Board 8E35.
@@ -21,6 +22,7 @@ Legende: **Lesen** = Messwert oder Zustand wird angezeigt. **Schreiben** = Sette
 | GPU-Watt, Temperatur, Takt | Ja | – | – | Öffentliche NVML/NVAPI im kurzlebigen Leseprozess |
 | CPU-Auslastung, Windows-MHz | Ja | – | – | Windows; MHz ist kein gemessener Boost |
 | CPU-Paketwatt, Tctl | Ja, nach UAC | – | – | Bereits laufendes PawnIO 2.2.0 und eingebettetes AMDFamily17 0.2.11 |
+| CPU-Effektivtakt aller 32 logischen Prozessoren | Ja, nach UAC, gemessen | – | – | Gleiches gehashtes PawnIO/AMDFamily17; Read-Only-APERF/MPERF, eigene Thread-Affinität und monotone Einzelintervalle; höchster Intervallmittelwert, getrennt von Windows-MHz |
 | NVIDIA-Core-/VRAM-Offset | Ja | Ja, gemessen | Ja | Exakter Treiber/VBIOS; Core-Offset gesperrt bei aktiver V/F-Kurve |
 | NVIDIA V/F-Kurve (127 Anker) | Ja | Ja, gemessen | Ja | Exakter Treiber-SHA-256; Spannungsanker unveränderlich |
 | HP-Modus Balanced / Unleashed | – | Ja, Unleashed einmal gemessen | – | Dashboard-Auswahl; Unleashed nur im Netzbetrieb; Thermalmodus ohne GET, Rückweg ist ein expliziter Balanced-Write |

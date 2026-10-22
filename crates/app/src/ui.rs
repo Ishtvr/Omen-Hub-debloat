@@ -1067,4 +1067,78 @@ mod tests {
             t("dash.cpu_starting")
         );
     }
+
+    #[test]
+    fn measured_cpu_clocks_are_distinct_from_windows_mhz_and_hidden_after_pause() {
+        use omen_core::{CpuHardwareSample, CpuHardwareSource, CpuTemperatureKind, cpu::*};
+        let mut snapshot = Snapshot {
+            cpu: Some(omen_core::CpuSample {
+                busy_percent: Some(12.5),
+                windows_clock_mhz: Some(2401),
+                hardware: Some(CpuHardwareSample {
+                    schema: 1,
+                    source: CpuHardwareSource::PawnioAmdRapl,
+                    temperature_kind: CpuTemperatureKind::AmdTctl,
+                    package_power_w: Some(35.0),
+                    temperature_c: Some(55.0),
+                    power_interval_ms: Some(1100),
+                    effective_clocks: None,
+                    warnings: vec![],
+                }),
+                ..Default::default()
+            }),
+            cpu_hardware_status: CpuHardwareStatus::Active,
+            ..Default::default()
+        };
+        assert!(!crate::dashboard::cpu_load_line(&snapshot).contains("2401"));
+        assert_eq!(
+            crate::dashboard::cpu_detail(&snapshot),
+            t("dash.effective_clock_measuring")
+        );
+        let hardware = snapshot.cpu.as_mut().unwrap().hardware.as_mut().unwrap();
+        hardware.effective_clocks = Some(CpuEffectiveClocks {
+            source: CpuClockSource::AmdAperfReadOnly,
+            logical_processor_count: 2,
+            processors: vec![
+                CpuLogicalClock {
+                    logical_processor: 0,
+                    effective_mhz: 135.0,
+                    interval_ms: 1100,
+                },
+                CpuLogicalClock {
+                    logical_processor: 1,
+                    effective_mhz: 3705.0,
+                    interval_ms: 1101,
+                },
+            ],
+        });
+        let line = crate::dashboard::cpu_load_line(&snapshot);
+        assert!(line.contains("3705") && line.contains("12.5"));
+        assert!(!line.contains("2401"));
+        assert!(crate::dashboard::cpu_detail(&snapshot).contains("1.1"));
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Paused;
+        assert!(!crate::dashboard::cpu_load_line(&snapshot).contains("3705"));
+        assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());
+        snapshot.cpu_hardware_status = CpuHardwareStatus::Active;
+        let hardware = snapshot.cpu.as_mut().unwrap().hardware.as_mut().unwrap();
+        hardware.effective_clocks = None;
+        hardware
+            .warnings
+            .push("CPU effective clock measurement unavailable: reset".into());
+        assert_eq!(
+            crate::dashboard::cpu_detail(&snapshot),
+            t("dash.effective_clock_unavailable")
+        );
+        assert_eq!(
+            snapshot
+                .cpu
+                .as_ref()
+                .unwrap()
+                .hardware
+                .as_ref()
+                .unwrap()
+                .package_power_w,
+            Some(35.0)
+        );
+    }
 }

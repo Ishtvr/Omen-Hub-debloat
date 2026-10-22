@@ -21,7 +21,10 @@ use windows_sys::Win32::{
     UI::{Shell::*, WindowsAndMessaging::SW_HIDE},
 };
 
-const MAX_FRAME: usize = 4096;
+// At most 64 clock rows plus eight bounded warning strings (including JSON
+// escaping). This remains a local, PID/nonce/sequence-bound measurement frame.
+const MAX_FRAME: usize = 32_768;
+const MAX_LAUNCH_FRAME: usize = 4096;
 const SAMPLE: u8 = 1;
 const PAUSE: u8 = 2;
 const STOP: u8 = 3;
@@ -33,7 +36,7 @@ struct LaunchFrame {
     result: Result<u32, String>,
 }
 fn approved_pid(bytes: &[u8], nonce: &str) -> Result<u32, String> {
-    if bytes.len() > MAX_FRAME {
+    if bytes.len() > MAX_LAUNCH_FRAME {
         return Err("CPU launch response exceeds its bounded frame".into());
     }
     let frame: LaunchFrame = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -141,7 +144,7 @@ impl CpuSensorBridge {
             .stdout
             .take()
             .ok_or("CPU launch pipe missing")?
-            .take((MAX_FRAME + 1) as u64)
+            .take((MAX_LAUNCH_FRAME + 1) as u64)
             .read_to_end(&mut response)
             .map_err(|e| e.to_string())?;
         let status = launcher.wait().map_err(|e| e.to_string())?;
@@ -450,7 +453,7 @@ mod tests {
         assert_eq!(approved_pid(&frame("session", Ok(42)), "session"), Ok(42));
         assert!(approved_pid(&frame("old", Ok(42)), "session").is_err());
         assert!(approved_pid(&frame("session", Ok(0)), "session").is_err());
-        assert!(approved_pid(&vec![b' '; MAX_FRAME + 1], "session").is_err());
+        assert!(approved_pid(&vec![b' '; MAX_LAUNCH_FRAME + 1], "session").is_err());
         let cancelled = "CPU-Sensorfreigabe nicht erfolgt: OS error 1223".to_string();
         assert_eq!(
             approved_pid(&frame("session", Err(cancelled.clone())), "session"),
@@ -463,5 +466,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn bounded_frame_carries_all_clocks_and_worst_case_escaped_warnings() {
+        use omen_core::{CpuHardwareSource, CpuTemperatureKind, cpu::*};
+        let sample = CpuHardwareSample {
+            schema: 1,
+            source: CpuHardwareSource::PawnioAmdRapl,
+            temperature_kind: CpuTemperatureKind::AmdTctl,
+            package_power_w: Some(0.1234567890123456),
+            temperature_c: Some(83.375),
+            power_interval_ms: Some(10_000),
+            effective_clocks: Some(CpuEffectiveClocks {
+                source: CpuClockSource::AmdAperfReadOnly,
+                logical_processor_count: 64,
+                processors: (0..64)
+                    .map(|logical_processor| CpuLogicalClock {
+                        logical_processor,
+                        effective_mhz: 0.1234567890123456,
+                        interval_ms: 10_000,
+                    })
+                    .collect(),
+            }),
+            warnings: vec!["\u{0001}".repeat(512); 8],
+        };
+        sample.validate().unwrap();
+        let bytes = serde_json::to_vec(&Frame {
+            schema: 1,
+            nonce: "a".repeat(64),
+            sequence: u64::MAX,
+            result: Ok(Some(sample)),
+        })
+        .unwrap();
+        assert!(
+            bytes.len() < MAX_FRAME,
+            "{} bytes exceeded bounded frame",
+            bytes.len()
+        );
+        let decoded: Frame = serde_json::from_slice(&bytes).unwrap();
+        decoded.result.unwrap().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn legacy_hardware_samples_remain_readable_without_effective_clocks() {
+        let sample: CpuHardwareSample = serde_json::from_str(
+            r#"{"schema":1,"source":"pawnio_amd_rapl","temperature_kind":"amd_tctl",
+                "package_power_w":null,"temperature_c":50.0,"power_interval_ms":null,"warnings":[]}"#,
+        ).unwrap();
+        assert!(sample.effective_clocks.is_none());
+        assert!(sample.validate().is_ok());
     }
 }

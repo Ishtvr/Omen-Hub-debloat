@@ -148,7 +148,7 @@ The sizes in frontmatter correspond to the implementation's negative GDI `lfHeig
 
 Use alignment and stable groups to help repeated scanning. Put a field beside its label, keep supporting provenance close to its value, and keep each deliberate action visibly distinct. Dashboard insets, panel padding and column/action gaps are the observed spacing tokens; editor surfaces retain their current native layouts.
 
-The dashboard has two parallel sensor regions, followed by three equal tool actions and a secondary system/HP-preview row. Its current outer default is 1140×820, with minimum 960×790. Width changes distribute the sensor columns and action widths; this is a native desktop layout, with no mobile breakpoint. Exact composition and observed client captures belong in `.impeccable/surface-briefs/dashboard.md`.
+The dashboard has two parallel sensor regions, followed by three equal tool actions and a secondary system/HP-preview row. Its current outer default is 1140×780, with minimum 960×750. Width changes distribute the sensor columns and action widths; this is a native desktop layout, with no mobile breakpoint. Exact composition and observed client captures belong in `.impeccable/surface-briefs/dashboard.md`.
 
 ## Elevation & Depth
 
@@ -166,7 +166,7 @@ Actions are clear and direct. The native `BUTTON` role, labels, keyboard activat
 
 ### Cards / Containers
 
-The dashboard's two sensor panels are flat tonal containers with gently curved corners and aligned internal values. Their measured values use metric typography; source, interval, clocks and limits use smaller supporting roles. Other windows use the shared client ground and field surfaces without adding decorative containers.
+The dashboard's two sensor panels are flat tonal containers with gently curved corners and aligned internal values. Their measured values use metric typography; source, interval, clocks and limits use smaller supporting roles. Since 22 October 2026 the CPU panel combines the highest measured effective clock with load, keeps Windows-reported MHz on a separate line, and uses its existing detail line for logical-processor coverage and the longest measurement interval. Baseline and clock-only failure states use explicit text. The palette, type scale and panel geometry remain unchanged. Other windows use the shared client ground and field surfaces without adding decorative containers.
 
 ### Position switches
 

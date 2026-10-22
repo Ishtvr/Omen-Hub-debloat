@@ -2,6 +2,7 @@
 #requires -Version 5.1
 param([ValidateRange(5,55)][int]$DurationSeconds=30,[ValidateRange(0,5)][int]$ResumeCycles=2)
 $ErrorActionPreference='Stop'
+$env:OMEN_HUB_LANG='de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
 $taskExe=Join-Path $taskRepo 'dist\Omen Hub++.exe'
 if(-not('OmenCpuTrayMeasure'-as[type])){Add-Type @'
@@ -33,10 +34,11 @@ try{
  $taskShowDeadline=(Get-Date).AddSeconds(3)
  do{if([OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)){break};Start-Sleep -Milliseconds 50}while((Get-Date)-lt$taskShowDeadline)
  if(-not[OmenCpuTrayMeasure]::IsWindowVisible($taskWindow)){throw 'Owned open-window phase is not visible.'}
- [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]106),[IntPtr]::Zero)
+ # CPU approval is automatic on opening. 106/107 select fan/graphics modes and must
+ # never be sent by a read-only memory measurement.
  $taskDeadline=(Get-Date).AddSeconds(45)
- do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
- if($taskText-notmatch'Quelle: CPU-Energiezähler und Tctl über PawnIO'){throw ('CPU activation failed: '+$taskText)}
+ do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Effektiv max\.: \d+ MHz.*32 logische CPUs'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
+ if($taskText-notmatch'Effektiv max\.: \d+ MHz.*'-or$taskText-notmatch'32 logische CPUs'){throw ('CPU activation failed: '+$taskText)}
  $taskReaderPid=[OmenCpuTrayMeasure]::ReaderPid($taskWindow)
  if($taskReaderPid-eq0){throw 'Cannot identify approved helper; refuse parent-only measurement.'}
  $taskReader=Get-Process -Id $taskReaderPid
@@ -46,8 +48,8 @@ try{
   Start-Sleep -Milliseconds 500
   [void][OmenCpuTrayMeasure]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]201),[IntPtr]::Zero)
   $taskDeadline=(Get-Date).AddSeconds(12)
-  do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
-  if($taskText-notmatch'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Mittelwert'){throw ('CPU resume did not produce a fresh interval: '+$taskText)}
+  do{$taskText=[OmenCpuTrayMeasure]::AllText($taskWindow);if($taskText-match'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Effektiv max\.: \d+ MHz.*32 logische CPUs'){break};Start-Sleep -Milliseconds 100}while((Get-Date)-lt$taskDeadline)
+  if($taskText-notmatch'(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Effektiv max\.: \d+ MHz.*32 logische CPUs'){throw ('CPU resume did not produce a fresh interval: '+$taskText)}
   if([OmenCpuTrayMeasure]::ReaderPid($taskWindow)-ne$taskReaderPid){throw 'Resume changed approved helper identity.'}
  }
  $taskParent.Refresh();$taskReader.Refresh()

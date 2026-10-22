@@ -1,5 +1,8 @@
 //! Exact, optional read-only PawnIO transport. No driver installation, SDK init,
 //! write-MSR, free function names or caller-selected registers.
+mod clocks;
+
+use clocks::ClockReader;
 use omen_core::{
     CpuHardwareSample, CpuHardwareSource, CpuTemperatureKind, Inventory,
     cpu::{AmdPackageEnergy, amd_package_watts, amd_tctl_c},
@@ -20,8 +23,8 @@ use windows_sys::Win32::{
         Services::*,
         SystemInformation::GetWindowsDirectoryW,
         Threading::{
-            CreateMutexW, GetCurrentThread, ReleaseMutex, SetThreadAffinityMask,
-            WaitForSingleObject,
+            CreateMutexW, GetCurrentProcessorNumber, GetCurrentThread, ReleaseMutex,
+            SetThreadAffinityMask, WaitForSingleObject,
         },
     },
 };
@@ -52,19 +55,41 @@ impl Drop for Handle {
 struct Affinity(usize);
 impl Affinity {
     fn cpu_zero() -> Result<Self, String> {
+        Self::pin(0)
+    }
+    fn pin(processor: u32) -> Result<Self, String> {
         // The qualified device has one package and one processor group. Save
         // and restore this thread's exact mask; never set a process policy.
-        let old = unsafe { SetThreadAffinityMask(GetCurrentThread(), 1) };
+        let mask = 1usize
+            .checked_shl(processor)
+            .ok_or("CPU affinity index is invalid")?;
+        let old = unsafe { SetThreadAffinityMask(GetCurrentThread(), mask) };
         if old == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        Ok(Self(old))
+        let guard = Self(old);
+        if unsafe { GetCurrentProcessorNumber() } != processor {
+            return Err("CPU reader is not running on the requested logical processor".into());
+        }
+        Ok(guard)
+    }
+    fn restore(mut self) -> Result<(), String> {
+        if unsafe { SetThreadAffinityMask(GetCurrentThread(), self.0) } == 0 {
+            return Err(format!(
+                "CPU reader affinity restore: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.0 = 0;
+        Ok(())
     }
 }
 impl Drop for Affinity {
     fn drop(&mut self) {
-        unsafe {
-            SetThreadAffinityMask(GetCurrentThread(), self.0);
+        if self.0 != 0 {
+            unsafe {
+                SetThreadAffinityMask(GetCurrentThread(), self.0);
+            }
         }
     }
 }
@@ -81,6 +106,8 @@ enum Read {
     EnergyUnits,
     PackageEnergy,
     Temperature,
+    ActualCycles,
+    ReferenceCycles,
 }
 impl Read {
     fn packet(self) -> [u8; 40] {
@@ -88,6 +115,8 @@ impl Read {
             Self::EnergyUnits => (b"ioctl_read_msr", 0xc0010299),
             Self::PackageEnergy => (b"ioctl_read_msr", 0xc001029b),
             Self::Temperature => (b"ioctl_read_smn", 0x59800),
+            Self::ActualCycles => (b"ioctl_read_msr", 0xc00000e8),
+            Self::ReferenceCycles => (b"ioctl_read_msr", 0xc00000e7),
         };
         let mut packet = [0; 40];
         packet[..name.len()].copy_from_slice(name);
@@ -215,6 +244,7 @@ pub struct CpuHardwareReader {
     driver: Handle,
     pci: Handle,
     baseline: Option<(AmdPackageEnergy, Instant)>,
+    clocks: ClockReader,
 }
 impl CpuHardwareReader {
     pub fn new(inventory: &Inventory) -> Result<Self, String> {
@@ -287,19 +317,15 @@ impl CpuHardwareReader {
             driver,
             pci: Handle(pci),
             baseline: None,
+            clocks: ClockReader::default(),
         })
     }
     fn read(&self, what: Read) -> Result<u64, String> {
-        let packet = what.packet();
-        let mut response = [0; 8];
-        if ioctl(&self.driver, EXECUTE, &packet, &mut response)? != 8 {
-            return Err("CPU reader returned an incomplete cell".into());
-        }
-        Ok(u64::from_le_bytes(response))
+        read_cell(&self.driver, what)
     }
     pub fn sample(&mut self) -> Result<CpuHardwareSample, String> {
-        let _affinity = Affinity::cpu_zero()?;
         let result = (|| {
+            let affinity = Affinity::cpu_zero()?;
             let units = self.read(Read::EnergyUnits)?;
             if units == 0 || units == u64::MAX {
                 return Err("CPU energy units are unavailable".into());
@@ -319,8 +345,9 @@ impl CpuHardwareReader {
             if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
                 return Err("CPU temperature reader could not acquire the shared PCI mutex".into());
             }
-            let _pci = PciLease(&self.pci);
+            let pci = PciLease(&self.pci);
             let raw = self.read(Read::Temperature)?;
+            drop(pci);
             if raw > u64::from(u32::MAX) {
                 return Err("CPU temperature register has unexpected high bits".into());
             }
@@ -328,13 +355,22 @@ impl CpuHardwareReader {
             if temperature_c.is_none() {
                 return Err("CPU Tctl response is unavailable or implausible".into());
             }
-            let warnings = if previous.is_some() && package_power_w.is_none() {
+            let mut warnings = if previous.is_some() && package_power_w.is_none() {
                 vec![
                     "CPU energy units, counter or interval changed; a fresh baseline is required"
                         .into(),
                 ]
             } else {
                 vec![]
+            };
+            let effective_clocks = match self.clocks.sample(&self.driver) {
+                Ok(clocks) => clocks,
+                Err(error) => {
+                    warnings.push(format!(
+                        "CPU effective clock measurement unavailable: {error}"
+                    ));
+                    None
+                }
             };
             let sample = CpuHardwareSample {
                 schema: 1,
@@ -343,16 +379,27 @@ impl CpuHardwareReader {
                 package_power_w,
                 temperature_c,
                 power_interval_ms,
+                effective_clocks,
                 warnings,
             };
+            affinity.restore()?;
             sample.validate()?;
             Ok(sample)
         })();
         if result.is_err() {
             self.baseline = None;
+            self.clocks = ClockReader::default();
         }
         result
     }
+}
+fn read_cell(driver: &Handle, what: Read) -> Result<u64, String> {
+    let packet = what.packet();
+    let mut response = [0; 8];
+    if ioctl(driver, EXECUTE, &packet, &mut response)? != 8 {
+        return Err("CPU reader returned an incomplete cell".into());
+    }
+    Ok(u64::from_le_bytes(response))
 }
 pub(super) fn ioctl(
     driver: &Handle,
@@ -403,6 +450,8 @@ mod tests {
             (Read::EnergyUnits, "ioctl_read_msr", 0xc0010299u64),
             (Read::PackageEnergy, "ioctl_read_msr", 0xc001029bu64),
             (Read::Temperature, "ioctl_read_smn", 0x59800u64),
+            (Read::ActualCycles, "ioctl_read_msr", 0xc00000e8u64),
+            (Read::ReferenceCycles, "ioctl_read_msr", 0xc00000e7u64),
         ] {
             let packet = kind.packet();
             assert_eq!(&packet[..name.len()], name.as_bytes());

@@ -36,13 +36,56 @@ unsafe fn metric(hwnd: HWND, id: i32, th: &Theme, value: Option<String>) {
     }
 }
 pub fn cpu_detail(s: &Snapshot) -> String {
-    // Measured values speak for themselves; only states that need attention
-    // get a line.
     match &s.cpu_hardware_status {
         CpuHardwareStatus::Off => t("dash.cpu_off").into(),
         CpuHardwareStatus::Starting => t("dash.cpu_starting").into(),
-        CpuHardwareStatus::Paused | CpuHardwareStatus::Active => String::new(),
+        CpuHardwareStatus::Paused => String::new(),
+        CpuHardwareStatus::Active => {
+            let Some(hardware) = s.cpu.as_ref().and_then(|c| c.hardware.as_ref()) else {
+                return String::new();
+            };
+            if let Some(clocks) = &hardware.effective_clocks {
+                let interval = clocks
+                    .processors
+                    .iter()
+                    .map(|p| p.interval_ms)
+                    .max()
+                    .unwrap_or(0);
+                tf(
+                    "dash.effective_clock_interval",
+                    &[
+                        &clocks.logical_processor_count.to_string(),
+                        &format!("{:.1}", interval as f64 / 1000.0),
+                    ],
+                )
+            } else if hardware
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("CPU effective clock"))
+            {
+                t("dash.effective_clock_unavailable").into()
+            } else {
+                t("dash.effective_clock_measuring").into()
+            }
+        }
         CpuHardwareStatus::Error(e) => crate::ui::cpu_error_message(e).into(),
+    }
+}
+pub fn cpu_load_line(s: &Snapshot) -> String {
+    let cpu = s.cpu.as_ref();
+    let load = cpu
+        .and_then(|c| c.busy_percent)
+        .map_or(t("dash.load_unavailable").into(), |v| format!("{v:.1} %"));
+    let clocks = matches!(s.cpu_hardware_status, CpuHardwareStatus::Active)
+        .then(|| {
+            cpu.and_then(|c| c.hardware.as_ref())
+                .and_then(|h| h.effective_clocks.as_ref())
+        })
+        .flatten();
+    if let Some(mhz) = clocks.and_then(|c| c.max_mhz()) {
+        tf("dash.effective_clock_load", &[&format!("{mhz:.0}"), &load])
+    } else {
+        tf("dash.load", &[&load])
     }
 }
 pub unsafe fn create(hwnd: HWND, th: &Theme) {
@@ -455,16 +498,7 @@ pub unsafe fn update(hwnd: HWND, th: &Theme, s: &Snapshot) {
         {
             text(hwnd, 141, t("dash.measuring"));
         }
-        text(
-            hwnd,
-            144,
-            &tf(
-                "dash.load",
-                &[&cpu
-                    .and_then(|c| c.busy_percent)
-                    .map_or(t("dash.load_unavailable").into(), |v| format!("{v:.1} %"))],
-            ),
-        );
+        text(hwnd, 144, &cpu_load_line(s));
         text(
             hwnd,
             145,
