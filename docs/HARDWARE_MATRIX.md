@@ -7,7 +7,7 @@ Stand 22. Oktober 2026, einschließlich der lesenden CPU-Effektivtakte. Die Matr
 | Gerät | Board / BIOS | CPU | GPU / Treiber / VBIOS | Status |
 | --- | --- | --- | --- | --- |
 | HP OMEN 16-ap0xxx | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.14 / 98.06.2a.40.da | Referenzgerät, einzige qualifizierte Kombination |
-| Dasselbe Referenzgerät am 22. Oktober | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.42 | CPU-Sensoren einschließlich 32 Effektivtakten und öffentliche GPU-GETs gemessen; GPU-OC-/V/F-Schreibfreigabe für 617.14 wird nicht übertragen |
+| Dasselbe Referenzgerät am 22. Oktober | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.42 | CPU-Sensoren einschließlich 32 Effektivtakten sowie GPU-Core-/VRAM-/V/F-Schreib- und vollständige Restore-Pfade erneut gemessen; [separate 617.42-Evidenz](NVIDIA_61742.md) |
 | Alle anderen | – | – | – | Nur lesende Windows-/NVIDIA-Werte; HP-, SMU- und GPU-Schreibaktionen werden blockiert |
 
 Ein anderes BIOS, ein anderer NVIDIA-Treiber oder ein anderes VBIOS verlangt eine neue Qualifikation, auch auf Board 8E35.

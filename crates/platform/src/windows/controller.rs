@@ -14,14 +14,8 @@ use omen_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-// Changed only after a measured clock GET/SET/readback/restore record exists.
-// 2026-10-13 15:17 CEST: native -15/-24 MHz trial, exact readback and full restore.
-// 16:07 CEST: both -15/-24 and +15/+24 MHz verified/restored through v3 trial.
-// This verifies the control path, not stability at arbitrary overclock values.
-const CLOCK_WRITE_VERIFIED: bool = true;
-// 2026-10-13 18:02 CEST: all 127 Graphics deltas -15000 kHz, exact
-// full-curve readback and restore; voltage anchors/global offsets unchanged.
-const CURVE_WRITE_VERIFIED: bool = true;
+// Clock/curve evidence is per exact driver in gpu_support, including the loaded
+// private implementation hash. A new read contract does not enable writes.
 // 2026-10-14 02:35 CEST, build98F3B089...: zone1 red +/-1 byte,
 // complete 128-byte color/brightness/capability readback and original restore;
 // existing programmed GPU controls and prior journal/startup retained.
@@ -79,7 +73,7 @@ pub struct Controller {
     inventory: Inventory,
     nvidia: Option<NvidiaControl>,
     calibration: bool,
-    curve_calibration: bool,
+    curve_calibration: Option<omen_core::vf::CurveTrial>,
     vf: Option<super::vf::VfControl>,
     captured: BTreeMap<Feature, Captured<RestoreState>>,
     curve_target: Option<(Value, omen_core::vf::VfState)>,
@@ -168,7 +162,7 @@ impl Controller {
                 None
             },
             calibration: false,
-            curve_calibration: false,
+            curve_calibration: None,
             vf: None,
             captured: BTreeMap::new(),
             curve_target: None,
@@ -349,19 +343,15 @@ impl Controller {
 
     fn qualifies(&self) -> Result<(), String> {
         let identity = self.gpu()?.identity()?;
-        if self.inventory.manufacturer != "HP"
-            || self.inventory.board != "8E35"
-            || self.inventory.bios != "F.13"
-            || identity.name != "NVIDIA GeForce RTX 5070 Laptop GPU"
-            || identity.driver != "617.14"
-            || identity.vbios != "98.06.2a.40.da"
-        {
-            return Err(
-                "GPU write evidence is limited to HP 8E35/F.13, RTX 5070 Laptop, driver 617.14 and VBIOS 98.06.2a.40.da"
-                    .into(),
-            );
-        }
+        super::gpu_support::model_evidence(&self.inventory, &identity)?;
         Ok(())
+    }
+
+    fn gpu_writes_verified(&self) -> bool {
+        self.gpu()
+            .and_then(|gpu| gpu.identity())
+            .and_then(|identity| super::gpu_support::model_evidence(&self.inventory, &identity))
+            .is_ok_and(|evidence| evidence.writes_verified)
     }
 
     pub fn gpu_report(&self) -> Result<GpuControlsReport, String> {
@@ -469,22 +459,8 @@ impl Controller {
             return Err("Curve validation requires existing zero global offsets".into());
         }
         let state = self.gpu_curve()?;
-        if state
-            .nodes
-            .iter()
-            .any(|p| p.delta_khz != 0 || p.frequency_khz < 16000)
-        {
-            return Err("Curve validation did not overwrite pre-existing user tuning".into());
-        }
-        let Value::VfCurve(mut points) = state.value()? else {
-            unreachable!()
-        };
-        for point in &mut points {
-            point.frequency_mhz = point
-                .frequency_mhz
-                .checked_sub(15)
-                .ok_or("Curve frequency too low for fixed trial")?;
-        }
+        let operation = omen_core::vf::CurveTrial::AllPointsMinus15;
+        let target = operation.target(&state)?;
         let profile = PerformanceProfile {
             schema: PROFILE_SCHEMA,
             id: "vf-driver-validation".into(),
@@ -492,12 +468,12 @@ impl Controller {
             binding: self.context()?.binding,
             settings: vec![Setting {
                 feature: Feature::GpuVfCurve,
-                value: Value::VfCurve(points),
+                value: target,
             }],
         };
-        self.curve_calibration = true;
+        self.curve_calibration = Some(operation);
         let result = transaction::trial(&profile, "fixed-vf-frequency-trial-v1", self, journal);
-        self.curve_calibration = false;
+        self.curve_calibration = None;
         let result =
             result.map_err(|e| format!("{}; rollback errors: {:?}", e.error, e.rollback_errors))?;
         if !state.controls_match(&self.gpu_curve()?)? {
@@ -522,20 +498,14 @@ impl Controller {
         let state = self.gpu_curve()?;
         if self.gpu()?.offset(Feature::GpuCoreOffsetMhz)?.current_mhz != 0
             || self.gpu()?.offset(Feature::GpuMemoryOffsetMhz)?.current_mhz != 0
-            || state.nodes.iter().any(|p| p.delta_khz != 0)
         {
             return Err(
-                "Preservation trial requires original zero offsets; existing tuning is not reset"
+                "Preservation trial requires zero global offsets; existing curve is retained"
                     .into(),
             );
         }
-        let Value::VfCurve(mut points) = state.value()? else {
-            unreachable!()
-        };
-        points[0].frequency_mhz = points[0]
-            .frequency_mhz
-            .checked_sub(15)
-            .ok_or("Frequency below fixed trial bounds")?;
+        let operation = omen_core::vf::CurveTrial::FirstPointMinus15;
+        let target = operation.target(&state)?;
         let profile = PerformanceProfile {
             schema: PROFILE_SCHEMA,
             id: "memory-curve-validation".into(),
@@ -544,7 +514,7 @@ impl Controller {
             settings: vec![
                 Setting {
                     feature: Feature::GpuVfCurve,
-                    value: Value::VfCurve(points),
+                    value: target,
                 },
                 Setting {
                     feature: Feature::GpuMemoryOffsetMhz,
@@ -553,6 +523,8 @@ impl Controller {
             ],
         };
         self.memory_last_trial = true;
+        self.calibration = true;
+        self.curve_calibration = Some(operation);
         let result = transaction::trial(
             &profile,
             "fixed-memory-curve-preservation-v1",
@@ -560,6 +532,8 @@ impl Controller {
             journal,
         );
         self.memory_last_trial = false;
+        self.calibration = false;
+        self.curve_calibration = None;
         result.map_err(|e| format!("{}; rollback errors: {:?}", e.error, e.rollback_errors))
     }
 
@@ -570,6 +544,10 @@ impl Controller {
         journal: &mut impl Journal<RestoreState>,
     ) -> Result<Vec<Applied>, String> {
         self.qualifies()?;
+        // A fixed global-offset probe can temporarily replace a custom curve.
+        // Capture/restore includes every Graphics point for both domains. This
+        // does not relax the normal profile's global-offset/curve conflict.
+        self.gpu_curve()?.validate()?;
         let gpu = self.gpu()?;
         gpu.thermal_guard(87)?;
         let core = gpu.offset(Feature::GpuCoreOffsetMhz)?;
@@ -759,12 +737,13 @@ impl Backend for Controller {
             };
         }
         if feature == Feature::GpuVfCurve {
+            let verified = self.gpu_writes_verified();
             let state: Result<omen_core::vf::VfState, String> = (|| {
                 let state = self.gpu_curve()?;
                 state.value()?;
                 Ok(state)
             })();
-            return match state {Ok(_)=>Capability{feature,access:if CURVE_WRITE_VERIFIED||self.curve_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified".into(),integer_range:None,requires_ac: false,startup_safe:CURVE_WRITE_VERIFIED&&!self.curve_calibration},Err(reason)=>Capability::unsupported(feature,reason)};
+            return match state {Ok(_)=>Capability{feature,access:if verified||self.curve_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:if verified||self.curve_calibration.is_some() {"Exact private Graphics frequency-at-voltage contract; voltage anchors are immutable, physical voltage ceiling and load stability are not certified"}else{"Curve GET is verified; SET/readback/restore validation is pending"}.into(),integer_range:None,requires_ac: false,startup_safe:verified&&self.curve_calibration.is_none()},Err(reason)=>Capability::unsupported(feature,reason)};
         }
         if matches!(
             feature,
@@ -775,7 +754,7 @@ impl Backend for Controller {
                     return Capability::unsupported(feature, reason);
                 }
             }
-            if feature == Feature::GpuCoreOffsetMhz {
+            if feature == Feature::GpuCoreOffsetMhz && !self.calibration {
                 match self.gpu_curve() {
                     Ok(state) => {
                         if state
@@ -810,7 +789,8 @@ impl Backend for Controller {
                         .gpu()
                         .and_then(|g| g.report())
                         .is_ok_and(|r| r.clock_setter_export);
-                    let ready = setter && (CLOCK_WRITE_VERIFIED || self.calibration);
+                    let verified = self.gpu_writes_verified();
+                    let ready = setter && (verified || self.calibration);
                     let range = if self.calibration {
                         (
                             if feature == Feature::GpuCoreOffsetMhz {
@@ -843,7 +823,7 @@ impl Backend for Controller {
                         },
                         integer_range: Some(range),
                         requires_ac: false,
-                        startup_safe: CLOCK_WRITE_VERIFIED && !self.calibration,
+                        startup_safe: verified && !self.calibration,
                     }
                 }
                 Err(reason) => Capability::unsupported(feature, reason),
@@ -1979,14 +1959,9 @@ impl Backend for Controller {
                 return Err("V/F curve value missing".into());
             };
             let state = self.gpu_curve()?;
-            let deltas = state.target_deltas(points)?;
-            if self.curve_calibration
-                && deltas
-                    .iter()
-                    .zip(&state.nodes)
-                    .any(|((_, delta), node)| *delta != node.delta_khz - 15000)
-            {
-                return Err("Fixed curve trial only permits minus 15 MHz per Graphics node".into());
+            state.target_deltas(points)?;
+            if let Some(operation) = self.curve_calibration {
+                operation.validate(&state, points)?;
             }
         }
         Ok(())

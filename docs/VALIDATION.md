@@ -2,6 +2,10 @@
 
 Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Laptop GPU. Windows x64. Build-Werkzeuge: Rust/Cargo 1.99.0, MSVC-Toolchain. Auf anderen Geräten ist dieser Stand nicht validiert.
 
+## GPU-Treiber 617.42 — 22. Oktober, 03:20…03:21 CEST
+
+Erneut qualifizierte Core-/VRAM-/V/F-Schreib- und Restore-Pfade mit exakter Implementierungsbindung. **156 Tests** (91 Core / 45 Platform / 20 App), Format, Clippy und Release-Build bestanden. Die ursprüngliche nicht uniforme Kurve, globalen Offsets sowie Journal/Startup-Metadaten blieben nach allen Proben erhalten; Afterburner wurde mit unverändertem Zustand wieder gestartet. Der echte native Preset→Chart-Smoke bestand. Aktuelle Binary für diesen Nachweis: **FB924A420FBF0211A2A24608C36579E5E685F08D69F4468087F2A9C074F2F80F**, **2.657.792 Bytes**. Umfang, Zeitpunkte und Grenzen: [NVIDIA_61742.md](NVIDIA_61742.md). Die folgenden CPU-/Speicherproben bleiben an ihren früheren Build gebunden.
+
 ## Effektive CPU-Takte — 22. Oktober 2026
 
 Nach Zusammenführung mit `origin/main` (`04646fa`, einschließlich Anwenden-/Tray-Einstellungen und neuer Lüfter-/Grafikschalter) ist der aktuelle lokale Windows-Release **2.654.720 Bytes**, SHA-256 **B4C5063F92796830D24252247C9E79055DA350AAF9D1ABAF4197DCF5D8CFA5FF**. `cargo fmt --all -- --check`, **152 Tests** (89 Core / 43 Platform / 20 App), `cargo clippy --workspace --all-targets --locked -- -D warnings` und der gesperrte Release-Build bestanden. Die neue Abdeckung betrifft APERF-Wandzeitrechnung, MPERF-Fortschritt, Reset/CPU-Verwechslung/veraltete Intervalle, vollständige und eindeutige Abdeckung, Clock-Baseline-Verwurf und Wiederaufbau, getrennte Windows-MHz und die begrenzte IPC-Antwort einschließlich JSON-Escaping. Vorhandene Tests für Profile und Hardwaretransaktionen liefen mit; Unit-Tests schreiben keine Firmware.

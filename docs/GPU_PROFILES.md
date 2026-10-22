@@ -1,12 +1,14 @@
 # GPU-Steuerung und eigene Profile
 
-Stand: 15. Oktober 2026. **Leistungsprofile → Custom Presets** ersetzt das frühere GPU-Profilfenster; `presets-ui [id]` ist der direkte Einstieg, `gpu-ui` bleibt Alias. Die vollständige Bedienung steht in [CUSTOM_PRESETS.md](CUSTOM_PRESETS.md). Speichern verändert keine Hardware. Anwenden/Wiederherstellen/Anmeldefreigabe verwenden feste UAC-Children; Dashboard und Tray bleiben uneleviert.
+Stand: 22. Oktober 2026. **Leistungsprofile → Custom Presets** ersetzt das frühere GPU-Profilfenster; `presets-ui [id]` ist der direkte Einstieg, `gpu-ui` bleibt Alias. Die vollständige Bedienung steht in [CUSTOM_PRESETS.md](CUSTOM_PRESETS.md). Speichern verändert keine Hardware. Anwenden/Wiederherstellen/Anmeldefreigabe verwenden feste UAC-Children; Dashboard und Tray bleiben uneleviert.
+
+617.42 wurde mit Ghidra, nativen GETs und festen Schreib-/Readback-/Restore-Proben an einer bereits individuellen Kurve erneut geprüft. Der echte Preset-zu-Chart-Pfad wurde ebenfalls getestet. Build, genaue Hashes und Grenzen: [NVIDIA_61742.md](NVIDIA_61742.md).
 
 ## Tatsächlich freigegeben
 
 GPU-Core- und VRAM-Takt-Offsets verwenden die öffentlichen NVML-Funktionen `nvmlDeviceGetClockOffsets` und `nvmlDeviceSetClockOffsets`. Die C-Struktur ist 24 Bytes groß, mit NVML-Versionbits 24–31, Graphics/Memory-Domänen und P-State 0. Die Bibliothek wird aus System32 geladen; Handles und Funktionspointer leben nur innerhalb ihrer Treibersitzung.
 
-Die Freigabe gilt für **HP 8E35 / BIOS F.13, RTX 5070 Laptop, NVIDIA 617.14, VBIOS 98.06.2a.40.da**. Profile binden zusätzlich die tatsächliche GPU-UUID. Ein anderes BIOS, ein anderer Treiber oder ein anderes VBIOS verlangt neue Evidenz. Bei mehreren NVIDIA-Geräten ist ein explizites Ziel erforderlich.
+Die Freigabe gilt für **HP 8E35 / BIOS F.13, RTX 5070 Laptop, NVIDIA 617.14 oder 617.42, VBIOS 98.06.2a.40.da**. Profile binden zusätzlich die tatsächliche GPU-UUID. Ein anderes BIOS, ein anderer Treiber oder ein anderes VBIOS verlangt neue Evidenz. Bei mehreren NVIDIA-Geräten ist ein explizites Ziel erforderlich.
 
 Gemessen wurden Core **−15/+15 MHz** und Memory **−24/+24 MHz**, jeweils mit exaktem Readback und vollständiger Rückkehr zu 0/0. Die Treiberspannen −1000…+1000 und −2000…+6000 MHz sind **keine Stabilitätsfreigabe**. VRAM-Werte sind NVML-MHz, keine versprochene effektive DDR-Datenrate. Ein Versuch mit Memory −25 MHz ergab tatsächlich −24 MHz; die Transaktion wies die Abweichung ab und stellte beide Originalwerte wieder her. Nicht darstellbare Werte werden nicht stillschweigend gerundet.
 

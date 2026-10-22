@@ -79,6 +79,72 @@ pub fn handles(command: &str) -> bool {
     )
 }
 
+/// Every fixed GPU trial keeps the full production recovery checkpoint. Even a
+/// failed trial may return to that checkpoint only after complete live restore
+/// and an exact, closed trial journal; a pending recovery is never hidden.
+fn gpu_qualification(store: &mut ProfileStore, command: &str) -> Result<(), String> {
+    let _lease = ControlLease::acquire()?;
+    let checkpoint = store.checkpoint_completed_journal()?;
+    let mut controller = Controller::new(true, None)?;
+    let before_gpu = controller.gpu_report()?;
+    let before_curve = controller.gpu_curve()?;
+    let (id, digests): (&str, &[&str]) = match command {
+        "gpu-validate" => (
+            "driver-validation",
+            &[
+                "fixed-driver-validation-v3-negative",
+                "fixed-driver-validation-v3-positive",
+            ],
+        ),
+        "gpu-validate-curve" => ("vf-driver-validation", &["fixed-vf-frequency-trial-v1"]),
+        "gpu-validate-memory-curve" => (
+            "memory-curve-validation",
+            &["fixed-memory-curve-preservation-v1"],
+        ),
+        _ => return Err("Unknown fixed GPU qualification".into()),
+    };
+    let result = match command {
+        "gpu-validate" => controller
+            .validate_gpu_offsets(store)
+            .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string())),
+        "gpu-validate-curve" => controller
+            .validate_gpu_curve(store)
+            .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string())),
+        _ => controller
+            .validate_memory_curve_preservation(store)
+            .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string())),
+    };
+    let after_gpu = controller.gpu_report();
+    let after_curve = controller.gpu_curve();
+    let final_check: Result<(), String> = (|| {
+        let gpu = after_gpu.as_ref().map_err(Clone::clone)?;
+        let curve = after_curve.as_ref().map_err(Clone::clone)?;
+        if before_gpu.identity != gpu.identity
+            || before_gpu.core != gpu.core
+            || before_gpu.memory != gpu.memory
+            || !before_curve.controls_match(curve)?
+        {
+            return Err("Fixed GPU trial did not restore every original GPU control".into());
+        }
+        Ok(())
+    })();
+    if final_check.is_ok() {
+        let completed = store.last_transaction::<RestoreState>()?;
+        if completed.profile_id == id && digests.contains(&completed.profile_digest.as_str()) {
+            store.restore_completed_trial_checkpoint(checkpoint, id, &completed.profile_digest)?;
+        } else if result.is_ok() {
+            return Err("Completed GPU trial journal identity differs".into());
+        }
+    }
+    print(
+        &serde_json::json!({"before":before_gpu,"before_curve":before_curve,"transaction":result,
+        "after":after_gpu,"after_curve":after_curve,"final_check":final_check,
+        "hardware_scope":"fixed MHz offsets/curve points; complete immediate restore; no voltage/power field writes"}),
+    )?;
+    result?;
+    final_check
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let result = run_inner(args);
     // Return early errors (e.g. access/session/empty journal) to the matching UI
@@ -320,41 +386,10 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             result.map(|_| ())?;
             final_check
         }
-        Some("gpu-validate-memory-curve") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
-            if store.pending()? {
-                return Err("Pending recovery blocks a preservation trial".into());
-            }
-            let mut controller = Controller::new(true, None)?;
-            let before = controller.gpu_curve()?;
-            let result = controller.validate_memory_curve_preservation(&mut store)?;
-            print(
-                &serde_json::json!({"before":before,"transaction":result,"after":controller.gpu_curve()?,"gpu":controller.gpu_report()?}),
-            )
-        }
-        Some("gpu-validate-curve") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
-            if store.pending()? {
-                return Err("Pending recovery blocks a curve trial".into());
-            }
-            let mut controller = Controller::new(true, None)?;
-            let before = controller.gpu_curve()?;
-            let result = controller.validate_gpu_curve(&mut store)?;
-            let after = controller.gpu_curve()?;
-            print(
-                &serde_json::json!({"before":before,"transaction":result,"after":after,"gpu":controller.gpu_report()?}),
-            )
-        }
-        Some("gpu-validate") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
-            if store.pending()? {
-                return Err("An earlier transaction requires recovery before validation".into());
-            }
-            let mut controller = Controller::new(true, None)?;
-            let before = controller.gpu_report()?;
-            let result = controller.validate_gpu_offsets(&mut store)?;
-            let after = controller.gpu_report()?;
-            print(&serde_json::json!({"before":before,"transaction":result,"after":after}))
+        Some(command @ ("gpu-validate" | "gpu-validate-curve" | "gpu-validate-memory-curve"))
+            if args.len() == 1 =>
+        {
+            gpu_qualification(&mut store, command)
         }
         Some("profile-create") if args.len() == 3 => {
             let mut controller = Controller::new(true, None)?;

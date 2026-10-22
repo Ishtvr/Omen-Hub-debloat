@@ -1,4 +1,4 @@
-//! Exact private control-state ABI, scoped to the disassembled 617.14 driver.
+//! Exact private control-state ABI, scoped to disassembled, hashed driver builds.
 //! Not a background telemetry source; only explicit curve operations initialize it.
 use super::{
     gpu::NvidiaIdentity,
@@ -24,7 +24,6 @@ const CURVE_BYTES: usize = 0x1c28;
 const CONTROL_BYTES: usize = 0x2420;
 const RANGES_BYTES: usize = 0x928;
 const HEADER_WORDS: usize = 17;
-const IMPL_SHA: &str = "ff1527cea533c75f89033f7c0d9cdbaa6ec84bcac26c1db082227d68efd6a16e";
 struct Blocks {
     mask: Vec<u32>,
     curve: Vec<u32>,
@@ -41,6 +40,7 @@ pub(super) struct VfControl {
     curve: Buffer,
     control: Buffer,
     ranges: Buffer,
+    implementation_sha256: &'static str,
 }
 fn status(label: &str, result: i32) -> Result<(), String> {
     if result == 0 {
@@ -49,7 +49,7 @@ fn status(label: &str, result: i32) -> Result<(), String> {
         Err(format!("NVAPI V/F {label}: status {result}"))
     }
 }
-fn implementation_hash(address: *const c_void) -> Result<(), String> {
+fn implementation_hash(address: *const c_void, expected: &str) -> Result<(), String> {
     let mut module = ptr::null_mut();
     // SAFETY: FROM_ADDRESS interprets the pointer as code, not a string. Library
     // ownership and successful NVAPI init retain its module during this query.
@@ -81,7 +81,7 @@ fn implementation_hash(address: *const c_void) -> Result<(), String> {
         }
         hash.update(&chunk[..count]);
     }
-    if format!("{:x}", hash.finalize()) != IMPL_SHA {
+    if format!("{:x}", hash.finalize()) != expected {
         return Err(
             "Private V/F ABI evidence does not match the loaded NVIDIA implementation".into(),
         );
@@ -90,12 +90,7 @@ fn implementation_hash(address: *const c_void) -> Result<(), String> {
 }
 impl VfControl {
     pub fn new(identity: &NvidiaIdentity) -> Result<Self, String> {
-        if identity.driver != "617.14"
-            || identity.vbios != "98.06.2a.40.da"
-            || identity.name != "NVIDIA GeForce RTX 5070 Laptop GPU"
-        {
-            return Err("V/F reader is not validated for this driver/VBIOS/GPU".into());
-        }
+        let evidence = super::gpu_support::driver_evidence(identity)?;
         let library = system_library("nvapi64.dll")?;
         // SAFETY: Exact public QueryInterface and fixed public/private signatures.
         unsafe {
@@ -130,8 +125,16 @@ impl VfControl {
                 curve,
                 control,
                 ranges,
+                implementation_sha256: evidence.implementation_sha256,
             };
-            implementation_hash(control_address)?;
+            for address in [
+                control_address,
+                mask as *const c_void,
+                curve as *const c_void,
+                ranges as *const c_void,
+            ] {
+                implementation_hash(address, evidence.implementation_sha256)?;
+            }
             let mut handles = [ptr::null_mut(); 64];
             let mut count = 0;
             status(
@@ -286,7 +289,7 @@ impl VfControl {
         if address.is_null() {
             return Err("V/F frequency setter unavailable".into());
         }
-        implementation_hash(address)?;
+        implementation_hash(address, self.implementation_sha256)?;
         let setter: Buffer = unsafe { std::mem::transmute(address) };
         status("frequency SET", unsafe {
             setter(self.handle, control.as_mut_ptr())

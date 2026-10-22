@@ -7,6 +7,7 @@ mod cpu_hardware;
 mod cpu_tuning;
 mod fan_service;
 mod gpu;
+mod gpu_support;
 mod hp;
 mod lighting;
 mod nvidia;

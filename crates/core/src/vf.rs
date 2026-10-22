@@ -148,6 +148,54 @@ pub fn plateau(state: &VfState, voltage_mv: u32, frequency_mhz: u32) -> Result<V
     Ok(Value::VfCurve(points))
 }
 
+/// Fixed qualification operations preserve the existing curve, with only the
+/// selected frequency deltas shifted. No assumed factory image is substituted.
+#[derive(Debug, Clone, Copy)]
+pub enum CurveTrial {
+    AllPointsMinus15,
+    FirstPointMinus15,
+}
+
+impl CurveTrial {
+    pub fn target(self, state: &VfState) -> Result<Value, String> {
+        let Value::VfCurve(mut points) = state.value()? else {
+            unreachable!()
+        };
+        for (index, point) in points.iter_mut().enumerate() {
+            if matches!(self, Self::AllPointsMinus15) || index == 0 {
+                point.frequency_mhz = point
+                    .frequency_mhz
+                    .checked_sub(15)
+                    .filter(|value| *value > 0)
+                    .ok_or("Frequency is too low for the fixed trial")?;
+            }
+        }
+        self.validate(state, &points)?;
+        Ok(Value::VfCurve(points))
+    }
+
+    pub fn validate(self, state: &VfState, points: &[VfPoint]) -> Result<(), String> {
+        for (position, ((_, delta), original)) in state
+            .target_deltas(points)?
+            .iter()
+            .zip(&state.nodes)
+            .enumerate()
+        {
+            let shift = if matches!(self, Self::AllPointsMinus15) || position == 0 {
+                15_000
+            } else {
+                0
+            };
+            if original.delta_khz.checked_sub(shift) != Some(*delta) {
+                return Err(
+                    "Fixed curve trial permits only its selected minus-15-MHz delta".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +265,70 @@ mod tests {
         live.nodes[1].delta_khz = original.nodes[1].delta_khz;
         live.nodes[1].voltage_uv += 1000;
         assert!(!original.controls_match(&live).unwrap());
+    }
+
+    #[test]
+    fn fixed_trials_preserve_an_existing_nonuniform_curve_and_select_exact_points() {
+        let original = state();
+        let Value::VfCurve(all) = CurveTrial::AllPointsMinus15.target(&original).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            original.target_deltas(&all).unwrap(),
+            [(3, 0), (4, 15000), (5, 30000)]
+        );
+        let Value::VfCurve(first) = CurveTrial::FirstPointMinus15.target(&original).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            original.target_deltas(&first).unwrap(),
+            [(3, 0), (4, 30000), (5, 45000)]
+        );
+        assert!(
+            CurveTrial::AllPointsMinus15
+                .validate(&original, &first)
+                .is_err()
+        );
+        assert!(
+            CurveTrial::FirstPointMinus15
+                .validate(&original, &all)
+                .is_err()
+        );
+        assert_eq!(
+            original
+                .nodes
+                .iter()
+                .map(|n| n.delta_khz)
+                .collect::<Vec<_>>(),
+            [15000, 30000, 45000]
+        );
+    }
+
+    #[test]
+    fn trial_rejects_changed_observation_grid_and_insufficient_headroom() {
+        let original = state();
+        let Value::VfCurve(target) = CurveTrial::AllPointsMinus15.target(&original).unwrap() else {
+            panic!()
+        };
+        let mut changed = original.clone();
+        changed.nodes[1].frequency_khz += 15000;
+        assert!(
+            CurveTrial::AllPointsMinus15
+                .validate(&changed, &target)
+                .is_err()
+        );
+        changed = original.clone();
+        changed.nodes[0].voltage_uv += 1000;
+        assert!(
+            CurveTrial::AllPointsMinus15
+                .validate(&changed, &target)
+                .is_err()
+        );
+        changed = original;
+        changed.minimum_delta_khz = 15000;
+        assert!(CurveTrial::AllPointsMinus15.target(&changed).is_err());
+        changed.minimum_delta_khz = -500000;
+        changed.nodes[0].frequency_khz = 10000;
+        assert!(CurveTrial::FirstPointMinus15.target(&changed).is_err());
     }
 }
