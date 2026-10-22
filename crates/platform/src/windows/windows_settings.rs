@@ -108,6 +108,12 @@ pub enum WindowsImage {
         #[serde(with = "guid_hex")]
         overlay: u128,
     },
+    /// Configured overlay, distinct from the effective policy (which may be
+    /// overridden by the plan or Energy Saver).
+    ConfiguredOverlay {
+        #[serde(with = "guid_hex")]
+        overlay: u128,
+    },
     Refresh {
         width: u32,
         height: u32,
@@ -196,7 +202,12 @@ fn write_index(scheme: u128, setting: u128, ac: u32, dc: u32) -> Result<(), Stri
             "Power DC write",
         )?;
         // Re-activating the scheme makes the new indices effective immediately.
-        check(PowerSetActiveScheme(ptr::null_mut(), &s), "Activate scheme")
+        // Restoring a policy of an inactive destination plan must not select it.
+        // This also avoids undoing a concurrent external plan switch.
+        if active_scheme()? == scheme {
+            check(PowerSetActiveScheme(ptr::null_mut(), &s), "Activate scheme")?;
+        }
+        Ok(())
     }
 }
 fn plan_scheme(choice: Choice) -> Option<u128> {
@@ -218,32 +229,42 @@ fn overlay_guid(choice: Choice) -> Option<u128> {
 
 /// Undocumented but stable powrprof exports behind Settings > Power mode.
 type GetOverlay = unsafe extern "system" fn(*mut GUID) -> u32;
-type SetOverlay = unsafe extern "system" fn(*const GUID) -> u32;
-fn overlay_api() -> Result<(libloading::Library, GetOverlay, SetOverlay), String> {
+type SetOverlay = unsafe extern "system" fn(GUID) -> u32;
+fn overlay_api() -> Result<(libloading::Library, GetOverlay, GetOverlay, SetOverlay), String> {
     // SAFETY: System DLL; symbol signatures match the shipped powrprof exports.
     unsafe {
         let library = libloading::Library::new("powrprof.dll").map_err(|e| e.to_string())?;
-        let get = *library
+        let actual = *library
+            .get::<GetOverlay>(b"PowerGetActualOverlayScheme\0")
+            .map_err(|_| "Configured Windows power mode is not available on this system")?;
+        let effective = *library
             .get::<GetOverlay>(b"PowerGetEffectiveOverlayScheme\0")
             .map_err(|_| "Windows power mode is not available on this system")?;
         let set = *library
             .get::<SetOverlay>(b"PowerSetActiveOverlayScheme\0")
             .map_err(|_| "Windows power mode is not available on this system")?;
-        Ok((library, get, set))
+        Ok((library, actual, effective, set))
     }
 }
 fn read_overlay() -> Result<u128, String> {
-    let (_library, get, _) = overlay_api()?;
+    let (_library, get, _, _) = overlay_api()?;
     let mut value = guid(0);
     // SAFETY: Writable GUID output; library stays loaded through the call.
     check(unsafe { get(&mut value) }, "Power mode")?;
     Ok(to_u128(&value))
 }
+fn read_effective_overlay() -> Result<u128, String> {
+    let (_library, _, get, _) = overlay_api()?;
+    let mut value = guid(0);
+    // SAFETY: Exact writable GUID output, library outlives the call.
+    check(unsafe { get(&mut value) }, "Effective power mode")?;
+    Ok(to_u128(&value))
+}
 fn write_overlay(overlay: u128) -> Result<(), String> {
-    let (_library, _, set) = overlay_api()?;
+    let (_library, _, _, set) = overlay_api()?;
     let value = guid(overlay);
     // SAFETY: Valid GUID; library stays loaded through the call.
-    check(unsafe { set(&value) }, "Power mode write")
+    check(unsafe { set(value) }, "Power mode write")
 }
 
 fn current_mode() -> Result<DEVMODEW, String> {
@@ -307,8 +328,39 @@ fn write_refresh(width: u32, height: u32, hz: u32) -> Result<(), String> {
 }
 
 pub fn capture(feature: Feature) -> Result<WindowsImage, String> {
+    capture_for_scheme(feature, None)
+}
+
+pub fn requested_scheme(settings: &[omen_core::profiles::Setting]) -> Result<Option<u128>, String> {
+    let target = settings
+        .iter()
+        .find(|setting| setting.feature == Feature::WindowsPowerPlan)
+        .map(|setting| {
+            validate(setting.feature, &setting.value)?;
+            let Value::Choice(choice) = setting.value else {
+                return Err("Power plan is not a choice".into());
+            };
+            plan_scheme(choice).ok_or_else(|| "Unknown target power plan".to_owned())
+        })
+        .transpose()?;
+    if settings
+        .iter()
+        .any(|setting| setting.feature == Feature::WindowsEnergyMode)
+    {
+        let effective = target.map_or_else(active_scheme, Ok)?;
+        if effective != PLAN_BALANCED {
+            return Err(msg("windows.err.overlay_plan", &[]));
+        }
+    }
+    Ok(target)
+}
+
+pub fn capture_for_scheme(
+    feature: Feature,
+    target_scheme: Option<u128>,
+) -> Result<WindowsImage, String> {
     if let Some(setting) = power_setting(feature) {
-        let scheme = active_scheme()?;
+        let scheme = target_scheme.map_or_else(active_scheme, Ok)?;
         let (ac, dc) = read_index(scheme, setting)?;
         return Ok(WindowsImage::PowerIndex {
             scheme,
@@ -321,7 +373,7 @@ pub fn capture(feature: Feature) -> Result<WindowsImage, String> {
         Feature::WindowsPowerPlan => Ok(WindowsImage::ActiveScheme {
             scheme: active_scheme()?,
         }),
-        Feature::WindowsEnergyMode => Ok(WindowsImage::Overlay {
+        Feature::WindowsEnergyMode => Ok(WindowsImage::ConfiguredOverlay {
             overlay: read_overlay()?,
         }),
         Feature::DisplayRefreshRateHz => {
@@ -337,6 +389,57 @@ pub fn capture(feature: Feature) -> Result<WindowsImage, String> {
         }),
         _ => Err("Not a Windows setting".into()),
     }
+}
+
+/// Read the exact policy represented by an original, including inactive plans.
+pub fn capture_like(feature: Feature, image: &WindowsImage) -> Result<WindowsImage, String> {
+    if matches!(image, WindowsImage::Overlay { .. }) {
+        return Err(
+            "Legacy effective-overlay image cannot restore the configured Windows power mode"
+                .into(),
+        );
+    }
+    if let WindowsImage::PowerIndex {
+        scheme, setting, ..
+    } = image
+    {
+        if power_setting(feature) != Some(*setting) {
+            return Err("Power-index restore image belongs to another setting".into());
+        }
+        return capture_for_scheme(feature, Some(*scheme));
+    }
+    capture(feature)
+}
+
+pub fn verify_target(
+    feature: Feature,
+    original: &WindowsImage,
+    wanted: &Value,
+) -> Result<bool, String> {
+    if let WindowsImage::PowerIndex { scheme, .. } = original {
+        if active_scheme()? != *scheme {
+            return Err("Active power plan changed during policy application".into());
+        }
+    }
+    if feature == Feature::WindowsEnergyMode {
+        let Value::Choice(choice) = wanted else {
+            return Err("Power mode target is not a choice".into());
+        };
+        let expected = overlay_guid(*choice).ok_or("Unknown power mode")?;
+        if active_scheme()? != PLAN_BALANCED {
+            return Err(msg("windows.err.overlay_plan", &[]));
+        }
+        for attempt in 0..5 {
+            if read_overlay()? == expected && read_effective_overlay()? == expected {
+                return Ok(true);
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        return Ok(false);
+    }
+    image_matches(feature, &capture_like(feature, original)?, wanted)
 }
 
 /// The profile value of a captured image. Power indices report the AC value;
@@ -358,14 +461,15 @@ pub fn value(feature: Feature, image: &WindowsImage) -> Result<Value, String> {
                 _ => Choice::Manual,
             })
         }
-        (Feature::WindowsEnergyMode, WindowsImage::Overlay { overlay }) => {
-            Value::Choice(match *overlay {
-                OVERLAY_EFFICIENCY => Choice::BestEfficiency,
-                OVERLAY_BALANCED => Choice::Balanced,
-                OVERLAY_PERFORMANCE => Choice::BestPerformance,
-                _ => Choice::Manual,
-            })
-        }
+        (
+            Feature::WindowsEnergyMode,
+            WindowsImage::Overlay { overlay } | WindowsImage::ConfiguredOverlay { overlay },
+        ) => Value::Choice(match *overlay {
+            OVERLAY_EFFICIENCY => Choice::BestEfficiency,
+            OVERLAY_BALANCED => Choice::Balanced,
+            OVERLAY_PERFORMANCE => Choice::BestPerformance,
+            _ => Choice::Manual,
+        }),
         (Feature::DisplayRefreshRateHz, WindowsImage::Refresh { hz, .. }) => {
             Value::Integer(i64::from(*hz))
         }
@@ -379,6 +483,78 @@ pub fn value(feature: Feature, image: &WindowsImage) -> Result<Value, String> {
 
 pub fn read(feature: Feature) -> Result<Value, String> {
     value(feature, &capture(feature)?)
+}
+
+/// A profile writes both power sources, even though the editor displays AC.
+pub fn image_matches(
+    feature: Feature,
+    image: &WindowsImage,
+    wanted: &Value,
+) -> Result<bool, String> {
+    if let WindowsImage::PowerIndex {
+        setting, ac, dc, ..
+    } = image
+    {
+        if power_setting(feature) != Some(*setting) {
+            return Err("Power-index image belongs to another setting".into());
+        }
+        let index = match wanted {
+            Value::Choice(choice) if feature == Feature::WindowsBoostMode => BOOST_CHOICES
+                .iter()
+                .position(|value| value == choice)
+                .ok_or("Unknown boost mode")?
+                as u32,
+            Value::Integer(value) => u32::try_from(*value).map_err(|e| e.to_string())?,
+            _ => return Err("Wrong power-index target type".into()),
+        };
+        return Ok(*ac == index && *dc == index);
+    }
+    Ok(value(feature, image)? == *wanted)
+}
+
+/// A failed AC/DC write can leave a mixture of original and requested values.
+/// Unrelated values are never treated as owned during recovery.
+pub fn image_owned(
+    feature: Feature,
+    original: &WindowsImage,
+    live: &WindowsImage,
+    target: &Value,
+) -> Result<bool, String> {
+    if let (
+        WindowsImage::PowerIndex {
+            scheme,
+            setting,
+            ac,
+            dc,
+        },
+        WindowsImage::PowerIndex {
+            scheme: live_scheme,
+            setting: live_setting,
+            ac: live_ac,
+            dc: live_dc,
+        },
+    ) = (original, live)
+    {
+        if scheme != live_scheme
+            || setting != live_setting
+            || power_setting(feature) != Some(*setting)
+        {
+            return Ok(false);
+        }
+        let wanted = match target {
+            Value::Choice(choice) if feature == Feature::WindowsBoostMode => BOOST_CHOICES
+                .iter()
+                .position(|v| v == choice)
+                .ok_or("Unknown boost target")?
+                as u32,
+            Value::Integer(value) => u32::try_from(*value).map_err(|e| e.to_string())?,
+            _ => return Err("Wrong power target".into()),
+        };
+        return Ok(
+            (*live_ac == *ac || *live_ac == wanted) && (*live_dc == *dc || *live_dc == wanted)
+        );
+    }
+    Ok(original == live || image_matches(feature, live, target)?)
 }
 
 /// Integer limits for the capability check; None for choices.
@@ -467,7 +643,10 @@ pub fn write(feature: Feature, original: &WindowsImage, value: &Value) -> Result
                 "Activate power plan",
             )
         }
-        (WindowsImage::Overlay { .. }, Value::Choice(c)) => {
+        (WindowsImage::ConfiguredOverlay { .. }, Value::Choice(c)) => {
+            if active_scheme()? != PLAN_BALANCED {
+                return Err(msg("windows.err.overlay_plan", &[]));
+            }
             write_overlay(overlay_guid(*c).ok_or("Unknown power mode")?)
         }
         (WindowsImage::Refresh { width, height, .. }, Value::Integer(hz)) => write_refresh(
@@ -502,11 +681,14 @@ pub fn restore(feature: Feature, original: &WindowsImage) -> Result<(), String> 
                 "Restore power plan",
             )?
         }
-        WindowsImage::Overlay { overlay } => write_overlay(*overlay)?,
+        WindowsImage::ConfiguredOverlay { overlay } => write_overlay(*overlay)?,
+        WindowsImage::Overlay { .. } => {
+            return Err("Legacy effective-overlay image is not a configured-mode original".into());
+        }
         WindowsImage::Refresh { width, height, hz } => write_refresh(*width, *height, *hz)?,
         WindowsImage::CcdSelection { selection } => ccd_store()?.save_ccd_selection(*selection)?,
     }
-    if capture(feature)? != *original {
+    if capture_like(feature, original)? != *original {
         return Err("Windows setting did not return to its captured original".into());
     }
     Ok(())
@@ -515,6 +697,107 @@ pub fn restore(feature: Feature, original: &WindowsImage) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_effective_overlay_from_an_old_journal_cannot_restore_a_user_choice() {
+        let old = WindowsImage::Overlay {
+            overlay: OVERLAY_BALANCED,
+        };
+        assert!(capture_like(Feature::WindowsEnergyMode, &old).is_err());
+        assert!(restore(Feature::WindowsEnergyMode, &old).is_err());
+        let configured = WindowsImage::ConfiguredOverlay {
+            overlay: OVERLAY_EFFICIENCY,
+        };
+        assert_eq!(
+            value(Feature::WindowsEnergyMode, &configured).unwrap(),
+            Value::Choice(Choice::BestEfficiency)
+        );
+    }
+    #[test]
+    fn ac_equality_does_not_skip_a_different_dc_policy() {
+        let original = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: EPP,
+            ac: 80,
+            dc: 40,
+        };
+        assert!(
+            !image_matches(
+                Feature::WindowsProcessorEppPercent,
+                &original,
+                &Value::Integer(80)
+            )
+            .unwrap()
+        );
+        let complete = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: EPP,
+            ac: 80,
+            dc: 80,
+        };
+        assert!(
+            image_matches(
+                Feature::WindowsProcessorEppPercent,
+                &complete,
+                &Value::Integer(80)
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn partial_ac_dc_restore_does_not_accept_an_unrelated_policy_or_scheme() {
+        let original = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: EPP,
+            ac: 80,
+            dc: 40,
+        };
+        let partial = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: EPP,
+            ac: 70,
+            dc: 40,
+        };
+        assert!(
+            image_owned(
+                Feature::WindowsProcessorEppPercent,
+                &original,
+                &partial,
+                &Value::Integer(70)
+            )
+            .unwrap()
+        );
+        let foreign = WindowsImage::PowerIndex {
+            scheme: PLAN_BALANCED,
+            setting: EPP,
+            ac: 70,
+            dc: 41,
+        };
+        assert!(
+            !image_owned(
+                Feature::WindowsProcessorEppPercent,
+                &original,
+                &foreign,
+                &Value::Integer(70)
+            )
+            .unwrap()
+        );
+        let foreign = WindowsImage::PowerIndex {
+            scheme: PLAN_POWER_SAVER,
+            setting: EPP,
+            ac: 70,
+            dc: 40,
+        };
+        assert!(
+            !image_owned(
+                Feature::WindowsProcessorEppPercent,
+                &original,
+                &foreign,
+                &Value::Integer(70)
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn guid_round_trip_keeps_byte_order() {

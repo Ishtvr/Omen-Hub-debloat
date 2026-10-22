@@ -2,6 +2,47 @@
 
 Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Laptop GPU. Windows x64. Build-Werkzeuge: Rust/Cargo 1.99.0, MSVC-Toolchain. Auf anderen Geräten ist dieser Stand nicht validiert.
 
+## Vollständiger sicherer Steuerungsdurchgang — 22. Oktober, 07:14…07:53 CEST
+
+Release **2.745.856 Bytes**, SHA-256 **EA849D346B97E9B0211063F229B97C0EF0CDEF351272003A7629975D38B80AA0**. Formatprüfung, **168 Tests** (96 Core / 52 Platform / 20 App), Clippy für alle Workspace-Targets mit `-D warnings` und Release-Build bestanden. Die Binärdatei in `dist` und die geschützten eigenen Helferkopien stimmen mit diesem Hash überein. Frühere Messungen unten bleiben an ihre damaligen Builds gebunden.
+
+### Hardware und Rücksicherung
+
+**07:42:42…07:44:10:** Der feste Durchgang bestand **25 positive Transaktionen** und **drei erwartete Ablehnungen vor jedem SET**. Letztere betreffen widersprüchlichen Windows-Energiemodus/Energiesparplan, entferntes einzelnes STAPM und den entfernten FPS-Limiter. Positive Proben: CO gemeinsam/einzeln **−20 → −19 → −20**, PBO unverändert **1× tatsächlich SET/GET/Restore**, kleine Senkungen von Fast/Slow, TDC/EDC und Tctl, gemeinsame Fast-/Slow-Vorgabe, Windows-Boost/Min/Max/EPP/Core-Parking, Energie/Plan einschließlich Zielplan-Richtlinien und Gesamtprofil aus Modus/Plan/Boost/Min/Max/EPP/Core-Parking, Bildwiederholrate, gespeicherte CCD-Auswahl, Dynamic Boost mit beiden Dateinamen sowie MUX-Startvorgabe. Alle sieben unabhängigen CPU-Steuerbilder wurden nach jeder CPU-Probe aus einer neuen Sitzung verglichen; die vollständigen GPU-Steuerwerte nach jeder Transaktion.
+
+Zusätzlich bestanden Max-Fan-Override, RGB-Farbbyte, statisch Ein/Aus und die gemeinsame Thermikdiagnose. Die erneute GPU-Probe mit demselben Release erhielt alle **127 Spannungsanker/Deltas** und globale Offsets nach Kurven-/VRAM-/−15/+15-/−24/+24-MHz-Proben. Die vier HP-Modi bestätigten ihre GPU-Flags und Slow/PL1 **55 / 55 / 60 / 80 W**; der ausdrücklich gewünschte Endmodus ist Unleashed. Die Rohzelle 0 wird nicht mehr als zu verifizierendes unabhängiges STAPM-Ziel ausgegeben. Ein thermischer Modus-GET existiert weiterhin nicht.
+
+`-CoolCpu` schaltete nur während des Durchgangs den vorhandenen Windows-Boost zum Abkühlen ab und restaurierte AC/DC danach exakt auf **4/4**. Keine Aufhebung von Spannungsschutz, kein Belastungstest, keine neue Treiberinstallation und kein Stopp eines HP-Windows-Dienstes. CPU-CO blieb abschließend auf allen 16 physischen Kernen bei **−20**. Das produktive Benutzerjournal wurde byteweise erhalten, SHA-256 **C3F8699541376B18036CF2D66299E635BDF8A749DF75EA71ACB29DD174755BC7**; keine Wiederherstellung blieb offen. Details: [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md).
+
+### Eigener Dienst und Anmeldeaufgabe
+
+**07:14:** Stop-Event nach Sensoraktivierung, tatsächliches Ende des eigenen Helfers und erneuter Aufgabenstart bestanden. **07:23:** Der Max-Dienst bestätigte **48/48**, Zustand `max`, ohne CPU-/GPU-Temperaturleser zu initialisieren; die feste Maximumanforderung hängt nicht von einem optionalen GPU-Sensor ab. Die frühere konservative reale Kurven-/Max-Probe erreichte 4800/4800 Firmware-RPM. Ein eigener schlafender Testprozess bestätigte beide CCD-Masken und vollständiges Release; fremde Benutzerprogramme wurden dafür nicht umgeordnet.
+
+**07:49:29…07:49:30**, nach einer ersten erfolgreichen Probe um 07:22: Ein temporäres Windows-only-Preset mit der bereits vorhandenen Boostvorgabe **4/4** bestand Apply, geschützte Freigabe der exakten Revision, tatsächliche Ausführung über `OmenHubPP-Profile-<SID>` und Recovery. Hier wurde eine gleiche Vorgabe angewendet, kein abweichender CPU-Boost programmiert. Das Aufgaben-Ergebnis bestätigte das genaue Preset und die geschützte EXE. Danach wurden temporäres Preset, Benutzerjournal, Startup-Auswahl, vorheriges Start-Ergebnis und geschützte Freigabedatei vollständig auf ihren Ausgangszustand gebracht. Der Anmeldestart bleibt wie zuvor **deaktiviert**. **Ein echter PC-Neustart wurde damit nicht simuliert oder behauptet.**
+
+### Vollständiges Tray-Budget
+
+Mit derselben Binary, aktiviertem und dann pausiertem CPU-Leser, zwei Tray-Rückkehrzyklen, ohne Working-Set-Trimming:
+
+| Zustand | Gesamter Working Set | Eigener Lüfterhelfer | Beobachtung |
+| --- | --- | --- | --- |
+| Aktive feste 100-%-Lüfterkurve, 07:46 | **47,60 MB** | 19,22 MB | CPU-/GPU-/IR-Lesepfad aktiv, beide Level 48 |
+| Pause nach dieser Sensoraktivierung, 07:47 | **44,88 MB** | 16,54 MB | Kein weiterer aktiver Kurvenbefehl; Original-Metadaten restauriert |
+
+Beide Summen zählen **Dashboard + pausierten CPU-Leser + residenten Lüfterhelfer**. Gemeinsame Speicherseiten werden dabei mehrfach gezählt. Jeder Lauf dauerte 15 s, davon 5 s bis zur Pause-Stichprobe und 10 s CPU-Differenzmessung. Dashboard und CPU-Leser hatten in diesem Intervall jeweils **0 s** gemessene CPU-Zeit, der Lüfterhelfer je **0,0625 s**. Keine verbleibenden temporären Lesechildren; im Dashboard keine NVIDIA-Bibliotheken. Die offene Stichprobe lag bei 47,54 MB einschließlich des aktiven Lüfterhelfers, aber ohne kurzlebige Inventar-/GPU-Lesechildren; für das offene Fenster gilt der erhöhte Speicherrahmen.
+
+Die vollständige aktive Prüfung hatte vorher **69,37 MB** mit allgemeiner NVIDIA-Telemetrie und **65,06 MB** mit einem NVML-only-Versuch ergeben. Diese Builds erfüllen das Budget nicht. Der aktuelle Lüfterpfad liest ausschließlich die öffentliche NVAPI-GPU-Temperatur, gibt Leser bei allen Pausepfaden frei und benötigt bei Max keine CPU-/GPU-Leser. Die früheren reinen Dashboard-/CPU-Reader-Summen wurden nicht als Gesamtbudget übernommen.
+
+### Native Bedienung
+
+Sechs Integrationsskripte bestanden auf diesem Release: Preset-Erstellen/Ändern/Löschen, Dirty-/Merge-/Ablehnungszustände, GPU-Chart aus neuen und geänderten Presets, vollständige Rückgabe/Abbruch, Dynamic-Boost-Aliase einschließlich neuem alleinigen Namen und Abwahl, getrennte CPU-/Windows-Bereiche, Dashboard/Editor-Navigation, Tastaturvorschau, GPU-/Lüfter-Maus- und Tastaturgesten, Shift-Bereich/Abflachen, Esc-Abbruch, Undo/Redo, Zoom/Fit und echtes Speichern/Verwerfen/Neuladen. CPU-Watt/Tctl/Effektivtakte, Tray-Rückkehr, Refresh und **simulierte** Suspend-/Resume-Nachrichten lieferten frische Baselines und beendeten ihre Leseprozesse sauber.
+
+Ein alter Kurven-Smoke hatte die neue aktive Dateiübergabe beim Speichern nicht berücksichtigt und eine sichere Testvorlage vorübergehend an den eigenen Dienst gegeben. Der vorherige Zustand wurde anschließend wiederhergestellt. Der korrigierte passive Smoke verlangt die passende installierte Helferversion, pausiert die eigene Regelung, sichert und restauriert auch `fan-mode.json` und `active-fan-curve.json` und erlaubt keinen impliziten Helfer-Installationspfad. GUI-/Hardware-/Startup-Journale blieben bei den abschließenden passiven Prüfungen unverändert.
+
+**Abschließender Betriebszustand, 07:53:** Der für die Proben geschlossene Original-Hub-Hintergrundprozess wurde über seine registrierte Windows-Paketaktivierung wieder gestartet. Der eigene Helfer meldet entsprechend `waiting_for_hub`. Vollständige GPU-Kurve und globale Offsets sind erhalten, alle 16 CO-Werte sind −20, cTGP und PPAB stehen auf Ein, NVIDIA meldet ein eingeschwungenes Limit von **115 W**. Benutzerjournal unverändert, `pending = false`, Startup-Auswahl deaktiviert. Keine Anwendung, die der Benutzer selbst bereits geschlossen hatte, wurde zusätzlich wieder gestartet.
+
+**Offen:** echter Neustart, physisches Suspend/Resume, AC-Wechsel, MUX-Verdrahtung nach Neustart, langfristige Laststabilität und bestätigte Übergabe an die BIOS-Lüfterautomatik. Ein Stop der eigenen Befehle ist kein Ownership-GET. HP-Dienste liefen weiter; vollständiger unabhängiger Ersatz aller HP-Controller ist weiterhin nicht abgenommen.
+
 ## GPU-Treiber 617.42 — 22. Oktober, 03:20…03:21 CEST
 
 Erneut qualifizierte Core-/VRAM-/V/F-Schreib- und Restore-Pfade mit exakter Implementierungsbindung. **156 Tests** (91 Core / 45 Platform / 20 App), Format, Clippy und Release-Build bestanden. Die ursprüngliche nicht uniforme Kurve, globalen Offsets sowie Journal/Startup-Metadaten blieben nach allen Proben erhalten; Afterburner wurde mit unverändertem Zustand wieder gestartet. Der echte native Preset→Chart-Smoke bestand. Aktuelle Binary für diesen Nachweis: **FB924A420FBF0211A2A24608C36579E5E685F08D69F4468087F2A9C074F2F80F**, **2.657.792 Bytes**. Umfang, Zeitpunkte und Grenzen: [NVIDIA_61742.md](NVIDIA_61742.md). Die folgenden CPU-/Speicherproben bleiben an ihren früheren Build gebunden.

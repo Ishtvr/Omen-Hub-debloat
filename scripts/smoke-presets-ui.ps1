@@ -103,7 +103,7 @@ try{
  $taskFile=$taskItem[0].FullName;$taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json;$taskId=$taskProfile.id
  if(@($taskProfile.settings|Where-Object feature -eq 'gpu_memory_offset_mhz')[0].value.value-ne-24){throw 'GPU memory edit was not saved.'}
  # Dynamic Boost remains an explicit profile option, including false. The
- # unavailable HP adapter must still block Apply/startup rather than claim115W.
+ # qualified HP flag is available for Apply; Save alone never authorizes startup.
  $taskBoost=[OmenPresetSmoke]::Labeled($taskWindow,'Dynamic Boost')
  if($taskBoost-eq[IntPtr]::Zero){throw 'Required Dynamic Boost option is missing.'}
  $taskBoostId=[OmenPresetSmoke]::Id($taskBoost)
@@ -117,7 +117,8 @@ try{
   $taskSetting=@($taskProfile.settings|Where-Object feature -eq 'gpu_unleashed')
   if($taskSetting.Count-ne1-or$taskSetting[0].value.value-ne$taskOn-or[OmenPresetSmoke]::Message($taskChoice,0x0147)-ne[uint64]$taskOn){throw 'Dynamic Boost Ein/Aus did not save/reload exactly.'}
   $taskPlan=Read-Json @('profile-plan',$taskId)
-  if($taskPlan.applicable-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705))-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,707))){throw 'Unqualified Dynamic Boost became applicable/startup-safe.'}
+  $taskBoostCapability=@($taskPlan.capabilities|Where-Object feature -eq 'gpu_unleashed')
+  if(-not$taskPlan.applicable-or$taskBoostCapability.Count-ne1-or$taskBoostCapability[0].access-cne'read_write'-or-not$taskBoostCapability[0].startup_safe-or-not[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705))-or-not[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,707))){throw 'Qualified Dynamic Boost apply/startup controls are wrong.'}
  }
  [void][OmenPresetSmoke]::Message($taskBoost,0x00F1,0);Click $taskWindow $taskBoostId
  Click $taskWindow 704;$null=Wait-Ready $taskWindow 'Preset gespeichert.'
@@ -126,7 +127,7 @@ try{
  Close-Preset $taskWindow
  # Import a complete custom curve and an unrelated lighting setting as metadata.
  $taskPoints=@($taskBeforeCurve.nodes|ForEach-Object{[ordered]@{voltage_mv=[uint32]($_.voltage_uv/1000);frequency_mhz=[uint32]($_.frequency_khz/1000)}})
- $taskProfile.settings=@($taskProfile.settings)+@([pscustomobject]@{feature='gpu_vf_curve';value=[pscustomobject]@{kind='vf_curve';value=$taskPoints}},[pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}})
+ $taskProfile.settings=@($taskProfile.settings)+@([pscustomobject]@{feature='gpu_vf_curve';value=[pscustomobject]@{kind='vf_curve';value=$taskPoints}},[pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}},[pscustomobject]@{feature='intel_pl1_mw';value=[pscustomobject]@{kind='integer';value=45000}},[pscustomobject]@{feature='windows_power_plan';value=[pscustomobject]@{kind='choice';value='balanced'}})
  $taskCurveJson=$taskPoints|ConvertTo-Json -Depth 6 -Compress
  [IO.File]::WriteAllText($taskFile,($taskProfile|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
  Read-Json @('profile-create',$taskOtherId,'Other preset for discard check')|Out-Null;$taskOtherCreated=$true
@@ -181,7 +182,14 @@ try{
  if((@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value.value|ConvertTo-Json -Depth 6 -Compress)-cne$taskCurveJson){throw 'Full custom curve was changed by unrelated editing.'}
  if(@($taskProfile.settings|Where-Object feature -eq 'keyboard_colors')[0].value.value[0][0]-ne22){throw 'Concurrent hidden setting was overwritten.'}
  if($taskProfile.id-cne$taskId-or(Get-FileHash -LiteralPath $taskOtherFile).Hash-cne$taskOtherHash){throw 'Save after declined switch changed the wrong preset.'}
- if([OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705))-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,707))){throw 'Unsupported full preset became eligible for apply/startup.'}
+ $taskInvalidPlan=Read-Json @('profile-plan',$taskId)
+ if($taskInvalidPlan.applicable-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705))){throw 'Unsupported full preset became applicable.'}
+ # The startup checkbox permits choosing intent; the worker must reject this
+ # unsupported revision before UAC, hardware apply or logon authorization.
+ [void][OmenPresetSmoke]::Message([OmenPresetSmoke]::Control($taskWindow,707),0x00F1,1)
+ Click $taskWindow 707
+ $null=Wait-Ready $taskWindow 'noch nicht für den Windows-Start freigegeben'
+ if([OmenPresetSmoke]::Message([OmenPresetSmoke]::Control($taskWindow,707),0x00F0)-ne0){throw 'Rejected startup request left its checkbox enabled.'}
  Click $taskWindow 706
  $null=Wait-Ready $taskWindow 'Preset gelöscht.'
  if(Test-Path -LiteralPath $taskFile){throw 'Delete left the preset selectable.'}
@@ -195,7 +203,7 @@ try{
  $taskAfterImage=@($taskAfterCurve.nodes|ForEach-Object{@($_.index,$_.voltage_uv,$_.delta_khz)})|ConvertTo-Json -Depth 5 -Compress
  $taskMetadataAfter=@($taskFiles|ForEach-Object{if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{'absent'}})
  if($taskControlImage-cne$taskAfterImage-or($taskMetadataBefore-join',')-cne($taskMetadataAfter-join',')){throw 'Metadata test changed programmed controls or main journal/startup.'}
- [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;create_save_delete=$true;dynamic_boost_on_off_save_reload=$true;dynamic_boost_apply_startup_blocked=$true;cpu_apu_fields_absent=$true;windows_separate_section=$true;windows_values_save_reload=$true;declined_switch_keeps_identity_draft_save_target=$true;cpu_gpu_separate=$true;exact_watt_units=$true;custom_curve_preserved=$true;concurrent_hidden_fields_preserved=$true;unsupported_apply_startup_blocked=$true;hardware_writes=$false;gpu_controls_and_metadata_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\presets-ui-smoke.json') -Encoding UTF8
+ [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;create_save_delete=$true;dynamic_boost_on_off_save_reload=$true;dynamic_boost_qualified_apply=$true;saved_only_startup_blocked=$true;cpu_apu_fields_absent=$true;windows_separate_section=$true;windows_values_save_reload=$true;declined_switch_keeps_identity_draft_save_target=$true;cpu_gpu_separate=$true;exact_watt_units=$true;custom_curve_preserved=$true;concurrent_hidden_fields_preserved=$true;unsupported_apply_startup_blocked=$true;hardware_writes=$false;gpu_controls_and_metadata_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\presets-ui-smoke.json') -Encoding UTF8
  'Native custom presets: create, exact units, merged full curve/hidden fields, save/delete, blocked unsafe apply/startup and unchanged hardware passed.'
 }finally{
  if($taskProcess){$taskProcess.Refresh();if(-not$taskProcess.HasExited){Stop-Process -Id $taskProcess.Id};$taskProcess.Dispose()}

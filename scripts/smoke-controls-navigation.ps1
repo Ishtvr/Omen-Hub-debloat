@@ -67,11 +67,12 @@ try{
  foreach($taskMode in @('fan-ui','gpu-curve-ui')){
   $taskWindow=Open-Navigation $taskMode 'OmenHubPPCurveEditor'
   $taskUntil=(Get-Date).AddSeconds(12)
-  do{$taskStatus=[OmenNavigationSmoke]::Text([OmenNavigationSmoke]::GetDlgItem($taskWindow,520));if($taskStatus-match'Entwurf'){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskUntil)
-  if($taskStatus-notmatch'Entwurf'){throw 'Curve load did not finish.'}
+  $taskReadyPattern=if($taskMode-eq'fan-ui'){'Eine Kurve für CPU- und GPU-Lüfter'}else{'GPU|Spannung|Entwurf'}
+  do{$taskStatus=[OmenNavigationSmoke]::Text([OmenNavigationSmoke]::GetDlgItem($taskWindow,520));if($taskStatus-match$taskReadyPattern){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskUntil)
+  if($taskStatus-notmatch$taskReadyPattern){throw ('Curve load did not finish: '+$taskStatus)}
   [void][OmenNavigationSmoke]::ShowWindow($taskWindow,4)
   $taskVisible=@(505..507|ForEach-Object{[OmenNavigationSmoke]::IsWindowVisible([OmenNavigationSmoke]::GetDlgItem($taskWindow,$_))})
-  $taskExpected=if($taskMode-eq'fan-ui'){'False,True,True'}else{'True,False,False'}
+  $taskExpected=if($taskMode-eq'fan-ui'){'False,False,False'}else{'True,False,False'}
   if(($taskVisible-join',')-cne$taskExpected){throw ('Wrong curve scope '+$taskMode+': '+($taskVisible-join','))}
   Close-Navigation $taskWindow
  }

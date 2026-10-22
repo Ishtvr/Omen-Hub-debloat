@@ -1,7 +1,7 @@
 # Installs the fixed fan service for the current user's logon (approved by the
 # user on 16 October 2026): a protected copy of this release runs 'fan-service'
-# elevated and follows the saved shared fan curve. Removing it hands the fans
-# back to the BIOS. Windows PowerShell 5.1.
+# elevated and follows the saved shared fan curve. Removing it stops software
+# fan commands; a firmware-ownership handover requires separate evidence.
 #requires -Version 5.1
 param([ValidateSet('Install','Inspect','Remove')][string]$Mode = 'Install',[string]$SourceBinary='')
 $ErrorActionPreference = 'Stop'
@@ -34,9 +34,37 @@ if (-not ([Security.Principal.WindowsPrincipal]::new($fanIdentity)).IsInRole([Se
 }
 if ($null -ne $fanExisting) {
     Assert-FanTaskAction $fanExisting
+    $fanSession = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    if (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $fanBinary -and $_.SessionId -ne $fanSession }) {
+        throw 'A fan helper in another Windows session uses this executable; it was left running.'
+    }
+    # Let the controller restore foreground affinities before ending its task.
+    # A new source can signal an old installed controller without executing
+    # untrusted per-user files as administrator.
+    $fanStopTool = if ([string]::IsNullOrWhiteSpace($SourceBinary)) { $fanBinary } else { [IO.Path]::GetFullPath($SourceBinary) }
+    if (Test-Path -LiteralPath $fanStopTool -PathType Leaf) {
+        $fanPreference = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        & $fanStopTool fan-service-stop 2>$null | Out-Null
+        $ErrorActionPreference = $fanPreference
+    }
+    $fanStopDeadline = (Get-Date).AddSeconds(5)
+    do {
+        $fanRunning = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $fanBinary -and $_.SessionId -eq $fanSession })
+        if ($fanRunning.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    } while ((Get-Date) -lt $fanStopDeadline)
+    if ($fanRunning.Count -ne 0) {
+        # Legacy builds had no stop event. A forced upgrade is allowed only
+        # after the saved CCD selection is released and no pins are reported.
+        $fanUserRoot = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.omen-hub-pp'
+        $fanStatusPath = Join-Path $fanUserRoot 'fan-service-status.json'
+        $fanOldStatus = if (Test-Path -LiteralPath $fanStatusPath) { Get-Content -LiteralPath $fanStatusPath -Raw | ConvertFrom-Json } else { $null }
+        if ((Test-Path -LiteralPath (Join-Path $fanUserRoot 'ccd-affinity.json')) -or ($null -ne $fanOldStatus -and $fanOldStatus.ccd_pinned -gt 0)) {
+            throw 'The fan controller did not stop gracefully. Select all CCDs and retry; pinned programs were left unchanged.'
+        }
+    }
     Stop-ScheduledTask -TaskName $fanTask -ErrorAction SilentlyContinue
-    # The running copy must exit before its file can be replaced.
-    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $fanBinary } | Stop-Process -Force
+    $fanRunning | ForEach-Object { if (-not $_.HasExited) { Stop-Process -InputObject $_ -Force } }
 }
 if ((Test-Path -LiteralPath $fanRoot) -and ((Get-Item -LiteralPath $fanRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     throw 'The installation directory is a reparse point; installation was blocked.'
@@ -50,7 +78,7 @@ if ($Mode -eq 'Remove') {
     foreach ($fanPath in @($fanReceipt,$fanBinary)) {
         if (Test-Path -LiteralPath $fanPath) { Remove-Item -LiteralPath $fanPath }
     }
-    [pscustomobject]@{ Removed = $true; TaskName = $fanTask; FansReturnToBios = $true } | ConvertTo-Json
+    [pscustomobject]@{ Removed = $true; TaskName = $fanTask; SoftwareFanCommandsStopped = $true; BiosHandoverVerified = $false } | ConvertTo-Json
     return
 }
 $fanSource = if([string]::IsNullOrWhiteSpace($SourceBinary)){Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\Omen Hub++.exe'}else{[IO.Path]::GetFullPath($SourceBinary)}
@@ -86,7 +114,7 @@ $fanPrincipal = New-ScheduledTaskPrincipal -UserId $fanSid -LogonType Interactiv
 $fanSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 $fanRegistered = $false
 try {
-    Register-ScheduledTask -TaskName $fanTask -Action $fanAction -Trigger $fanTrigger -Principal $fanPrincipal -Settings $fanSettings -Description 'Omen Hub++: follows the saved shared fan curve; without a curve the BIOS keeps control.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $fanTask -Action $fanAction -Trigger $fanTrigger -Principal $fanPrincipal -Settings $fanSettings -Description 'Omen Hub++: saved fan curve and foreground CCD selection; Auto pauses software fan commands.' -Force | Out-Null
     $fanRegistered = $true
     $fanScheduler = New-Object -ComObject 'Schedule.Service'
     $fanScheduler.Connect()

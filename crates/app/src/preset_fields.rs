@@ -42,10 +42,12 @@ pub const REMOVED_GPU_OPTIONS: &[F] = &[
     F::GpuCustomTgp,
     F::OmenPerformanceMode,
 ];
-/// STAPM and slow are back as measured HP limits; the fast limit is PPT.
+/// Independent HP STAPM writes failed qualification. The CPU slow/fast
+/// ceilings use their own measured RSMU messages, not an APU STAPM control.
 /// APU power/VRM/soft-clock and integrated-graphics fields do not belong in the
 /// requested CPU-only tuning UI. Retain decoding; retire intent on explicit Save.
 pub const REMOVED_APU_OPTIONS: &[F] = &[
+    F::CpuStapmLimitMw,
     F::CpuSkinTemperatureLimitC,
     F::CpuFastPptLimitMw,
     F::CpuStapmTimeSeconds,
@@ -99,7 +101,6 @@ pub fn fields() -> Vec<Field> {
         (F::MaxFan, 0, 0),
         (F::GpuUnleashed, 0, 0),
         (F::CpuTemperatureLimitC, 1, 85),
-        (F::CpuStapmLimitMw, 1, 80000),
         (F::CpuSlowPptLimitMw, 1, 55000),
         (F::CpuPptLimitMw, 1, 80000),
         (F::CpuTdcMa, 1, 108000),

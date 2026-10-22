@@ -1,10 +1,12 @@
 //! Background fan control that replaces the OMEN Hub's software fan loop.
 //! It runs elevated from the user's logon task, follows the saved shared
-//! curve and hands control back to the BIOS whenever it stops sending.
+//! curve and stops sending when paused or shut down. Firmware ownership has
+//! no qualified GET; stopping alone is not proof of a BIOS handover.
 //! The same service pins the foreground program to the saved CCD selection.
 use super::{
-    CpuHardwareReader, Nvidia,
+    CpuHardwareReader,
     hp::{HpBios, Read},
+    nvidia::GpuTemperature,
 };
 use omen_core::{
     Inventory,
@@ -16,10 +18,18 @@ use omen_core::{
 use serde::Serialize;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-    System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
+    Foundation::{
+        CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    },
+    System::{
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        },
+        Threading::{
+            CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, OpenEventW, ReleaseMutex, ResetEvent,
+            SetEvent, WaitForSingleObject,
+        },
     },
 };
 
@@ -31,6 +41,103 @@ const HUB_PROCESSES: [&str; 2] = [
     "omencommandcenterbackground.exe",
     "hp.omen.application.background.tasks.container.exe",
 ];
+
+/// One controller per interactive user/session, with an interruptible wait.
+/// Installers request a graceful stop so CCD originals can be released before
+/// replacing the executable. This is independent of the short hardware lease.
+struct Lifecycle {
+    mutex: HANDLE,
+    stop: HANDLE,
+}
+fn object_name(kind: &str) -> Result<Vec<u16>, String> {
+    Ok(
+        format!("Local\\OmenHubPP.Fan.{kind}.{}", super::current_user_sid()?)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect(),
+    )
+}
+impl Lifecycle {
+    fn start() -> Result<Self, String> {
+        let name = object_name("Owner")?;
+        // SAFETY: Terminated per-user name, default security, no initial owner.
+        let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if mutex.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        // SAFETY: Valid mutex, bounded acquisition on this thread.
+        let wait = unsafe { WaitForSingleObject(mutex, 0) };
+        if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
+            unsafe {
+                CloseHandle(mutex);
+            }
+            return Err("An Omen Hub++ fan controller is already running in this session".into());
+        }
+        let mut owner = Self {
+            mutex,
+            stop: std::ptr::null_mut(),
+        };
+        let name = object_name("Stop")?;
+        // SAFETY: Manual-reset event, fixed name and default security.
+        owner.stop = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+        if owner.stop.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        // A completed prior instance may have left the named event signalled.
+        if unsafe { ResetEvent(owner.stop) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(owner)
+    }
+    fn wait(&self, timeout: Duration) -> Result<bool, String> {
+        // SAFETY: Owned event; each wait is bounded and interruptible.
+        match unsafe {
+            WaitForSingleObject(
+                self.stop,
+                timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32,
+            )
+        } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(std::io::Error::last_os_error().to_string()),
+        }
+    }
+}
+impl Drop for Lifecycle {
+    fn drop(&mut self) {
+        // SAFETY: This thread acquired the mutex and owns both handles.
+        unsafe {
+            if !self.stop.is_null() {
+                CloseHandle(self.stop);
+            }
+            ReleaseMutex(self.mutex);
+            CloseHandle(self.mutex);
+        }
+    }
+}
+pub fn request_stop() -> Result<bool, String> {
+    let name = object_name("Stop")?;
+    // SAFETY: Opens only the per-user fixed stop event, without inheritance.
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if event.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(2) {
+            Ok(false)
+        } else {
+            Err(error.to_string())
+        };
+    }
+    let success = unsafe { SetEvent(event) } != 0;
+    let error = std::io::Error::last_os_error();
+    unsafe {
+        CloseHandle(event);
+    }
+    if success {
+        Ok(true)
+    } else {
+        Err(error.to_string())
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct FanServiceStatus {
@@ -53,12 +160,17 @@ fn hub_running() -> bool {
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
-            return false;
+            // Unknown ownership must not start a second controller.
+            return true;
         }
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
         let mut found = false;
         let mut ok = Process32FirstW(snapshot, &mut entry) != 0;
+        if !ok {
+            CloseHandle(snapshot);
+            return true;
+        }
         while ok && !found {
             let length = entry
                 .szExeFile
@@ -99,6 +211,20 @@ fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
     .map_err(String::from)
 }
 
+fn requested_level(
+    mode: FanMode,
+    curve: Option<&FanCurve>,
+    full: bool,
+    temperature: Option<i32>,
+) -> u8 {
+    if mode == FanMode::Max || full {
+        return fan::MAX_LEVEL;
+    }
+    curve.map_or(fan::MAX_LEVEL, |curve| {
+        fan::level(curve.target(temperature))
+    })
+}
+
 /// Runs until the process ends. `mode` is the dashboard fan switch: Auto
 /// leaves the BIOS table in charge, Curve follows `load` (the active shared
 /// curve; None also leaves the BIOS in charge) and Max runs both fans at
@@ -106,17 +232,34 @@ fn curve_of(points: &[FanPoint]) -> Result<FanCurve, String> {
 /// `report` persists each status.
 pub fn run(
     inventory: &Inventory,
+    mode: impl FnMut() -> FanMode,
+    load: impl FnMut() -> Result<Option<Vec<FanPoint>>, String>,
+    ccd: impl FnMut() -> Result<Option<u8>, String>,
+    report: impl FnMut(&FanServiceStatus),
+) -> Result<(), String> {
+    let lifecycle = Lifecycle::start()?;
+    run_until(inventory, mode, load, ccd, report, |wait| {
+        lifecycle.wait(wait)
+    })
+}
+
+/// Same production loop with a bounded stop source for qualification. Stopping
+/// releases CCD affinities and ceases firmware heartbeat/level writes.
+pub fn run_until(
+    inventory: &Inventory,
     mut mode: impl FnMut() -> FanMode,
     mut load: impl FnMut() -> Result<Option<Vec<FanPoint>>, String>,
     mut ccd: impl FnMut() -> Result<Option<u8>, String>,
     mut report: impl FnMut(&FanServiceStatus),
+    mut stop: impl FnMut(Duration) -> Result<bool, String>,
 ) -> Result<(), String> {
     if inventory.manufacturer != "HP" || inventory.board != "8E35" || inventory.bios != "F.13" {
         return Err("Fan control is qualified only for HP8E35/F.13".into());
     }
     let bios = HpBios::new(inventory).map_err(|e| e.to_string())?;
-    let mut cpu = CpuHardwareReader::new(inventory).ok();
-    let mut gpu = Nvidia::new();
+    // Idle BIOS/Hub-waiting states do not open a kernel reader or NVIDIA DLL.
+    let mut cpu = None;
+    let mut gpu: Option<GpuTemperature> = None;
     let mut smoother = (Smoother::default(), Smoother::default());
     let mut last_heartbeat: Option<Instant> = None;
     let mut protection = 0u8;
@@ -126,6 +269,9 @@ pub fn run(
         processes: super::ccd::WindowsProcesses::default(),
     };
     loop {
+        if stop(Duration::ZERO)? {
+            return Ok(());
+        }
         let started = Instant::now();
         // CCD pinning is independent of the fans and of the original Hub. An
         // unreadable selection or topology releases every pinned program.
@@ -159,25 +305,33 @@ pub fn run(
             ccd_pinned,
             updated_unix_s: now(),
         };
-        // Releasing control means sending nothing: the BIOS resumes its own
-        // fan table once the heartbeat and level updates stop.
+        // Pause our controller by sending nothing. A BIOS handover cannot be
+        // asserted from this status: ownership has no qualified readback.
         if hub_running() {
             last_heartbeat = None;
+            cpu = None;
+            gpu = None;
             report(&idle(
                 "waiting_for_hub",
                 omen_core::message::msg("fan.status.hub_running", &[]),
             ));
-            std::thread::sleep(Duration::from_secs(10));
+            if stop(Duration::from_secs(2))? {
+                return Ok(());
+            }
             continue;
         }
         let mode = mode();
         if mode == FanMode::Bios {
             last_heartbeat = None;
+            cpu = None;
+            gpu = None;
             report(&idle(
                 "bios",
                 omen_core::message::msg("fan.status.bios", &[]),
             ));
-            std::thread::sleep(Duration::from_secs(2));
+            if stop(Duration::from_secs(2))? {
+                return Ok(());
+            }
             continue;
         }
         let max = mode == FanMode::Max;
@@ -186,54 +340,75 @@ pub fn run(
             Ok(Some(curve)) => Some(curve),
             Ok(None) => {
                 last_heartbeat = None;
+                cpu = None;
+                gpu = None;
                 report(&idle(
                     "bios",
                     omen_core::message::msg("fan.status.no_curve", &[]),
                 ));
-                std::thread::sleep(Duration::from_secs(5));
+                if stop(Duration::from_secs(2))? {
+                    return Ok(());
+                }
                 continue;
             }
             Err(_) if max => None,
             Err(e) => {
                 last_heartbeat = None;
+                cpu = None;
+                gpu = None;
                 report(&idle(
                     "bios",
                     omen_core::message::msg("fan.status.invalid_curve", &[&e]),
                 ));
-                std::thread::sleep(Duration::from_secs(5));
+                if stop(Duration::from_secs(2))? {
+                    return Ok(());
+                }
                 continue;
             }
         };
+        if last_heartbeat.is_none() {
+            // Qualify the complete measured fan layout before the first
+            // heartbeat/level SET, including a new arm after BIOS/Hub waiting.
+            super::cooling::FanControl::new(inventory)?.capture()?;
+        }
         if last_heartbeat.is_none_or(|t| t.elapsed() >= HEARTBEAT) {
             protection = bios.heartbeat().map_err(|e| e.to_string())?;
             last_heartbeat = Some(Instant::now());
         }
-        if cpu.is_none() {
+        if max {
+            cpu = None;
+            gpu = None;
+        }
+        if !max && cpu.is_none() {
             cpu = CpuHardwareReader::new(inventory).ok();
         }
         let cpu_c = cpu
             .as_mut()
-            .and_then(|r| r.sample().ok())
+            .and_then(|r| r.temperature_sample().ok())
             .and_then(|s| s.temperature_c);
-        if gpu.needs_reconnect() {
-            gpu = Nvidia::new();
+        if !max && gpu.is_none() {
+            gpu = GpuTemperature::new().ok();
         }
-        let gpu_c = gpu.sample().and_then(|s| s.temperature_c);
+        let gpu_c = gpu.as_ref().and_then(|reader| reader.sample().ok());
+        if gpu_c.is_none() {
+            gpu = None;
+        }
         let ir_c = bios
             .get(Read::SurfaceSensor)
             .ok()
             .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
             .map(|t| t.celsius);
-        let full = fan::emergency(
-            cpu_c.map(|t| t as f32),
-            gpu_c.map(|t| t as f32),
-            ir_c,
-            protection,
-        );
-        let target = |t: Option<i32>| match &curve {
-            Some(curve) if !full => fan::level(curve.target(t)),
-            _ => fan::MAX_LEVEL,
-        };
+        // Maximum is unconditional and works without loading sensor drivers.
+        // A curve may never lower cooling when its GPU reader is unavailable.
+        let full = !max
+            && (gpu_c.is_none()
+                || fan::emergency(
+                    cpu_c.map(|t| t as f32),
+                    gpu_c.map(|t| t as f32),
+                    ir_c,
+                    protection,
+                ));
+        let target = |t: Option<i32>| requested_level(mode, curve.as_ref(), full, t);
         let cpu_t = cpu_c.map(|t| t.round() as i32);
         // The GPU fan follows the hotter of GPU and CPU when the GPU sleeps.
         let gpu_t = gpu_c.or(cpu_t);
@@ -260,13 +435,42 @@ pub fn run(
             ccd_pinned,
             updated_unix_s: now(),
         });
-        std::thread::sleep(CYCLE.saturating_sub(started.elapsed()));
+        if stop(CYCLE.saturating_sub(started.elapsed()))? {
+            return Ok(());
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn maximum_and_emergency_ignore_a_saved_quiet_curve() {
+        let curve = curve_of(&[
+            FanPoint {
+                temperature_c: 30,
+                duty_percent: 25,
+            },
+            FanPoint {
+                temperature_c: 80,
+                duty_percent: 70,
+            },
+        ])
+        .unwrap();
+        assert!(requested_level(FanMode::Curve, Some(&curve), false, Some(35)) < fan::MAX_LEVEL);
+        assert_eq!(
+            requested_level(FanMode::Max, Some(&curve), false, Some(35)),
+            fan::MAX_LEVEL
+        );
+        assert_eq!(
+            requested_level(FanMode::Curve, Some(&curve), true, Some(35)),
+            fan::MAX_LEVEL
+        );
+        assert_eq!(
+            requested_level(FanMode::Curve, None, false, None),
+            fan::MAX_LEVEL
+        );
+    }
 
     #[test]
     fn curve_of_validates_and_interpolates() {

@@ -1,50 +1,39 @@
 # Hardwarematrix
 
-Stand 22. Oktober 2026, einschließlich der lesenden CPU-Effektivtakte. Die Matrix fasst Code und vorhandene Nachweise zusammen; sie erweitert keine Schreibfreigabe. Details, Hashes und Messzeiten stehen in [models/8e35.md](models/8e35.md), [models/8e35-hub-modes.md](models/8e35-hub-modes.md), [FAN_CONTROL.md](FAN_CONTROL.md) und [VALIDATION.md](VALIDATION.md).
+Stand: **22. Oktober 2026**. Diese Matrix unterscheidet Implementierung, kurze reale Funktionsprobe und offene Lebenszyklusnachweise. Die vollständigen aktuellen Interface-Beobachtungen stehen in [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md), buildbezogene Ergebnisse in [VALIDATION.md](VALIDATION.md).
 
-## Qualifizierte Geräte
+## Qualifizierte Kombination
 
-| Gerät | Board / BIOS | CPU | GPU / Treiber / VBIOS | Status |
-| --- | --- | --- | --- | --- |
-| HP OMEN 16-ap0xxx | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.14 / 98.06.2a.40.da | Referenzgerät, einzige qualifizierte Kombination |
-| Dasselbe Referenzgerät am 22. Oktober | 8E35 / F.13 | Ryzen 9 8940HX | RTX 5070 Laptop / 617.42 | CPU-Sensoren einschließlich 32 Effektivtakten sowie GPU-Core-/VRAM-/V/F-Schreib- und vollständige Restore-Pfade erneut gemessen; [separate 617.42-Evidenz](NVIDIA_61742.md) |
-| Alle anderen | – | – | – | Nur lesende Windows-/NVIDIA-Werte; HP-, SMU- und GPU-Schreibaktionen werden blockiert |
+**HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, SMU 0x546F00, PM-Tabelle 0x540208, RTX 5070 Laptop, VBIOS 98.06.2a.40.da.** NVIDIA-Schreibpfade sind getrennt für **617.14** und **617.42** qualifiziert und zusätzlich an die genaue geladene Implementierung gebunden. Profile binden die GPU-UUID. Andere Boards, BIOS-, SMU-, Tabellen-, Treiber- und VBIOS-Versionen erhalten diese Freigabe nicht automatisch.
 
-Ein anderes BIOS, ein anderer NVIDIA-Treiber oder ein anderes VBIOS verlangt eine neue Qualifikation, auch auf Board 8E35.
+## Funktionsumfang
 
-## Funktionen auf 8E35 / F.13
+| Funktion | Reale Probe / Zustand | Anmeldung und Grenzen |
+| --- | --- | --- |
+| GPU-Watt, Temperatur, Takt | Öffentliche NVML/NVAPI, isolierter Leseprozess | Treiberabhängige Verfügbarkeit |
+| CPU-Auslastung / Windows-MHz | Windows-APIs | Windows-MHz ist kein gemessener Boost |
+| CPU-Paketwatt / Tctl / Effektivtakte | Gehashter vorhandener PawnIO-Reader; 32 logische Prozessoren | Expliziter UAC-Leseprozess, frische Basis nach Pause; keine Installation eines Treibers |
+| GPU-Core / VRAM | −15/+15 bzw. −24/+24 MHz, voller Readback/Restore | Autorisierte Profilrevision; Core blockiert bei aktiver individueller V/F-Kurve |
+| GPU-V/F | Alle 127 Anker/Deltas und globale Offsets geprüft | Nur Frequenzwerte; kein direktes mV-Limit oder Laststabilitätsnachweis |
+| Quiet / Balanced / Performance / Unleashed | Feste Hersteller-SETs, GPU-Flags und Slow/PL1-Readback | Thermalmodus ohne GET; Modustests enden im ausdrücklich vorgegebenen Unleashed |
+| Dynamic Boost | PPAB Ein/Aus/Restore, cTGP erhalten | Autorisierte Profile; für 115 W muss auch der passende HP-Leistungszustand bestehen |
+| CPU Fast / Slow / TDC / EDC / Tctl | Feste RSMU-Befehle, kleine Senkung, vollständige Originale zurückgelesen | Exakte SMU-/Tabellenversion; FFI-Transport und alle unabhängigen CPU-Steuerbilder geprüft |
+| CO gemeinsam / einzeln | −20 → −19 → −20; vollständige 16-Kern-Bilder | Schritte, keine mV; beide Arten dürfen nicht gemeinsam im Profil stehen |
+| PBO-Scalar | 1× GET/SET/Readback/Restore | Höhere Werte sind kein Bestandteil der sicheren Hardwareprobe |
+| Einzelnes STAPM / feste CPU-Spannung / fester CPU-Takt | Entfernt bzw. gesperrt | Kein ausgedachter Steuervertrag; alte HP-Limitbilder wählen keinen neuen RSMU-Transport |
+| Windows-Boost, Min/Max, EPP, Core Parking | AC und DC sowie Originale des Zielplans geprüft | Aktiver Plan wird vor Richtlinien gesetzt; Teilfehler bleiben wiederherstellbar |
+| Windows-Energiemodus | Konfigurierter und effektiver Modus getrennt | Plan Ausbalanciert im selben Preset wählen; unpassende Kombination blockiert vor SET |
+| Energiesparplan / Bildwiederholrate | Native SET/GET/Restore-Proben | Unterstützte Windows-/Display-Werte; kein physischer AC-/Monitorwechsel-Nachweis |
+| CCD-Auswahl | Gespeicherte Auswahl und echter eigener Testprozess, beide CCDs und Release | Hintergrunddienst; andere Benutzerprogramme wurden in der Probe nicht umgeordnet |
+| MUX | Hybrid/Discrete-Startvorgabe gesetzt, zurückgelesen und restauriert | Wirkt nach Neustart; physischer Wechsel und iGPU-only nicht damit qualifiziert |
+| Max-Fan-Override | Vollständiger Schalter, Tabelle/Zuordnung, Readback/Restore | Profilfreigabe ist kein Lifecycle-Nachweis |
+| Eigene Lüfterkurve / Max im Dienst | Konservative reale Probe bis 4800/4800 RPM | Warten auf Original-Hub, CPU/GPU/IR-Schutz, regulärer Stop. Auto pausiert eigene Befehle; BIOS-Ownership bleibt unbestätigt |
+| Vier-Zonen-RGB / statisch Ein/Aus | Vollständige Capability-, Farb- und Modusbilder; sichtbare Wirkung früher vom Benutzer bestätigt | Erhöhter Capture vor jedem Write; keine freigegebenen Animationen, Prozenthelligkeit oder Hotkey-Lifecycle |
+| Direkte GPU-/VRAM-Spannungen, FPS-Limiter, Clock-Lock | Entfernt / nicht unterstützt | Kein zulässiges partielles Apply alter Profile |
+| Profil-Anmeldung | Geschützte Kopie, feste Aufgabe, exakt autorisierte Revision und dauerhaftes Journal | Echte Neustart-/Resume-/AC-Probe bleibt erforderlich; Speichern alleine autorisiert keinen Autostart |
 
-Legende: **Lesen** = Messwert oder Zustand wird angezeigt. **Schreiben** = Setter mit Readback und Restore implementiert; **gemessen** heißt, er lief mindestens einmal am Referenzgerät mit Rücklesen, **ungemessen**, dass er nur gebaut und getestet ist. **Startup** = darf beim Windows-Anmeldestart automatisch angewendet werden; seit 16. Oktober gilt das auf Nutzerwunsch für alle unterstützten Preset-Einstellungen, auch im Akkubetrieb.
+## Was weiterhin offen ist
 
-| Funktion | Lesen | Schreiben | Startup | Weg / Bedingung |
-| --- | --- | --- | --- | --- |
-| Inventar, Netzteil, Akku | Ja | – | – | Windows-WMI, Power-API |
-| GPU-Watt, Temperatur, Takt | Ja | – | – | Öffentliche NVML/NVAPI im kurzlebigen Leseprozess |
-| CPU-Auslastung, Windows-MHz | Ja | – | – | Windows; MHz ist kein gemessener Boost |
-| CPU-Paketwatt, Tctl | Ja, nach UAC | – | – | Bereits laufendes PawnIO 2.2.0 und eingebettetes AMDFamily17 0.2.11 |
-| CPU-Effektivtakt aller 32 logischen Prozessoren | Ja, nach UAC, gemessen | – | – | Gleiches gehashtes PawnIO/AMDFamily17; Read-Only-APERF/MPERF, eigene Thread-Affinität und monotone Einzelintervalle; höchster Intervallmittelwert, getrennt von Windows-MHz |
-| NVIDIA-Core-/VRAM-Offset | Ja | Ja, gemessen | Ja | Exakter Treiber/VBIOS; Core-Offset gesperrt bei aktiver V/F-Kurve |
-| NVIDIA V/F-Kurve (127 Anker) | Ja | Ja, gemessen | Ja | Exakter Treiber-SHA-256; Spannungsanker unveränderlich |
-| HP-Modus Balanced / Unleashed | – | Ja, Unleashed einmal gemessen | – | Dashboard-Auswahl; Unleashed nur im Netzbetrieb; Thermalmodus ohne GET, Rückweg ist ein expliziter Balanced-Write |
-| HP-Modus Quiet / Performance, PL1 je Modus | STAPM/Slow mit SMU-Modul | Ja, ungemessen | – | Payloads aus der statischen Hub-Analyse |
-| Dynamic Boost (PPAB) | Ja, erhöht | Ja | Ja | HP-GPU-Status-Bit mit Readback; cTGP bleibt unverändert |
-| CPU PPT/Fast, STAPM/Slow, TDC, EDC, Tctl-Limit | Ja, mit SMU-Modul | Ja, einmal kalibriert | Ja | Eingebettetes RyzenSMU 0.2.11; Preset-Apply unter Last ungetestet |
-| Curve Optimizer, PBO-Scalar | Ja, mit SMU-Modul | Ja, ungemessen | Ja | Eigene SMU-GETs; Werte werden vollständig erfasst und restauriert |
-| Fester CPU-Takt / feste Spannung, Core-Ratios | – | – | – | Bewusst nicht vorgesehen (meist von der Laptop-Firmware gesperrt); Editorfelder entfernt |
-| Windows-Energie-/Prozessorrichtlinien, Bildwiederholrate | Ja | Ja | Ja | Dokumentierte Windows-APIs mit exaktem Rücklesen |
-| CCD-Affinität | Ja | Ja, ungemessen | Ja | Lüfterdienst pinnt das Vordergrundprogramm; alte Maske wird zurückgegeben |
-| Grafikmodus (MUX) | Ja, erhöht | Ja, ungemessen | Ja | HP-BIOS; Preset oder Dashboard-Schalter Hybrid/GPU only mit Rücklesen; wirkt erst nach Neustart |
-| Max-Fan-Override | Ja, erhöht | Ja, gemessen | Ja | Exakte Lüftertabelle/Topologie |
-| Eigene Lüfterkurve | Ja, erhöht | Über den Lüfterdienst | Dienst bei Anmeldung | Gemeinsame Kurve, Notfall-Vollkühlung; wartet, solange der Original-Hub läuft |
-| Lüfterdrehzahlen, IR-Sensor | Ja, erhöht | – | – | Feste BIOS-WMI-GETs, `cooling-read` |
-| Tastatur, vier Zonen + Nummernblock | Ja, erhöht | Ja, gemessen (RGB, statisch ein/aus) | Ja | Capability `[1,0,0,0]`; Ein/Aus vom Benutzer sichtbar bestätigt |
-| HP-GPU-Status, SystemDesignData | Ja, erhöht | – | – | D-State 0 bleibt ausdrücklich unbekannt |
-| Direkte GPU-/VRAM-Spannung, GPU-Power-Limit, Clock-Lock | – | Nein | Nein | Kein belegter Steuervertrag |
-| AMD-Boostprofil, All-Core-Spannungsoffset | – | – | – | Gibt es für Dragon Range nicht; Felder entfernt |
-| Helligkeit, Animationen, Hotkeys | – | Nein | Nein | Nicht qualifiziert |
+Ein kurzer erfolgreicher Setter-/Restore-Test bestätigt weder Langzeitstabilität noch einen echten Neustart, Standby/Resume oder einen Netzteilwechsel unter Last. Originale HP-Windows-Dienste liefen während dieser Proben weiter. Ihr vollständiger Ersatz, sichere Lüfter-Ownership und die automatische Wiederanwendung nach realen Power-Übergängen sind weiterhin getrennt zu qualifizieren. Die aktuelle Anwendung darf deshalb noch nicht als vollständig geprüfter Ersatz aller HP-Hardwarecontroller bezeichnet werden.
 
-Jede nicht unterstützte Einstellung blockiert das gesamte Apply eines Presets; es wird nie ein Teil eines Profils still übersprungen. Ohne eingebettetes RyzenSMU-Modul sind alle SMU-Zeilen nicht verfügbar.
-
-## Offene Lebenszyklusnachweise
-
-Für keine Schreibfunktion sind echter Neustart, Standby/Resume, Netzteilwechsel unter Last oder Betrieb ohne die weiterlaufenden HP-Controller vollständig gemessen. Läuft der Original-Hub weiter, kann er Modus und Lüfter bei eigenen Ereignissen erneut setzen. Die Wiederherstellung beschreibt [RECOVERY.md](RECOVERY.md).
+Das Tray-Budget beträgt **50 MB einschließlich aller eigenen residenten Helfer**. Ein geöffnetes Fenster darf mehr benötigen. Aktuelle Messung und genaue Prozessabgrenzung: [VALIDATION.md](VALIDATION.md). Wiederherstellung und Installationshinweise: [RECOVERY.md](RECOVERY.md).

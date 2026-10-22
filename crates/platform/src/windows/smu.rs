@@ -27,6 +27,7 @@ const MODULE: &[u8] = &[];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Message {
     SetPptLimit,
+    SetSlowLimit,
     SetTdcLimit,
     SetEdcLimit,
     SetTctlMax,
@@ -46,6 +47,7 @@ impl Message {
     fn id(self) -> u64 {
         match self {
             Self::SetPptLimit => 0x56,
+            Self::SetSlowLimit => 0xCB,
             Self::SetTdcLimit => 0x57,
             Self::SetEdcLimit => 0x58,
             Self::SetTctlMax => 0x59,
@@ -81,7 +83,6 @@ pub fn module_present() -> bool {
 pub struct Smu {
     driver: Handle,
     pci: Handle,
-    inventory: Inventory,
 }
 
 struct PciLease<'a>(&'a Handle);
@@ -160,27 +161,31 @@ impl Smu {
         let smu = Self {
             driver,
             pci: Handle(pci),
-            inventory: inventory.clone(),
         };
         // The module itself refuses unknown CPUs; double-check its decision.
         let name = smu.call("ioctl_get_code_name", &[], 1)?;
         if name.first().copied().unwrap_or(0) == 0 {
             return Err("SMU module did not recognise this CPU".into());
         }
+        if smu.smu_version()? != 0x546f00 {
+            return Err("SMU firmware differs from the measured 0x546F00 contract".into());
+        }
         Ok(smu)
     }
-    /// The HP BIOS interface for limits the SMU exposes only through the Hub
-    /// command (STAPM and slow, measured 16 October 2026).
-    pub(super) fn hp(&self) -> Result<super::hp::HpBios, String> {
-        super::hp::HpBios::new(&self.inventory).map_err(|e| e.to_string())
-    }
-    fn call(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
+    fn lease(&self) -> Result<PciLease<'_>, String> {
         // SAFETY: Valid mutex handle; a bounded wait never blocks the app forever.
         let wait = unsafe { WaitForSingleObject(self.pci.0, 500) };
         if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
             return Err("SMU busy: shared PCI mutex not acquired".into());
         }
-        let _lease = PciLease(&self.pci);
+        Ok(PciLease(&self.pci))
+    }
+    fn call(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
+        let _lease = self.lease()?;
+        self.call_locked(name, input, outputs)
+    }
+    /// Caller holds the shared PCI lease across a complete logical read.
+    fn call_locked(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
         let mut out = vec![0u8; 8 * outputs];
         let count = ioctl(&self.driver, EXECUTE, &packet(name, input), &mut out)? as usize;
         if count != out.len() {
@@ -201,9 +206,29 @@ impl Smu {
     }
     /// Refreshes and reads the PM table as 32-bit floats.
     pub fn pm_table(&self, floats: usize) -> Result<(u32, Vec<f32>), String> {
-        let resolved = self.call("ioctl_resolve_pm_table", &[], 2)?;
-        self.call("ioctl_update_pm_table", &[], 0)?;
-        let raw = self.call("ioctl_read_pm_table", &[], floats.div_ceil(2))?;
+        // Resolution, refresh and copy form one snapshot. Another cooperating
+        // reader must not interleave mailbox traffic between these operations.
+        // Only this observational sequence is retried, never a tuning setter.
+        let mut last_error = String::new();
+        for attempt in 0..3 {
+            let result = self.pm_table_once(floats);
+            match result {
+                Ok(value) => return Ok(value),
+                Err(error) => last_error = error,
+            }
+            if attempt < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        Err(format!(
+            "PM-table snapshot failed after three bounded read attempts: {last_error}"
+        ))
+    }
+    fn pm_table_once(&self, floats: usize) -> Result<(u32, Vec<f32>), String> {
+        let _lease = self.lease()?;
+        let resolved = self.call_locked("ioctl_resolve_pm_table", &[], 2)?;
+        self.call_locked("ioctl_update_pm_table", &[], 0)?;
+        let raw = self.call_locked("ioctl_read_pm_table", &[], floats.div_ceil(2))?;
         let values = raw
             .iter()
             .flat_map(|cell| {

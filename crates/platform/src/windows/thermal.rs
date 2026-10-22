@@ -77,12 +77,12 @@ pub fn read_cooling_snapshot(inventory: &Inventory) -> Result<CoolingSnapshot, S
     let power_before = power_status();
     let fans = timed(start, || read_hp_fans(inventory));
     let cpu = timed(start, || {
-        let sample = CpuHardwareReader::new(inventory)?.sample()?;
+        let sample = CpuHardwareReader::new(inventory)?.temperature_sample()?;
         sample.validate()?;
         if sample.temperature_c.is_none() || !sample.warnings.is_empty() {
             return Err("Verified CPU Tctl is unavailable or has sensor warnings".into());
         }
-        // One read establishes a new energy baseline; no package watts invented.
+        // A thermal-only read has no energy or effective-clock baseline.
         Ok(sample)
     });
     let gpu = timed(start, || {

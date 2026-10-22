@@ -590,12 +590,10 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
                 .and_then(|curve| curve.value().ok())
         });
     for row in state.rows.borrow().iter() {
-        let stored = view.selected.as_ref().and_then(|p| {
-            p.settings
-                .iter()
-                .find(|s| s.feature == row.field.feature)
-                .map(|s| s.value.clone())
-        });
+        let stored = view
+            .selected
+            .as_ref()
+            .and_then(|p| preset::display_value(p, row.field.feature).cloned());
         set_checked(row.check, stored.is_some());
         row.edited.set(false);
         *row.baseline.borrow_mut() = stored.clone();

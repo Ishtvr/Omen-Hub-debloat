@@ -323,6 +323,35 @@ impl CpuHardwareReader {
     fn read(&self, what: Read) -> Result<u64, String> {
         read_cell(&self.driver, what)
     }
+    /// Thermal control needs only Tctl. Optional clock/energy warnings must not
+    /// invalidate a good temperature or wake every CPU for a fan-control tick.
+    pub fn temperature_sample(&self) -> Result<CpuHardwareSample, String> {
+        let sample = CpuHardwareSample {
+            schema: 1,
+            source: CpuHardwareSource::PawnioAmdRapl,
+            temperature_kind: CpuTemperatureKind::AmdTctl,
+            package_power_w: None,
+            temperature_c: Some(self.temperature_c()?),
+            power_interval_ms: None,
+            effective_clocks: None,
+            warnings: vec![],
+        };
+        sample.validate()?;
+        Ok(sample)
+    }
+
+    fn temperature_c(&self) -> Result<f64, String> {
+        let wait = unsafe { WaitForSingleObject(self.pci.0, 100) };
+        if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
+            return Err("CPU temperature reader could not acquire the shared PCI mutex".into());
+        }
+        let _pci = PciLease(&self.pci);
+        let raw = self.read(Read::Temperature)?;
+        if raw > u64::from(u32::MAX) {
+            return Err("CPU temperature register has unexpected high bits".into());
+        }
+        amd_tctl_c(raw as u32).ok_or("CPU Tctl response is unavailable or implausible".into())
+    }
     pub fn sample(&mut self) -> Result<CpuHardwareSample, String> {
         let result = (|| {
             let affinity = Affinity::cpu_zero()?;
@@ -341,20 +370,7 @@ impl CpuHardwareReader {
             } else {
                 (None, None)
             };
-            let wait = unsafe { WaitForSingleObject(self.pci.0, 100) };
-            if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
-                return Err("CPU temperature reader could not acquire the shared PCI mutex".into());
-            }
-            let pci = PciLease(&self.pci);
-            let raw = self.read(Read::Temperature)?;
-            drop(pci);
-            if raw > u64::from(u32::MAX) {
-                return Err("CPU temperature register has unexpected high bits".into());
-            }
-            let temperature_c = amd_tctl_c(raw as u32);
-            if temperature_c.is_none() {
-                return Err("CPU Tctl response is unavailable or implausible".into());
-            }
+            let temperature_c = Some(self.temperature_c()?);
             let mut warnings = if previous.is_some() && package_power_w.is_none() {
                 vec![
                     "CPU energy units, counter or interval changed; a fresh baseline is required"

@@ -2,6 +2,12 @@
 
 Diese Anleitung beschreibt, was Omen Hub++ auf einem Gerät verändern kann, wie der vor einer Änderung gespeicherte Originalzustand zurückkommt und wie die Anwendung vollständig entfernt wird. Sie gilt für den aktuellen Stand und das qualifizierte Referenzgerät **HP 8E35 / BIOS F.13**; auf anderen Geräten werden Schreibaktionen bereits vor dem ersten SET blockiert.
 
+## Neue und ältere Zustandsbilder
+
+Seit 22. Oktober tragen CPU-Limitbilder den eigenen RSMU-Vertrag und die Tabellenversion. Ein altes HP-Limitbild wird nicht als Beleg für den neuen Transport übernommen. Auch ein alter ausschließlich effektiver Windows-Overlay-Wert ist kein vollständiger Originalzustand der konfigurierten Benutzerauswahl. Solche Bilder blockieren die automatische Rücksicherung, statt unbekannte Werte zu schreiben. Das vorhandene Journal bleibt erhalten; die technische Ursache und der aktuelle [Steuerungsnachweis](SYSTEM_CONTROLS.md) helfen beim gezielten Wiederherstellen. Nicht durch Löschen eines offenen Journals eine erfolgreiche Rücksicherung vortäuschen.
+
+Alte widersprüchliche Presets bleiben im Editor lesbar. Das ist keine Schreibfreigabe: erst der eigene Anwendungs-Preflight prüft CO-/Dynamic-Boost-Konflikte und Windows-Modus/Plan. Ein Profil kann daher zum Korrigieren geöffnet werden, während Anwenden weiter blockiert ist.
+
 ## Was Omen Hub++ verändert
 
 | Bereich | Wann geschrieben wird | Originalzustand |

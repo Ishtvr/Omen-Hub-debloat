@@ -28,6 +28,10 @@ const KEYBOARD_MODE_WRITE_VERIFIED: bool = true;
 // full flag restored, GPU controls/power and production metadata unchanged.
 // Startup and software curves remain unqualified.
 const MAX_FAN_WRITE_VERIFIED: bool = true;
+// 2026-10-22 05:17 CEST, build6FF1F7A1...: fixed RSMU 0xCB,
+// 55 -> 54 -> 55 W, PM-table 0x540208 cell4; all seven independent
+// CPU-control images and complete GPU controls preserved after restore.
+const CPU_SLOW_WRITE_VERIFIED: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "adapter", rename_all = "snake_case", deny_unknown_fields)]
@@ -88,7 +92,9 @@ pub struct Controller {
     fan_observations: Vec<super::cooling::FanReport>,
     /// Windows targets written in this transaction (accepted by later checks).
     windows_targets: BTreeMap<Feature, Value>,
+    planned_power_scheme: Option<u128>,
     smu: Option<super::smu::Smu>,
+    slow_limit_qualification: bool,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -176,8 +182,17 @@ impl Controller {
             fan_calibration: false,
             fan_observations: vec![],
             windows_targets: BTreeMap::new(),
+            planned_power_scheme: None,
             smu: None,
+            slow_limit_qualification: false,
         })
+    }
+    /// Only the fixed decreasing trial uses this constructor. Ordinary profiles
+    /// remain blocked until exact SET/readback/full restore evidence exists.
+    pub fn for_slow_limit_qualification() -> Result<Self, String> {
+        let mut controller = Self::new(true, None)?;
+        controller.slow_limit_qualification = true;
+        Ok(controller)
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
         Self::new(
@@ -200,7 +215,11 @@ impl Controller {
             .ok_or("HP keyboard connection is missing".into())
     }
     pub fn keyboard_state(&mut self) -> Result<KeyboardState, String> {
-        self.keyboard()?.read()
+        let state = self.keyboard()?.read()?;
+        if state.capability.raw != [1, 0, 0, 0] {
+            return Err("Keyboard capability differs from the measured four-zone layout".into());
+        }
+        Ok(state)
     }
     fn smu(&mut self) -> Result<&super::smu::Smu, String> {
         if self.smu.is_none() {
@@ -604,6 +623,10 @@ impl Controller {
 
 impl Backend for Controller {
     type RestoreState = RestoreState;
+    fn prepare_settings(&mut self, settings: &[Setting]) -> Result<(), String> {
+        self.planned_power_scheme = super::windows_settings::requested_scheme(settings)?;
+        Ok(())
+    }
     fn write_order(&self, settings: &[Setting]) -> Vec<usize> {
         let mut order: Vec<_> = (0..settings.len()).collect();
         if self.memory_last_trial {
@@ -612,9 +635,12 @@ impl Backend for Controller {
         // Measured 617.14 behavior: the NVML memory setter resets a custom
         // Graphics curve. Preserve it, then apply the final Graphics target.
         order.sort_by_key(|i| match settings[*i].feature {
-            Feature::GpuMemoryOffsetMhz => 0,
-            Feature::KeyboardEffect => 2,
-            _ => 1,
+            Feature::WindowsPowerPlan => 0,
+            Feature::GpuMemoryOffsetMhz => 1,
+            // Apply a sustained ceiling before the final short-term ceiling.
+            Feature::CpuSlowPptLimitMw => 2,
+            Feature::KeyboardEffect => 4,
+            _ => 3,
         });
         order
     }
@@ -656,8 +682,15 @@ impl Backend for Controller {
             return match super::cpu_tuning::qualified(&self.inventory) {
                 Ok(()) => Capability {
                     feature,
-                    access: Access::ReadWrite,
-                    reason: "AMD SMU message with exact per-core/scalar readback".into(),
+                    access: if feature == Feature::CpuSlowPptLimitMw
+                        && !CPU_SLOW_WRITE_VERIFIED
+                        && !self.slow_limit_qualification
+                    {
+                        Access::NeedsValidation
+                    } else {
+                        Access::ReadWrite
+                    },
+                    reason: "AMD SMU message with exact per-core/scalar/limit readback".into(),
                     integer_range: Some(super::cpu_tuning::range(feature)),
                     requires_ac: false,
                     startup_safe: true,
@@ -721,20 +754,25 @@ impl Backend for Controller {
             }
             return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
         }
-        if feature == Feature::KeyboardEffect {
-            return match self.keyboard_state() {
-                Ok(state) if state.legacy.as_ref().is_some_and(|s|[0x64,0xe4].contains(&s.brightness_raw_byte))=>Capability {feature,access:if KEYBOARD_MODE_WRITE_VERIFIED||self.keyboard_mode_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},reason:"Classic own static colors versus firmware preset; exact64/E4 mode state only; no animation or percentage-brightness control".into(),integer_range:None,requires_ac:false,startup_safe: true},
-                Ok(_)=>Capability::unsupported(feature,"Mode restore is not qualified at this raw brightness level"),
-                Err(reason)=>Capability::unsupported(feature,reason),
+        if matches!(feature, Feature::KeyboardEffect | Feature::KeyboardColors) {
+            // The unelevated editor may offer a qualified board function.
+            // Permission, exact live capability/opaque bytes and restorable
+            // mode are checked at capture for ALL settings before any SET.
+            if self.inventory.manufacturer != "HP"
+                || self.inventory.board != "8E35"
+                || self.inventory.bios != "F.13"
+            {
+                return Capability::unsupported(
+                    feature,
+                    "Classic RGB is qualified only on HP8E35/F.13",
+                );
+            }
+            let verified = if feature == Feature::KeyboardEffect {
+                KEYBOARD_MODE_WRITE_VERIFIED || self.keyboard_mode_calibration.is_some()
+            } else {
+                KEYBOARD_COLOR_WRITE_VERIFIED || self.keyboard_calibration.is_some()
             };
-        }
-        if feature == Feature::KeyboardColors {
-            return match self.keyboard_state() {
-                Ok(_)=>Capability {feature,access:if KEYBOARD_COLOR_WRITE_VERIFIED||self.keyboard_calibration.is_some(){Access::ReadWrite}else{Access::NeedsValidation},
-                    reason:"Direct board8E35/F.13 classic four-zone RGB; complete opaque/brightness state must remain unchanged. Animations and independent HP-controller replacement are not qualified".into(),
-                    integer_range:None,requires_ac:false,startup_safe: true},
-                Err(reason)=>Capability::unsupported(feature,reason),
-            };
+            return Capability {feature,access:if verified {Access::ReadWrite}else{Access::NeedsValidation},reason:"Qualified classic four-zone RGB/static mode; elevated capture verifies the complete live layout and original before any write".into(),integer_range:None,requires_ac:false,startup_safe:verified};
         }
         if feature == Feature::GpuVfCurve {
             let verified = self.gpu_writes_verified();
@@ -909,6 +947,9 @@ impl Backend for Controller {
         }
         if super::cpu_tuning::handles(feature) {
             let image = super::cpu_tuning::capture(self.smu()?, feature)?;
+            // Restorability is a precondition, not something to discover only
+            // after a setter ran (e.g. a PBO pattern its setter cannot restore).
+            super::cpu_tuning::validate_original(feature, &image)?;
             let saved = Captured {
                 feature,
                 value: super::cpu_tuning::value(feature, &image)?,
@@ -931,7 +972,8 @@ impl Backend for Controller {
             return Ok(saved);
         }
         if super::windows_settings::handles(feature) {
-            let image = super::windows_settings::capture(feature)?;
+            let image =
+                super::windows_settings::capture_for_scheme(feature, self.planned_power_scheme)?;
             let saved = Captured {
                 feature,
                 value: super::windows_settings::value(feature, &image)?,
@@ -952,6 +994,16 @@ impl Backend for Controller {
         }
         if uses_keyboard(feature) {
             let state = self.keyboard_state()?;
+            if feature == Feature::KeyboardEffect
+                && !state
+                    .legacy
+                    .as_ref()
+                    .is_some_and(|s| [0x64, 0xe4].contains(&s.brightness_raw_byte))
+            {
+                return Err(
+                    "Keyboard mode original is not an exactly restorable 64/E4 state".into(),
+                );
+            }
             // A setting equal to its original is never written; the captured
             // complete state is then this transaction's verified target.
             self.keyboard_target = Some(state.clone());
@@ -1019,6 +1071,7 @@ impl Backend for Controller {
             return Err("Restore state was not captured by this controller session".into());
         }
         if let RestoreState::Windows { image } = &saved.restore {
+            self.verify_captured(saved)?;
             return super::windows_settings::restore(saved.feature, image);
         }
         if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
@@ -1140,9 +1193,16 @@ impl Backend for Controller {
             return Err("Control verification image is not owned by this session".into());
         }
         if let RestoreState::Windows { image } = &saved.restore {
-            let live = super::windows_settings::capture(saved.feature)?;
-            let value = super::windows_settings::value(saved.feature, &live)?;
-            if live != *image && self.windows_targets.get(&saved.feature) != Some(&value) {
+            let live = super::windows_settings::capture_like(saved.feature, image)?;
+            let owned = self
+                .windows_targets
+                .get(&saved.feature)
+                .map(|value| {
+                    super::windows_settings::image_owned(saved.feature, image, &live, value)
+                })
+                .transpose()?
+                .unwrap_or(false);
+            if live != *image && !owned {
                 return Err("Windows setting differs from its original and target".into());
             }
             return Ok(());
@@ -1161,7 +1221,7 @@ impl Backend for Controller {
             let feature = saved.feature;
             let live = super::cpu_tuning::capture(self.smu()?, feature)?;
             let owned = match self.windows_targets.get(&feature).cloned() {
-                Some(target) => super::cpu_tuning::matches(self.smu()?, feature, &target)?,
+                Some(target) => super::cpu_tuning::image_owned(feature, image, &live, &target)?,
                 None => false,
             };
             if live != *image && !owned {
@@ -1171,8 +1231,9 @@ impl Backend for Controller {
         }
         if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
             let live = super::read_hp_gpu_status(&self.inventory)?;
-            let owned = self.windows_targets.get(&saved.feature)
-                == Some(&Value::Boolean(live.ppab_enabled));
+            let owned = self.windows_targets.iter().any(|(feature, target)| {
+                uses_hp_gpu_power(*feature) && target == &Value::Boolean(live.ppab_enabled)
+            });
             if live.custom_tgp_enabled != *custom_tgp || (live.ppab_enabled != *ppab && !owned) {
                 return Err("HP GPU-power flags differ from original and target".into());
             }
@@ -1291,13 +1352,24 @@ impl Backend for Controller {
             };
         }
         if super::windows_settings::handles(setting.feature) {
-            let actual = super::windows_settings::read(setting.feature)?;
-            return if actual == setting.value {
-                Ok(actual)
+            let RestoreState::Windows { image } = &self
+                .captured
+                .get(&setting.feature)
+                .ok_or("No captured Windows target")?
+                .restore
+            else {
+                return Err("Wrong Windows adapter".into());
+            };
+            return if super::windows_settings::verify_target(
+                setting.feature,
+                image,
+                &setting.value,
+            )? {
+                Ok(setting.value.clone())
             } else {
                 Err(format!(
-                    "Readback mismatch for {:?}: requested {:?}, obtained {:?}",
-                    setting.feature, setting.value, actual
+                    "Readback mismatch for {:?}: full Windows target differs",
+                    setting.feature
                 ))
             };
         }
@@ -1406,6 +1478,22 @@ impl Backend for Controller {
         }
     }
 
+    fn captured_matches_target(
+        &mut self,
+        saved: &Captured<RestoreState>,
+        target: &Setting,
+    ) -> Result<bool, String> {
+        match &saved.restore {
+            RestoreState::AmdSmu { image } => {
+                super::cpu_tuning::image_matches(target.feature, image, &target.value)
+            }
+            RestoreState::Windows { image } => {
+                super::windows_settings::image_matches(target.feature, image, &target.value)
+            }
+            _ => Ok(saved.value == target.value),
+        }
+    }
+
     fn prepare_recovery(
         &mut self,
         transaction: &PendingTransaction<RestoreState>,
@@ -1441,10 +1529,16 @@ impl Backend for Controller {
             }
             if let RestoreState::AmdSmu { image } = &saved.restore {
                 let feature = saved.feature;
+                super::cpu_tuning::validate_original(feature, image)?;
                 let live = super::cpu_tuning::capture(self.smu()?, feature)?;
                 if requested.feature != feature
                     || (live != *image
-                        && !super::cpu_tuning::matches(self.smu()?, feature, &requested.value)?)
+                        && !super::cpu_tuning::image_owned(
+                            feature,
+                            image,
+                            &live,
+                            &requested.value,
+                        )?)
                 {
                     return Err("SMU setting differs from recorded original and target".into());
                 }
@@ -1468,11 +1562,14 @@ impl Backend for Controller {
                 continue;
             }
             if let RestoreState::Windows { image } = &saved.restore {
-                let live = super::windows_settings::capture(saved.feature)?;
-                let value = super::windows_settings::value(saved.feature, &live)?;
-                if requested.feature != saved.feature
-                    || (live != *image && value != requested.value)
-                {
+                let live = super::windows_settings::capture_like(saved.feature, image)?;
+                let owned = super::windows_settings::image_owned(
+                    saved.feature,
+                    image,
+                    &live,
+                    &requested.value,
+                )?;
+                if requested.feature != saved.feature || (live != *image && !owned) {
                     return Err("Windows setting differs from recorded original and target".into());
                 }
                 self.windows_targets
@@ -1776,9 +1873,9 @@ impl Backend for Controller {
             let RestoreState::Windows { image } = &saved.restore else {
                 return Err("Windows capture has another adapter".into());
             };
-            super::windows_settings::write(setting.feature, image, &setting.value)?;
             self.windows_targets
                 .insert(setting.feature, setting.value.clone());
+            super::windows_settings::write(setting.feature, image, &setting.value)?;
             return Ok(());
         }
         if setting.feature == Feature::MaxFan {
@@ -1945,7 +2042,9 @@ impl Backend for Controller {
             let Value::Colors(colors) = &setting.value else {
                 return Err("Typed RGB colors are required".into());
             };
-            self.keyboard_state()?.with_colors(colors)?;
+            if colors.len() != 4 {
+                return Err("The qualified keyboard needs exactly four RGB zones".into());
+            }
             if self
                 .keyboard_calibration
                 .as_ref()
@@ -2010,7 +2109,10 @@ mod tests {
             },
             RestoreState::HpGraphicsMode { mode: 1 },
             RestoreState::AmdSmu {
-                image: crate::windows::cpu_tuning::SmuImage::Limit { value: 65_000 },
+                image: crate::windows::cpu_tuning::SmuImage::Limit {
+                    value: 65_000,
+                    hp_pair: None,
+                },
             },
             RestoreState::Windows {
                 image: crate::windows::windows_settings::WindowsImage::ActiveScheme {

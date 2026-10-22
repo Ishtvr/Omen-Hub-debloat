@@ -134,7 +134,7 @@ try{
   $taskValue=switch($taskFeature){'gpu_voltage_limit_mv'{'900'}'gpu_frame_rate_limit'{'60'}'gpu_power_limit_mw'{'80000'}'gpu_temperature_limit_c'{'87'}'gpu_core_clock_limit_mhz'{'2000'}'gpu_memory_clock_limit_mhz'{'7000'}'gpu_unleashed'{'true'}'gpu_dynamic_boost'{'true'}'gpu_custom_tgp'{'true'}'omen_performance_mode'{'balanced'}default{'0'}}
   Read-CurveJson @('profile-set',$taskId,$taskFeature,$taskValue)|Out-Null
  }
- $taskApu=[ordered]@{cpu_skin_temperature_limit_c=45;cpu_fast_ppt_limit_mw=55000;cpu_stapm_time_seconds=28;cpu_slow_ppt_time_seconds=28;soc_tdc_ma=15000;soc_edc_ma=25000;gfx_tdc_ma=15000;gfx_edc_ma=25000;gfx_curve_optimizer=0;amd_igpu_clock_mhz=800;igpu_soft_min_mhz=400;igpu_soft_max_mhz=1200;cpu_soft_min_mhz=1000;cpu_soft_max_mhz=4000;data_soft_min_mhz=800;data_soft_max_mhz=1600;fabric_soft_min_mhz=800;fabric_soft_max_mhz=1600;vcn_soft_min_mhz=400;vcn_soft_max_mhz=1000;soc_soft_min_mhz=400;soc_soft_max_mhz=1000;intel_gpu_power_balance=0;intel_gpu_voltage_offset_mv=0}
+ $taskApu=[ordered]@{cpu_stapm_limit_mw=55000;cpu_skin_temperature_limit_c=45;cpu_fast_ppt_limit_mw=55000;cpu_stapm_time_seconds=28;cpu_slow_ppt_time_seconds=28;soc_tdc_ma=15000;soc_edc_ma=25000;gfx_tdc_ma=15000;gfx_edc_ma=25000;gfx_curve_optimizer=0;amd_igpu_clock_mhz=800;igpu_soft_min_mhz=400;igpu_soft_max_mhz=1200;cpu_soft_min_mhz=1000;cpu_soft_max_mhz=4000;data_soft_min_mhz=800;data_soft_max_mhz=1600;fabric_soft_min_mhz=800;fabric_soft_max_mhz=1600;vcn_soft_min_mhz=400;vcn_soft_max_mhz=1000;soc_soft_min_mhz=400;soc_soft_max_mhz=1000;intel_gpu_power_balance=0;intel_gpu_voltage_offset_mv=0}
  foreach($taskEntry in $taskApu.GetEnumerator()){Read-CurveJson @('profile-set',$taskId,[string]$taskEntry.Key,[string]$taskEntry.Value)|Out-Null}
  $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
  $taskProfile.settings+=@([pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}})
@@ -151,10 +151,24 @@ try{
  foreach($taskBoostKey in @('gpu_unleashed','gpu_dynamic_boost')){$taskBoostSetting=@($taskProfile.settings|Where-Object feature -eq $taskBoostKey);if($taskBoostSetting.Count-ne1-or$taskBoostSetting[0].value.value-ne$true){throw 'Save removed a required Dynamic Boost instruction.'}}
  if((@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value.value|ConvertTo-Json -Depth 6 -Compress)-cne$taskCurveImage-or@($taskProfile.settings|Where-Object feature -eq 'keyboard_colors').Count-ne1){throw 'Legacy cleanup changed full curve or hidden settings.'}
  Close-CurvePreset
+ # The new stored name alone must be shown by the same Dynamic Boost row.
+ # Unchecking it removes its actual instruction, rather than leaving a hidden
+ # active alias behind in a profile the user thought no longer contained it.
+ $taskProfile.settings=@($taskProfile.settings|Where-Object feature -ne 'gpu_unleashed')
+ [IO.File]::WriteAllText($taskFile,($taskProfile|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
+ Open-CurvePreset $taskId
+ if([OmenPresetCurveSmoke]::Message([OmenPresetCurveSmoke]::Control($taskWindow,2256),0x00F0)-ne1-or[OmenPresetCurveSmoke]::Message([OmenPresetCurveSmoke]::Control($taskWindow,2257),0x0147)-ne1){throw 'New-only Dynamic Boost alias is not displayed as enabled.'}
+ [void][OmenPresetCurveSmoke]::Message([OmenPresetCurveSmoke]::Control($taskWindow,2256),0x00F1,0)
+ Click-Curve $taskWindow 2256
+ Click-Curve $taskWindow 704
+ Wait-Curve { [OmenPresetCurveSmoke]::Text([OmenPresetCurveSmoke]::Control($taskWindow,711))-match'Preset gespeichert' } 'alias removal on Save'
+ $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
+ if(@($taskProfile.settings|Where-Object {$_.feature-in@('gpu_unleashed','gpu_dynamic_boost')}).Count-ne0){throw 'Unchecking Dynamic Boost left an active hidden alias.'}
+ Close-CurvePreset
  $taskAfter=Read-CurveJson @('gpu-curve-read')
  $taskMetadataAfter=@($taskFiles|ForEach-Object{if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{'absent'}})
  if((Programmed-Image $taskBefore)-cne(Programmed-Image $taskAfter)-or($taskMetadataBefore-join',')-cne($taskMetadataAfter-join',')){throw 'Draft editor changed hardware/journal/startup.'}
- [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;new_unnamed_chart=$true;dirty_checked_curve_opens=$true;cancel_preserves_parent=$true;accept_reopen_full_curve=$true;parent_save_only=$true;other_dirty_fields_retained=$true;legacy_cleanup_on_save=$true;apu_24_old_instructions_removed_on_save=$true;both_dynamic_boost_keys_retained=$true;hardware_journals_startup_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\preset-curve-ui-smoke.json') -Encoding UTF8
+ [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;new_unnamed_chart=$true;dirty_checked_curve_opens=$true;cancel_preserves_parent=$true;accept_reopen_full_curve=$true;parent_save_only=$true;other_dirty_fields_retained=$true;legacy_cleanup_on_save=$true;apu_25_old_instructions_removed_on_save=$true;both_dynamic_boost_keys_retained=$true;hardware_journals_startup_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\preset-curve-ui-smoke.json') -Encoding UTF8
  'Actual preset chart: unnamed/dirty open, cancel/accept/reopen, explicit Save, retired GPU cleanup and unchanged hardware passed.'
 }finally{
  if($taskProcess){$taskProcess.Refresh();if(-not$taskProcess.HasExited){Stop-Process -Id $taskProcess.Id};$taskProcess.Dispose()}

@@ -342,11 +342,6 @@ impl PerformanceProfile {
             return Err("NVIDIA settings require UUID, driver and VBIOS binding".into());
         }
         let unique: BTreeSet<_> = self.settings.iter().map(|s| s.feature).collect();
-        if unique.contains(&Feature::GpuVfCurve) && unique.contains(&Feature::GpuCoreOffsetMhz) {
-            return Err(
-                "Choose either a full V/F curve or a global GPU core offset in one profile".into(),
-            );
-        }
         if self.settings.len() > Feature::all().len() || unique.len() != self.settings.len() {
             return Err("Profile contains duplicate or excessive settings".into());
         }
@@ -355,11 +350,115 @@ impl PerformanceProfile {
         }
         Ok(())
     }
+
+    /// Storage validation preserves readable legacy intent. Hardware preflight
+    /// additionally rejects conflicting targets before journaling or any SET.
+    pub fn validate_intent(&self) -> Result<(), String> {
+        self.validate()?;
+        let unique: BTreeSet<_> = self.settings.iter().map(|s| s.feature).collect();
+        let legacy_boost = self
+            .settings
+            .iter()
+            .find(|s| s.feature == Feature::GpuUnleashed);
+        let boost = self
+            .settings
+            .iter()
+            .find(|s| s.feature == Feature::GpuDynamicBoost);
+        if matches!((legacy_boost,boost),(Some(a),Some(b)) if a.value!=b.value) {
+            return Err(crate::message::msg(
+                "profile.err.dynamic_boost_conflict",
+                &[],
+            ));
+        }
+        if unique.contains(&Feature::WindowsEnergyMode)
+            && self.settings.iter().any(|s| {
+                s.feature == Feature::WindowsPowerPlan && s.value != Value::Choice(Choice::Balanced)
+            })
+        {
+            return Err(crate::message::msg("windows.err.overlay_plan", &[]));
+        }
+        if unique.contains(&Feature::GpuVfCurve) && unique.contains(&Feature::GpuCoreOffsetMhz) {
+            return Err(
+                "Choose either a full V/F curve or a global GPU core offset in one profile".into(),
+            );
+        }
+        if unique.contains(&Feature::CpuCurveOptimizerAllCore)
+            && unique.contains(&Feature::CpuCurveOptimizerPerCore)
+        {
+            return Err(crate::message::msg("profile.err.co_conflict", &[]));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_power_mode_conflicts_remain_readable_but_cannot_apply() {
+        let mut profile = PerformanceProfile {
+            schema: PROFILE_SCHEMA,
+            id: "legacy".into(),
+            name: "Legacy".into(),
+            binding: DeviceBinding {
+                manufacturer: "HP".into(),
+                board: "8E35".into(),
+                bios: "F.13".into(),
+                cpu_names: vec![],
+                nvidia_uuid: None,
+                nvidia_driver: None,
+                nvidia_vbios: None,
+            },
+            settings: vec![
+                Setting {
+                    feature: Feature::WindowsEnergyMode,
+                    value: Value::Choice(Choice::BestEfficiency),
+                },
+                Setting {
+                    feature: Feature::WindowsPowerPlan,
+                    value: Value::Choice(Choice::HighPerformance),
+                },
+            ],
+        };
+        assert!(profile.validate().is_ok());
+        assert!(profile.validate_intent().is_err());
+        profile.settings[1].value = Value::Choice(Choice::Balanced);
+        assert!(profile.validate_intent().is_ok());
+    }
+    #[test]
+    fn all_core_and_per_core_targets_cannot_overwrite_each_other() {
+        let mut profile = PerformanceProfile {
+            schema: PROFILE_SCHEMA,
+            id: "cpu".into(),
+            name: "CPU".into(),
+            binding: DeviceBinding {
+                manufacturer: "HP".into(),
+                board: "8E35".into(),
+                bios: "F.13".into(),
+                cpu_names: vec!["CPU".into()],
+                nvidia_uuid: None,
+                nvidia_driver: None,
+                nvidia_vbios: None,
+            },
+            settings: vec![Setting {
+                feature: Feature::CpuCurveOptimizerAllCore,
+                value: Value::Integer(-19),
+            }],
+        };
+        assert!(profile.validate().is_ok());
+        profile.settings.push(Setting {
+            feature: Feature::CpuCurveOptimizerPerCore,
+            value: Value::PerCore(vec![CoreDelta {
+                ccd: 0,
+                core: 0,
+                steps: -19,
+            }]),
+        });
+        assert!(profile.validate().is_ok());
+        assert!(profile.validate_intent().is_err());
+        profile.settings.remove(0);
+        assert!(profile.validate().is_ok());
+    }
     #[test]
     fn a_curve_and_global_core_offset_cannot_address_the_same_domain() {
         let mut profile = PerformanceProfile {
@@ -393,7 +492,8 @@ mod tests {
             feature: Feature::GpuCoreOffsetMhz,
             value: Value::Integer(0),
         });
-        assert!(profile.validate().is_err());
+        assert!(profile.validate().is_ok());
+        assert!(profile.validate_intent().is_err());
     }
     #[test]
     fn non_gpu_profiles_do_not_require_an_awake_nvidia_device() {

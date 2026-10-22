@@ -13,6 +13,14 @@ $taskProfileRoot=[IO.Path]::GetFullPath((Join-Path $taskStorage 'profiles'))
 $taskProfilePath=Join-Path $taskProfileRoot ($taskId+'.json')
 $taskCreated=$false
 $taskProcess=$null
+$taskFanPath=Join-Path $taskStorage 'active-fan-curve.json'
+$taskFanModePath=Join-Path $taskStorage 'fan-mode.json'
+$taskFanBefore=if(Test-Path -LiteralPath $taskFanPath){[IO.File]::ReadAllBytes($taskFanPath)}else{$null}
+$taskFanModeBefore=if(Test-Path -LiteralPath $taskFanModePath){[IO.File]::ReadAllBytes($taskFanModePath)}else{$null}
+$taskFanGuarded=$false;$taskFanWritten=$false
+$taskFanReceipt=Join-Path $env:ProgramFiles ('OmenHubPlusPlus\fan-service-'+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value+'.json')
+if(-not(Test-Path -LiteralPath $taskFanReceipt)-or(Get-Content -LiteralPath $taskFanReceipt -Raw|ConvertFrom-Json).sha256-ine(Get-FileHash -LiteralPath $taskExe).Hash){throw 'Install this exact reviewed fan helper before the passive curve test; implicit installation is not permitted.'}
+if(Get-Process -Name 'Omen Hub++ Fan' -ErrorAction SilentlyContinue){throw 'Pause the own fan helper before this metadata test.'}
 if(-not('OmenCurveSmoke' -as [type])){
 Add-Type @'
 using System;
@@ -39,6 +47,7 @@ public static class OmenCurveSmoke {
     public static string[] Items(IntPtr hwnd){var values=new List<string>();int count=(int)Message(hwnd,0x0146);for(int i=0;i<count;i++){var text=new StringBuilder(256);UIntPtr result;if(Read(hwnd,0x0148,(UIntPtr)i,text,2,1000,out result)==IntPtr.Zero)throw new Exception("Owned point list did not answer");values.Add(text.ToString());}return values.ToArray();}
     public static string AllText(IntPtr parent){var values=new List<string>();EnumChildWindows(parent,(h,a)=>{values.Add(Text(h));return true;},IntPtr.Zero);return string.Join("\n",values);}
     public static IntPtr Find(uint process){IntPtr found=IntPtr.Zero;EnumWindows((h,a)=>{uint owner;GetWindowThreadProcessId(h,out owner);var name=new StringBuilder(128);GetClassName(h,name,name.Capacity);if(owner==process&&name.ToString()=="OmenHubPPCurveEditor"){found=h;return false;}return true;},IntPtr.Zero);return found;}
+    public static IntPtr Dialog(uint process){IntPtr found=IntPtr.Zero;EnumWindows((h,a)=>{uint owner;GetWindowThreadProcessId(h,out owner);var name=new StringBuilder(128);GetClassName(h,name,name.Capacity);if(owner==process&&name.ToString()=="#32770"){found=h;return false;}return true;},IntPtr.Zero);return found;}
     public static void Mouse(IntPtr hwnd,uint message,int x,int y,ulong buttons){Message(hwnd,message,buttons,(long)((uint)(ushort)x|((uint)(ushort)y<<16)));}
 }
 '@
@@ -46,6 +55,8 @@ public static class OmenCurveSmoke {
 function Invoke-Omen {param([string[]]$Arguments);$taskText=& $taskExe @Arguments | Out-String;if($LASTEXITCODE -ne 0){throw $taskText};$taskText|ConvertFrom-Json}
 function Wait-OmenText {param([IntPtr]$Window,[string]$Pattern);$taskEnd=(Get-Date).AddSeconds(12);do{$taskValue=[OmenCurveSmoke]::AllText($Window);if($taskValue -match $Pattern){return $taskValue};Start-Sleep -Milliseconds 80}while((Get-Date)-lt $taskEnd);throw "Missing editor state: $Pattern / $taskValue"}
 try{
+    [IO.File]::WriteAllText($taskFanModePath,'{"schema":1,"mode":"bios"}',[Text.UTF8Encoding]::new($false))
+    $taskFanGuarded=$true
     if(Test-Path -LiteralPath $taskProfilePath){throw 'Test profile already exists.'}
     $taskBefore=Invoke-Omen @('gpu-capabilities')
     $taskCurveBefore=Invoke-Omen @('gpu-curve-read')
@@ -60,6 +71,10 @@ try{
     [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]527),[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     $taskCanvas=[OmenCurveSmoke]::GetDlgItem($taskWindow,519)
+    # The production GPU editor opens zoomed around the selected point. Pixel
+    # coordinates below deliberately address the complete fitted voltage grid.
+    [void][OmenCurveSmoke]::Message($taskWindow,0x0111,525)
+    Start-Sleep -Milliseconds 100
     $taskPoints=[OmenCurveSmoke]::GetDlgItem($taskWindow,509)
     $taskX=[OmenCurveSmoke]::GetDlgItem($taskWindow,510)
     $taskY=[OmenCurveSmoke]::GetDlgItem($taskWindow,511)
@@ -122,15 +137,18 @@ try{
     if(([OmenCurveSmoke]::Items($taskPoints)-join '|')-cne($taskShifted-join '|')){throw 'Redo did not restore the complete draft.'}
     # Shift in empty chart space selects a voltage band; Shift+Enter flattens it.
     $taskBandLeft=[int](72+0.7*($taskRect.Right-100));$taskBandRight=[int](72+0.9*($taskRect.Right-100))
+    # This voltage region has high clocks; select along the bottom edge so a
+    # valid high plateau cannot be mistaken for a point drag (15-pixel hitbox).
+    $taskBandY=$taskRect.Bottom-55
     $taskBeforeBand=[OmenCurveSmoke]::Text($taskCanvas)
-    [OmenCurveSmoke]::Mouse($taskCanvas,0x0201,$taskBandLeft,50,5)
-    [OmenCurveSmoke]::Mouse($taskCanvas,0x0200,$taskBandRight,50,5)
+    [OmenCurveSmoke]::Mouse($taskCanvas,0x0201,$taskBandLeft,$taskBandY,5)
+    [OmenCurveSmoke]::Mouse($taskCanvas,0x0200,$taskBandRight,$taskBandY,5)
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x1b)
     Start-Sleep -Milliseconds 100
-    if([OmenCurveSmoke]::Text($taskCanvas)-cne$taskBeforeBand){throw 'Esc did not cancel the active band selection.'}
-    [OmenCurveSmoke]::Mouse($taskCanvas,0x0201,$taskBandLeft,50,5)
-    [OmenCurveSmoke]::Mouse($taskCanvas,0x0200,$taskBandRight,50,5)
-    [OmenCurveSmoke]::Mouse($taskCanvas,0x0202,$taskBandRight,50,4)
+    if([OmenCurveSmoke]::Text($taskCanvas)-cne$taskBeforeBand){throw ('Esc did not cancel the active band selection. Before: '+$taskBeforeBand+' After: '+[OmenCurveSmoke]::Text($taskCanvas))}
+    [OmenCurveSmoke]::Mouse($taskCanvas,0x0201,$taskBandLeft,$taskBandY,5)
+    [OmenCurveSmoke]::Mouse($taskCanvas,0x0200,$taskBandRight,$taskBandY,5)
+    [OmenCurveSmoke]::Mouse($taskCanvas,0x0202,$taskBandRight,$taskBandY,4)
     Wait-OmenText $taskWindow 'Auswahl:'|Out-Null
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x10)
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x0d)
@@ -181,10 +199,11 @@ try{
     Wait-OmenText $taskWindow 'GPU-Lüfter'|Out-Null
     [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x26)
     Start-Sleep -Milliseconds 100
+    $taskFanWritten=$true
     [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]503),[IntPtr]::Zero)
-    Wait-OmenText $taskWindow 'Profil gespeichert. Keine Hardware verändert'|Out-Null
+    Wait-OmenText $taskWindow 'Gespeichert\. Der Lüfterdienst|Lüfterkurve gespeichert\.'|Out-Null
     $taskSaved=Get-Content -LiteralPath $taskProfilePath -Raw|ConvertFrom-Json
-    if($taskSaved.settings.Count-ne4){throw 'Other profile settings or separate curve settings were lost.'}
+    if($taskSaved.settings.Count-ne4){throw ('Other profile settings or separate curve settings were lost: '+(($taskSaved.settings|ForEach-Object feature)-join','))}
     foreach($taskFeature in @('gpu_vf_curve','cpu_fan_curve','gpu_fan_curve','gpu_memory_offset_mhz')){if(@($taskSaved.settings|Where-Object feature -eq $taskFeature).Count-ne1){throw "Missing saved feature: $taskFeature"}}
     $taskSavedGpu=@($taskSaved.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value.value
     if($taskSavedGpu.Count-ne127 -or @($taskSaved.settings|Where-Object feature -eq 'gpu_core_offset_mhz').Count-ne0){throw 'GPU curve is incomplete or conflicts with a global offset.'}
@@ -192,8 +211,18 @@ try{
     $taskPlan=Invoke-Omen @('profile-plan',$taskId)
     if($taskPlan.applicable){throw 'Fan draft incorrectly claims hardware-write support.'}
     # Reopen saved state in the same window and verify native persistence.
+    $taskSavedFanY=[int][OmenCurveSmoke]::Text($taskY)
+    [void][OmenCurveSmoke]::Message($taskCanvas,0x0100,0x26)
+    Start-Sleep -Milliseconds 100
+    if([int][OmenCurveSmoke]::Text($taskY)-eq$taskSavedFanY){throw 'Reload fixture did not become dirty.'}
     [void][OmenCurveSmoke]::PostMessage($taskWindow,0x0111,[UIntPtr]::new([uint64]518),[IntPtr]::Zero)
-    Start-Sleep -Milliseconds 150
+    $taskDialogUntil=(Get-Date).AddSeconds(3)
+    do{$taskDialog=[OmenCurveSmoke]::Dialog([uint32]$taskProcess.Id);if($taskDialog-ne[IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date)-lt$taskDialogUntil)
+    if($taskDialog-eq[IntPtr]::Zero){throw 'No owned discard confirmation for reload.'}
+    [void][OmenCurveSmoke]::PostMessage($taskDialog,0x0111,[UIntPtr]::new([uint64]6),[OmenCurveSmoke]::GetDlgItem($taskDialog,6))
+    $taskReloadUntil=(Get-Date).AddSeconds(5)
+    do{if([int][OmenCurveSmoke]::Text($taskY)-eq$taskSavedFanY){break};Start-Sleep -Milliseconds 80}while((Get-Date)-lt$taskReloadUntil)
+    if([int][OmenCurveSmoke]::Text($taskY)-ne$taskSavedFanY){throw 'Reload did not restore the saved fan value.'}
     Wait-OmenText $taskWindow 'Gespeicherte Kurve'|Out-Null
     $taskAfter=Invoke-Omen @('gpu-capabilities');$taskCurveAfter=Invoke-Omen @('gpu-curve-read')
     if($taskBefore.gpu.core.Ok.current_mhz-ne$taskAfter.gpu.core.Ok.current_mhz -or $taskBefore.gpu.memory.Ok.current_mhz-ne$taskAfter.gpu.memory.Ok.current_mhz){throw 'Hardware offsets changed in the draft-only editor.'}
@@ -206,5 +235,18 @@ try{
     'Native GPU/fan curves: mouse, keyboard, immutable anchors, fan insert/remove, separate persistence and no hardware writes passed.'
 } finally {
     if($taskProcess){$taskProcess.Refresh();if(-not$taskProcess.HasExited){Stop-Process -Id $taskProcess.Id};$taskProcess.Dispose()}
+    if($taskFanGuarded){
+        if($taskFanWritten-and(Test-Path -LiteralPath $taskFanPath)){
+            $taskLive=Get-Content -LiteralPath $taskFanPath -Raw|ConvertFrom-Json
+            $taskSavedProfile=Get-Content -LiteralPath $taskProfilePath -Raw|ConvertFrom-Json
+            $taskWanted=@($taskSavedProfile.settings|Where-Object feature -eq 'cpu_fan_curve')[0].value.value
+            $taskLiveSig=@($taskLive.points|ForEach-Object{'{0}/{1}'-f$_.temperature_c,$_.duty_percent})-join','
+            $taskWantedSig=@($taskWanted|ForEach-Object{'{0}/{1}'-f$_.temperature_c,$_.duty_percent})-join','
+            if($taskLiveSig-cne$taskWantedSig){throw 'Active fan metadata changed externally; restoration was blocked.'}
+            if($null-ne$taskFanBefore){[IO.File]::WriteAllBytes($taskFanPath,$taskFanBefore)}else{Remove-Item -LiteralPath $taskFanPath}
+        }
+        if((Get-Content -LiteralPath $taskFanModePath -Raw|ConvertFrom-Json).mode-cne'bios'){throw 'Temporary fan mode changed externally.'}
+        if($null-ne$taskFanModeBefore){[IO.File]::WriteAllBytes($taskFanModePath,$taskFanModeBefore)}else{Remove-Item -LiteralPath $taskFanModePath}
+    }
     if($taskCreated-and(Test-Path -LiteralPath $taskProfilePath)){$taskTarget=(Resolve-Path -LiteralPath $taskProfilePath).Path;if([IO.Path]::GetDirectoryName($taskTarget)-ne$taskProfileRoot){throw 'Test cleanup escaped its profile directory.'};Remove-Item -LiteralPath $taskTarget}
 }

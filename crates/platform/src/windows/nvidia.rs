@@ -114,7 +114,7 @@ impl Nvapi {
             let mut gpus = [ptr::null_mut(); 64];
             let mut count = 0;
             let status = enumerate(gpus.as_mut_ptr(), &mut count);
-            if status != 0 || count == 0 || gpus[0].is_null() {
+            if status != 0 || count != 1 || gpus[0].is_null() {
                 unload();
                 return Err(format!("NVAPI GPU enumeration: {status}, count {count}"));
             }
@@ -299,6 +299,42 @@ impl Drop for Nvml {
         unsafe {
             (self.shutdown)();
         }
+    }
+}
+
+/// The fan controller needs only one temperature. Keeping the full NVAPI and
+/// NVML dashboard sessions resident added about 27 MB on the reference system.
+/// This session uses only the public NVAPI thermal ABI, with its DLL and shutdown
+/// lifetime retained on the same thread and an unambiguous single-GPU target.
+pub(super) struct GpuTemperature {
+    nvapi: Nvapi,
+}
+impl GpuTemperature {
+    pub fn new() -> Result<Self, String> {
+        Ok(Self {
+            nvapi: Nvapi::new()?,
+        })
+    }
+    pub fn sample(&self) -> Result<i32, String> {
+        let mut thermal = Thermal {
+            version: size_of::<Thermal>() as u32 | (2 << 16),
+            ..Default::default()
+        };
+        // SAFETY: Live single-GPU session, public versioned repr(C) structure.
+        let status = unsafe { (self.nvapi.thermal)(self.nvapi.gpu, 0, &mut thermal) };
+        if status != 0 || !(1..=3).contains(&thermal.count) {
+            return Err(format!(
+                "NVAPI fan temperature unavailable: status {status}, count {}",
+                thermal.count
+            ));
+        }
+        thermal
+            .sensors
+            .iter()
+            .take(thermal.count as usize)
+            .find(|sensor| sensor.target == 1 && (1..=125).contains(&sensor.current))
+            .map(|sensor| sensor.current)
+            .ok_or("NVAPI GPU temperature missing or invalid".into())
     }
 }
 

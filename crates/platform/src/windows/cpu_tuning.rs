@@ -1,5 +1,5 @@
 //! Curve Optimizer, PBO scalar and the PPT/STAPM/slow/TDC/EDC/Tctl limits through
-//! fixed SMU messages and the HP power-limit command. Margins and scalar have SMU GETs; each limit is read back from the
+//! fixed SMU messages. Margins and scalar have SMU GETs; each limit is read back from the
 //! PM-table cell measured on 16 October 2026 (cpu-smu-calibrate-limits).
 use super::smu::{Message, Smu, core_mask, margin_arg, margin_value};
 use omen_core::{
@@ -16,105 +16,66 @@ const CORES: u8 = 16;
 pub const MARGIN_RANGE: (i64, i64) = (-50, 30);
 pub const PBO_RANGE: (i64, i64) = (1, 10);
 
-/// How a limit is written: a fixed RSMU message, or byte `n` of the HP BIOS
-/// power-limit command (`0x29`), which on this board carries slow (byte 0) and
-/// STAPM (byte 1) in whole watts (measured 16 October 2026).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Setter {
-    Smu(Message),
-    Hp(usize),
-}
-/// Limit, its setter, measured PM-table cell (version 0x540108), the factor from
+/// Limit, its setter, measured PM-table cell (version 0x540208), the factor from
 /// the table unit to the profile unit and the allowed profile range. Upper
 /// bounds are the fused PPT/TDC, the observed EDC and a 95 °C Tctl ceiling.
-type LimitSpec = (Feature, Setter, usize, f32, (i64, i64));
-const LIMITS: [LimitSpec; 6] = [
+type LimitSpec = (Feature, Message, usize, f32, (i64, i64));
+const LIMITS: [LimitSpec; 5] = [
     (
         Feature::CpuPptLimitMw,
-        Setter::Smu(Message::SetPptLimit),
+        Message::SetPptLimit,
         2,
         1000.0,
         (15_000, 160_000),
     ),
     (
-        Feature::CpuStapmLimitMw,
-        Setter::Hp(1),
-        0,
-        1000.0,
-        (15_000, 160_000),
-    ),
-    (
         Feature::CpuSlowPptLimitMw,
-        Setter::Hp(0),
+        Message::SetSlowLimit,
         4,
         1000.0,
         (15_000, 160_000),
     ),
     (
         Feature::CpuTdcMa,
-        Setter::Smu(Message::SetTdcLimit),
+        Message::SetTdcLimit,
         8,
         1000.0,
         (30_000, 108_000),
     ),
     (
         Feature::CpuEdcMa,
-        Setter::Smu(Message::SetEdcLimit),
+        Message::SetEdcLimit,
         62,
         1000.0,
         (30_000, 160_000),
     ),
     (
         Feature::CpuTemperatureLimitC,
-        Setter::Smu(Message::SetTctlMax),
+        Message::SetTctlMax,
         10,
         1.0,
         (60, 95),
     ),
 ];
-const PM_TABLE_VERSION: u32 = 0x540108;
+// Both the original 16 October probe and the new 22 October probe returned
+// decimal 5505544. The previous hexadecimal transcription, 0x540108, was wrong
+// and blocked every limit capture before any write; no new layout is inferred.
+const PM_TABLE_VERSION: u32 = 0x540208;
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 /// The BIOS hands HP limits to the SMU a little later than RSMU messages land.
 const HP_SETTLE: std::time::Duration = std::time::Duration::from_millis(600);
-fn limit(feature: Feature) -> Option<(Setter, usize, f32, (i64, i64))> {
+fn limit(feature: Feature) -> Option<(Message, usize, f32, (i64, i64))> {
     LIMITS
         .iter()
         .find(|l| l.0 == feature)
         .map(|l| (l.1, l.2, l.3, l.4))
 }
-/// Sends one limit. The HP command always carries both slow and STAPM, so the
-/// other one is written with its live value instead of relying on `0xFF`.
+/// Sends one fixed RSMU limit; the general HP PL1 command is deliberately not
+/// used for independent CPU tuning. Its two fields did not stay independent.
 fn send_limit(smu: &Smu, feature: Feature, value: i64) -> Result<(), String> {
-    let (setter, ..) = limit(feature).ok_or("No limit")?;
-    match setter {
-        Setter::Smu(message) => {
-            smu.send(message, u32::try_from(value).map_err(|e| e.to_string())?)?;
-            // The PM table reflects a new limit after a short refresh interval.
-            std::thread::sleep(SETTLE);
-        }
-        Setter::Hp(byte) => {
-            let (version, table) = smu.pm_table(8)?;
-            if version != PM_TABLE_VERSION {
-                return Err(format!(
-                    "PM table {version:#x} differs from the measured layout"
-                ));
-            }
-            let watts = |cell: usize| {
-                let w = table[cell].round();
-                if (15.0..=160.0).contains(&w) {
-                    Ok(w as u8)
-                } else {
-                    Err(format!("PM-table limit {w} W is not plausible"))
-                }
-            };
-            let mut payload = [watts(4)?, watts(0)?, 0xFF, 0xFF];
-            payload[byte] = u8::try_from(value / 1000).map_err(|e| e.to_string())?;
-            smu.hp()?
-                .set_mode_payload(omen_core::hp_mode::POWER_LIMITS_TYPE, payload)
-                .map_err(|e| e.to_string())?;
-            std::thread::sleep(HP_SETTLE);
-        }
-    }
+    let (message, ..) = limit(feature).ok_or("No limit")?;
+    smu.send(message, u32::try_from(value).map_err(|e| e.to_string())?)?;
+    std::thread::sleep(SETTLE);
     Ok(())
 }
 /// STAPM and slow limit in whole watts after an HP `0x29` write, read from
@@ -123,14 +84,8 @@ pub fn hp_limits_w(inventory: &Inventory) -> Result<(i64, i64), String> {
     qualified(inventory)?;
     std::thread::sleep(HP_SETTLE);
     let smu = Smu::new(inventory)?;
-    let watts = |feature| match capture(&smu, feature)? {
-        SmuImage::Limit { value } => Ok((value as f64 / 1000.0).round() as i64),
-        _ => Err("Not a limit".to_owned()),
-    };
-    Ok((
-        watts(Feature::CpuStapmLimitMw)?,
-        watts(Feature::CpuSlowPptLimitMw)?,
-    ))
+    let pair = read_hp_pair(&smu)?;
+    Ok((pair.stapm_mw / 1000, pair.slow_mw / 1000))
 }
 pub fn range(feature: Feature) -> (i64, i64) {
     match feature {
@@ -140,12 +95,13 @@ pub fn range(feature: Feature) -> (i64, i64) {
 }
 
 pub fn handles(feature: Feature) -> bool {
-    matches!(
-        feature,
-        Feature::CpuCurveOptimizerAllCore
-            | Feature::CpuCurveOptimizerPerCore
-            | Feature::CpuPboScalar
-    ) || limit(feature).is_some()
+    feature != Feature::CpuStapmLimitMw
+        && (matches!(
+            feature,
+            Feature::CpuCurveOptimizerAllCore
+                | Feature::CpuCurveOptimizerPerCore
+                | Feature::CpuPboScalar
+        ) || limit(feature).is_some())
 }
 
 /// Board/CPU qualification without opening the driver (needs elevation).
@@ -165,14 +121,62 @@ pub fn qualified(inventory: &Inventory) -> Result<(), String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HpLimitPair {
+    pub stapm_mw: i64,
+    pub slow_mw: i64,
+}
+impl HpLimitPair {
+    fn validate(&self) -> Result<(), String> {
+        if [self.stapm_mw, self.slow_mw]
+            .iter()
+            .any(|v| !(15_000..=160_000).contains(v) || v % 1000 != 0)
+        {
+            return Err(
+                "Both HP limits must be exactly restorable whole watts in the qualified range"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn read_hp_pair(smu: &Smu) -> Result<HpLimitPair, String> {
+    let (version, table) = smu.pm_table(8)?;
+    decode_hp_pair(version, &table)
+}
+fn decode_hp_pair(version: u32, table: &[f32]) -> Result<HpLimitPair, String> {
+    if version != PM_TABLE_VERSION
+        || table.len() < 5
+        || !table[0].is_finite()
+        || !table[4].is_finite()
+    {
+        return Err("Paired HP limits have an unavailable PM-table contract".into());
+    }
+    let pair = HpLimitPair {
+        stapm_mw: (table[0] * 1000.0).round() as i64,
+        slow_mw: (table[4] * 1000.0).round() as i64,
+    };
+    pair.validate()?;
+    Ok(pair)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SmuImage {
     /// Margin of every core, CCD-major.
     Margins { margins: Vec<i32> },
     /// The SMU's f32 PBO scalar as raw bits.
     PboScalar { bits: u32 },
+    /// Fixed RSMU control, bound to the measured PM-table layout. Legacy HP
+    /// limit images remain decodable but cannot select this transport.
+    RsmuLimit { value: i64, table_version: u32 },
     /// A limit in profile units (mW, mA or °C) as read from its PM-table cell.
-    Limit { value: i64 },
+    Limit {
+        value: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hp_pair: Option<HpLimitPair>,
+    },
 }
 
 fn margins(smu: &Smu) -> Result<Vec<i32>, String> {
@@ -196,8 +200,9 @@ pub fn capture(smu: &Smu, feature: Feature) -> Result<SmuImage, String> {
         if !raw.is_finite() || raw <= 0.0 {
             return Err("PM-table limit is not plausible".into());
         }
-        return Ok(SmuImage::Limit {
+        return Ok(SmuImage::RsmuLimit {
             value: (raw * factor).round() as i64,
+            table_version: version,
         });
     }
     match feature {
@@ -233,12 +238,19 @@ pub fn value(feature: Feature, image: &SmuImage) -> Result<Value, String> {
         (Feature::CpuPboScalar, SmuImage::PboScalar { bits }) => {
             Value::Integer(f32::from_bits(*bits).round() as i64)
         }
-        (f, SmuImage::Limit { value }) if limit(f).is_some() => Value::Integer(*value),
+        (f, SmuImage::Limit { value, .. } | SmuImage::RsmuLimit { value, .. })
+            if limit(f).is_some() =>
+        {
+            Value::Integer(*value)
+        }
         _ => return Err("SMU image does not belong to this feature".into()),
     })
 }
 
 pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
+    if feature == Feature::CpuStapmLimitMw {
+        return Err("Independent STAPM control is not qualified on this firmware; use the measured Fast/Slow CPU limits".into());
+    }
     let in_margin = |v: i64| (MARGIN_RANGE.0..=MARGIN_RANGE.1).contains(&v);
     match (feature, value) {
         (Feature::CpuCurveOptimizerAllCore, Value::Integer(v)) if in_margin(*v) => Ok(()),
@@ -264,8 +276,7 @@ pub fn validate(feature: Feature, value: &Value) -> Result<(), String> {
         }
         (f, Value::Integer(v)) if limit(f).is_some() => {
             let (lo, hi) = range(f);
-            let whole_watts = !matches!(limit(f), Some((Setter::Hp(_), ..))) || v % 1000 == 0;
-            if (lo..=hi).contains(v) && whole_watts {
+            if (lo..=hi).contains(v) {
                 Ok(())
             } else {
                 // Shown in the profile unit (W, A or °C), not mW/mA.
@@ -306,7 +317,11 @@ pub fn write(smu: &Smu, feature: Feature, value: &Value) -> Result<(), String> {
 /// Whether the live SMU state equals the requested profile value.
 pub fn matches(smu: &Smu, feature: Feature, value: &Value) -> Result<bool, String> {
     let live = capture(smu, feature)?;
-    Ok(match (feature, value, &live) {
+    image_matches(feature, &live, value)
+}
+
+pub fn image_matches(feature: Feature, image: &SmuImage, value: &Value) -> Result<bool, String> {
+    Ok(match (feature, value, image) {
         (Feature::CpuCurveOptimizerAllCore, Value::Integer(v), SmuImage::Margins { margins }) => {
             margins.iter().all(|m| i64::from(*m) == *v)
         }
@@ -317,11 +332,45 @@ pub fn matches(smu: &Smu, feature: Feature, value: &Value) -> Result<bool, Strin
         ) => cores
             .iter()
             .all(|c| margins.get(usize::from(c.ccd) * 8 + usize::from(c.core)) == Some(&c.steps)),
-        _ => &self::value(feature, &live)? == value,
+        (Feature::CpuPboScalar, Value::Integer(wanted), SmuImage::PboScalar { bits }) => {
+            f32::from_bits(*bits) == *wanted as f32
+        }
+        _ => &self::value(feature, image)? == value,
     })
 }
 
+pub fn image_owned(
+    feature: Feature,
+    original: &SmuImage,
+    live: &SmuImage,
+    target: &Value,
+) -> Result<bool, String> {
+    if let (SmuImage::Margins { margins: old }, SmuImage::Margins { margins: now }) =
+        (original, live)
+    {
+        if old.len() != usize::from(CORES) || now.len() != old.len() {
+            return Ok(false);
+        }
+        validate(feature, target)?;
+        return Ok(old.iter().zip(now).enumerate().all(|(index, (old, now))| {
+            let wanted = match target {
+                Value::Integer(value) if feature == Feature::CpuCurveOptimizerAllCore => {
+                    Some(*value as i32)
+                }
+                Value::PerCore(cores) if feature == Feature::CpuCurveOptimizerPerCore => cores
+                    .iter()
+                    .find(|c| usize::from(c.ccd) * 8 + usize::from(c.core) == index)
+                    .map(|c| c.steps),
+                _ => None,
+            };
+            old == now || wanted == Some(*now)
+        }));
+    }
+    Ok(original == live || image_matches(feature, live, target)?)
+}
+
 pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), String> {
+    validate_original(feature, original)?;
     match original {
         SmuImage::Margins { margins } => {
             for (i, steps) in margins.iter().enumerate() {
@@ -337,7 +386,10 @@ pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), S
                 (f32::from_bits(*bits) * 100.0).round() as u32,
             )?;
         }
-        SmuImage::Limit { value } => send_limit(smu, feature, *value)?,
+        SmuImage::RsmuLimit { value, .. } => send_limit(smu, feature, *value)?,
+        SmuImage::Limit { .. } => {
+            return Err("Legacy HP limit image cannot select an RSMU restore".into());
+        }
     }
     if capture(smu, feature)? != *original {
         return Err("SMU setting did not return to its captured original".into());
@@ -345,9 +397,205 @@ pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), S
     Ok(())
 }
 
+pub fn validate_original(feature: Feature, original: &SmuImage) -> Result<(), String> {
+    if feature == Feature::CpuStapmLimitMw
+        || matches!(
+            original,
+            SmuImage::Limit {
+                hp_pair: Some(_),
+                ..
+            }
+        )
+    {
+        return Err("Legacy HP CPU original uses an unqualified independent STAPM path; no automatic restore is attempted".into());
+    }
+    match original {
+        SmuImage::Margins { margins }
+            if matches!(
+                feature,
+                Feature::CpuCurveOptimizerAllCore | Feature::CpuCurveOptimizerPerCore
+            ) && margins.len() == usize::from(CORES)
+                && margins.iter().all(|value| {
+                    (MARGIN_RANGE.0..=MARGIN_RANGE.1).contains(&i64::from(*value))
+                }) =>
+        {
+            Ok(())
+        }
+        SmuImage::PboScalar { bits } if feature == Feature::CpuPboScalar => {
+            let scalar = f32::from_bits(*bits);
+            let percent = (scalar * 100.0).round();
+            if scalar.is_finite() && (1.0..=10.0).contains(&scalar) && percent / 100.0 == scalar {
+                Ok(())
+            } else {
+                Err("PBO original is not a finite exactly restorable scalar".into())
+            }
+        }
+        SmuImage::RsmuLimit {
+            value,
+            table_version,
+        } if *table_version == PM_TABLE_VERSION && limit(feature).is_some() => {
+            validate(feature, &Value::Integer(*value))
+        }
+        _ => Err("SMU original type, shape or range does not belong to this feature".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scalar_projection_does_not_hide_other_cpu_margins_or_fractional_pbo() {
+        let mut margins = vec![-20; 16];
+        margins[1] = -15;
+        let original = SmuImage::Margins { margins };
+        assert_eq!(
+            value(Feature::CpuCurveOptimizerAllCore, &original).unwrap(),
+            Value::Integer(-20)
+        );
+        assert!(
+            !image_matches(
+                Feature::CpuCurveOptimizerAllCore,
+                &original,
+                &Value::Integer(-20)
+            )
+            .unwrap()
+        );
+        let fractional = SmuImage::PboScalar {
+            bits: 1.5f32.to_bits(),
+        };
+        assert!(!image_matches(Feature::CpuPboScalar, &fractional, &Value::Integer(2)).unwrap());
+    }
+
+    #[test]
+    fn partial_margin_recovery_accepts_only_original_or_requested_cores() {
+        let original = SmuImage::Margins {
+            margins: vec![-20; 16],
+        };
+        let mut margins = vec![-20; 16];
+        margins[0] = -19;
+        let partial = SmuImage::Margins {
+            margins: margins.clone(),
+        };
+        assert!(
+            image_owned(
+                Feature::CpuCurveOptimizerAllCore,
+                &original,
+                &partial,
+                &Value::Integer(-19)
+            )
+            .unwrap()
+        );
+        margins[1] = -17;
+        assert!(
+            !image_owned(
+                Feature::CpuCurveOptimizerAllCore,
+                &original,
+                &SmuImage::Margins { margins },
+                &Value::Integer(-19)
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn retired_hp_images_and_invalid_smu_originals_cannot_restore() {
+        let pair = HpLimitPair {
+            stapm_mw: 80_000,
+            slow_mw: 66_000,
+        };
+        let original = SmuImage::Limit {
+            value: 80_000,
+            hp_pair: Some(pair.clone()),
+        };
+        assert!(validate_original(Feature::CpuStapmLimitMw, &original).is_err());
+        assert!(
+            validate_original(
+                Feature::CpuStapmLimitMw,
+                &SmuImage::Limit {
+                    value: 80_000,
+                    hp_pair: None
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            HpLimitPair {
+                stapm_mw: 80_500,
+                ..pair.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(validate_original(Feature::CpuSlowPptLimitMw, &original).is_err());
+        assert!(
+            validate_original(
+                Feature::CpuSlowPptLimitMw,
+                &SmuImage::Limit {
+                    value: 55_000,
+                    hp_pair: None
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_original(
+                Feature::CpuSlowPptLimitMw,
+                &SmuImage::RsmuLimit {
+                    value: 55_000,
+                    table_version: 0x540108
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_original(
+                Feature::CpuSlowPptLimitMw,
+                &SmuImage::RsmuLimit {
+                    value: 55_000,
+                    table_version: PM_TABLE_VERSION
+                }
+            )
+            .is_ok()
+        );
+        for scalar in [f32::NAN, f32::INFINITY, 0.0, 11.0, 1.234] {
+            assert!(
+                validate_original(
+                    Feature::CpuPboScalar,
+                    &SmuImage::PboScalar {
+                        bits: scalar.to_bits()
+                    }
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_original(
+                Feature::CpuPboScalar,
+                &SmuImage::PboScalar {
+                    bits: 1.5f32.to_bits()
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_original(
+                Feature::CpuCurveOptimizerAllCore,
+                &SmuImage::Margins {
+                    margins: vec![-20; 15]
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_original(
+                Feature::CpuTdcMa,
+                &SmuImage::Margins {
+                    margins: vec![-20; 16]
+                }
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn per_core_value_lists_both_ccds() {
         let image = SmuImage::Margins {
@@ -380,7 +628,6 @@ mod tests {
             Feature::CpuCurveOptimizerPerCore,
             Feature::CpuPboScalar,
             Feature::CpuPptLimitMw,
-            Feature::CpuStapmLimitMw,
             Feature::CpuSlowPptLimitMw,
             Feature::CpuTdcMa,
             Feature::CpuEdcMa,
@@ -389,6 +636,7 @@ mod tests {
             assert!(handles(f), "{f:?} should be handled");
         }
         assert!(!handles(Feature::GpuCoreOffsetMhz));
+        assert!(!handles(Feature::CpuStapmLimitMw));
         assert!(!handles(Feature::WindowsBoostMode));
 
         assert_eq!(range(Feature::CpuPboScalar), (1, 10));
@@ -406,10 +654,10 @@ mod tests {
         assert!(validate(Feature::CpuPptLimitMw, &Value::Integer(200_000)).is_err());
 
         // HP limits (STAPM and Slow PPT) require whole watts (v % 1000 == 0)
-        assert!(validate(Feature::CpuStapmLimitMw, &Value::Integer(45_000)).is_ok());
+        assert!(validate(Feature::CpuStapmLimitMw, &Value::Integer(45_000)).is_err());
         assert!(validate(Feature::CpuStapmLimitMw, &Value::Integer(45_500)).is_err());
         assert!(validate(Feature::CpuSlowPptLimitMw, &Value::Integer(30_000)).is_ok());
-        assert!(validate(Feature::CpuSlowPptLimitMw, &Value::Integer(30_250)).is_err());
+        assert!(validate(Feature::CpuSlowPptLimitMw, &Value::Integer(30_250)).is_ok());
 
         assert!(validate(Feature::CpuTdcMa, &Value::Integer(80_000)).is_ok());
         assert!(validate(Feature::CpuTdcMa, &Value::Integer(20_000)).is_err());
@@ -499,7 +747,10 @@ mod tests {
             SmuImage::PboScalar {
                 bits: 2.0f32.to_bits(),
             },
-            SmuImage::Limit { value: 65_000 },
+            SmuImage::Limit {
+                value: 65_000,
+                hp_pair: None,
+            },
         ] {
             let text = serde_json::to_string(&image).unwrap();
             let parsed: SmuImage = serde_json::from_str(&text).unwrap();
@@ -507,7 +758,14 @@ mod tests {
         }
 
         assert_eq!(
-            value(Feature::CpuPptLimitMw, &SmuImage::Limit { value: 55_000 }).unwrap(),
+            value(
+                Feature::CpuPptLimitMw,
+                &SmuImage::Limit {
+                    value: 55_000,
+                    hp_pair: None
+                }
+            )
+            .unwrap(),
             Value::Integer(55_000)
         );
         assert_eq!(

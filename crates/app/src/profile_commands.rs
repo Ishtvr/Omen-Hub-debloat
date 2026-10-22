@@ -43,6 +43,7 @@ pub fn handles(command: &str) -> bool {
     matches!(
         command,
         "gpu-capabilities"
+            | "system-validate-safe"
             | "fan-validate-max"
             | "keyboard-validate-colors"
             | "keyboard-validate-lighting"
@@ -65,6 +66,7 @@ pub fn handles(command: &str) -> bool {
             | "mode-ui-apply"
             | "cpu-smu-probe"
             | "fan-service"
+            | "fan-service-stop"
             | "mux-ui-apply"
             | "fan-service-install"
             | "cpu-smu-calibrate-limits"
@@ -181,6 +183,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 fn run_inner(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("system-validate-safe") if args.len() == 3 && args[2] == "--confirm-safe-writes" => {
+            return crate::system_validation::run(&args[1]);
+        }
         Some("cpu-smu-calibrate-limits") if args.len() == 1 => {
             // Fixed approved qualification: lower each limit once, find its
             // PM-table cell, write the previous value back.
@@ -215,6 +220,11 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             store.save_graphics_mode(&record)?;
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"mux","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
+        }
+        Some("fan-service-stop") if args.len() == 1 => {
+            return print(
+                &serde_json::json!({"stop_requested":omen_platform::stop_fan_service()?}),
+            );
         }
         Some("fan-service") if args.len() == 1 => {
             // Runs for the whole logon session from the protected task copy.

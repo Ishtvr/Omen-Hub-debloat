@@ -69,6 +69,11 @@ pub trait Backend {
     type RestoreState: Clone;
     fn context(&mut self) -> Result<Context, String>;
     fn capability(&mut self, feature: Feature) -> Capability;
+    /// Declare coupled profile intent before capabilities and original capture.
+    /// This must only read state; no hardware changes belong in preflight.
+    fn prepare_settings(&mut self, _settings: &[Setting]) -> Result<(), String> {
+        Ok(())
+    }
     /// Indices in hardware dependency order; every setting must occur once.
     /// The journal retains the caller's order and all originals before writes.
     fn write_order(&self, settings: &[Setting]) -> Vec<usize> {
@@ -78,6 +83,15 @@ pub trait Backend {
     /// before any setting in the profile may write hardware.
     fn validate_setting(&mut self, setting: &Setting) -> Result<(), String> {
         setting.validate()
+    }
+    /// Some controls have a scalar UI value but a multi-value original (AC/DC
+    /// policies or all CPU margins). Equality must cover the whole target.
+    fn captured_matches_target(
+        &mut self,
+        saved: &Captured<Self::RestoreState>,
+        target: &Setting,
+    ) -> Result<bool, String> {
+        Ok(saved.value == target.value)
     }
     fn read(&mut self, feature: Feature) -> Result<Value, String>;
     /// Return current observations after every requested control is verified.
@@ -148,7 +162,14 @@ pub fn plan(profile: &PerformanceProfile, backend: &mut impl Backend, startup: b
         capabilities: vec![],
         blockers: vec![],
     };
-    if let Err(reason) = profile.validate() {
+    if let Err(reason) = profile.validate_intent() {
+        result.blockers.push(Blocker {
+            feature: None,
+            reason,
+        });
+        return result;
+    }
+    if let Err(reason) = backend.prepare_settings(&profile.settings) {
         result.blockers.push(Blocker {
             feature: None,
             reason,
@@ -374,7 +395,9 @@ pub fn apply<B: Backend>(
     apply_inner(profile, digest, backend, journal, startup, false)
 }
 
-/// A bounded validation transaction leaves every captured state restored.
+/// A bounded validation transaction exercises setters even for an equal target,
+/// verifies readback and leaves every captured state restored. Normal apply
+/// still skips settings whose full target already matches.
 pub fn trial<B: Backend>(
     profile: &PerformanceProfile,
     digest: &str,
@@ -454,7 +477,11 @@ fn apply_inner<B: Backend>(
         if let Err(error) = prewrite {
             return Err(rollback(backend, journal, &original, &attempted, error));
         }
-        if setting.value == original[index].value {
+        let unchanged = match backend.captured_matches_target(&original[index], setting) {
+            Ok(value) => value,
+            Err(error) => return Err(rollback(backend, journal, &original, &attempted, error)),
+        };
+        if unchanged && !restore_after {
             continue;
         }
         attempted.push(index);
@@ -544,6 +571,7 @@ mod tests {
         disconnect_after_two_writes: bool,
         reject_adapter_target: bool,
         drift_after_capture: bool,
+        require_full_target_write: bool,
         order: Option<Vec<usize>>,
     }
     fn binding() -> DeviceBinding {
@@ -613,6 +641,15 @@ mod tests {
                 restore: value.clone(),
                 value,
             })
+        }
+        fn captured_matches_target(
+            &mut self,
+            saved: &Captured<Value>,
+            target: &Setting,
+        ) -> Result<bool, String> {
+            // Models an adapter whose displayed scalar covers only one of
+            // several channels, such as AC/DC or individual CPU cores.
+            Ok(!self.require_full_target_write && saved.value == target.value)
         }
         fn restore(&mut self, state: &Captured<Value>) -> Result<(), String> {
             self.write(&Setting {
@@ -707,9 +744,32 @@ mod tests {
             disconnect_after_two_writes: false,
             reject_adapter_target: false,
             drift_after_capture: false,
+            require_full_target_write: false,
             order: None,
         };
         (profile, backend, FakeJournal::default())
+    }
+    #[test]
+    fn equal_displayed_scalar_does_not_skip_an_adapters_full_target() {
+        let (mut profile, mut backend, mut journal) = fixture();
+        profile.settings.truncate(1);
+        profile.settings[0].value = Value::Integer(0);
+        backend.require_full_target_write = true;
+        let result = apply(&profile, "full-target", &mut backend, &mut journal, false).unwrap();
+        assert!(!result.restored_original);
+        assert_eq!(backend.writes.len(), 1);
+        assert_eq!(journal.completed, Some(Completion::Applied));
+    }
+    #[test]
+    fn qualification_exercises_an_idempotent_setter_but_normal_apply_skips_it() {
+        let (mut profile, mut backend, mut journal) = fixture();
+        profile.settings.truncate(1);
+        profile.settings[0].value = Value::Integer(0);
+        apply(&profile, "same-target", &mut backend, &mut journal, false).unwrap();
+        assert!(backend.writes.is_empty());
+        trial(&profile, "same-target-trial", &mut backend, &mut journal).unwrap();
+        assert_eq!(backend.writes.len(), 2);
+        assert_eq!(journal.completed, Some(Completion::Restored));
     }
     #[test]
     fn all_features_preflight_before_any_write() {

@@ -35,6 +35,8 @@ mod startup_setup;
 #[cfg(windows)]
 mod switch;
 #[cfg(windows)]
+mod system_validation;
+#[cfg(windows)]
 mod telemetry_worker;
 #[cfg(windows)]
 mod theme;
@@ -173,9 +175,19 @@ fn run() -> Result<(), String> {
         return curve_ui::preview(&args[1], std::path::Path::new(&args[2]));
     }
     #[cfg(windows)]
-    // Attach to an existing terminal for explicit CLI use; GUI launches create no console.
-    unsafe {
-        windows_sys::Win32::System::Console::AttachConsole(u32::MAX);
+    {
+        use windows_sys::Win32::{Storage::FileSystem::*, System::Console::*};
+        // AttachConsole replaces redirected standard handles. Keep an existing
+        // pipe/file intact so diagnostics and stop acknowledgements terminate
+        // correctly when launched by PowerShell or our own bounded readers.
+        let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let kind = unsafe { GetFileType(output) };
+        if kind != FILE_TYPE_PIPE && kind != FILE_TYPE_DISK {
+            // SAFETY: No console is created; only the caller's console is used.
+            unsafe {
+                AttachConsole(u32::MAX);
+            }
+        }
     }
     #[cfg(windows)]
     if args

@@ -484,9 +484,13 @@ pub struct HpModeReport {
     pub plan: omen_core::hp_mode::ModePlan,
     pub gpu_before: GpuPowerStatus,
     pub gpu_after: GpuPowerStatus,
-    /// STAPM and slow limit read back through the SMU, in watts; None when
-    /// the SMU module is not available.
-    pub cpu_limits_w: Option<(i64, i64)>,
+    /// Qualified sustained PL1 from PM-table cell4, in watts.
+    pub cpu_pl1_w: Option<i64>,
+    /// Table cell0 is an observation, not a qualified independent STAPM target.
+    /// Preserve it beside the measured Slow/PL1 value without equating them.
+    pub cpu_limit_observations_w: Option<(i64, i64)>,
+    /// Optional CPU readback failures must remain visible in diagnostics.
+    pub cpu_limits_read_error: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -549,7 +553,8 @@ pub fn apply_hp_mode(
         return Err("Die Firmware meldet keinen Unleashed-/Extreme-Modus.".into());
     }
     let gpu_before = read_gpu(&bios)?;
-    let send = |plan: &hp_mode::ModePlan| -> Result<(GpuPowerStatus, Option<(i64, i64)>), String> {
+    type ModeReadback = (GpuPowerStatus, Option<(i64, i64)>, Option<String>);
+    let send = |plan: &hp_mode::ModePlan| -> Result<ModeReadback, String> {
         // Same order as the Hub: mode, GPU flags, shared budget, then PL1.
         for (command_type, bytes) in [
             (THERMAL_MODE_TYPE, plan.thermal),
@@ -569,25 +574,30 @@ pub fn apply_hp_mode(
                 &[&after.custom_tgp_enabled, &after.ppab_enabled],
             ));
         }
-        let limits = super::cpu_tuning::hp_limits_w(inventory).ok();
-        if let Some((stapm, slow)) = limits {
+        let (limits, cpu_limits_read_error) = match super::cpu_tuning::hp_limits_w(inventory) {
+            Ok(limits) => (Some(limits), None),
+            Err(error) => (None, Some(error)),
+        };
+        if let Some((_, slow)) = limits {
             let pl1 = i64::from(plan.pl1_w());
-            if stapm != pl1 || slow != pl1 {
+            if slow != pl1 {
                 return Err(omen_core::message::msg(
                     "mode.err.pl1_readback",
-                    &[&pl1, &stapm, &slow],
+                    &[&pl1, &slow],
                 ));
             }
         }
-        Ok((after, limits))
+        Ok((after, limits, cpu_limits_read_error))
     };
     let plan = hp_mode::plan(mode, design.default_shared_budget_raw, ac)?;
     match send(&plan) {
-        Ok((gpu_after, cpu_limits_w)) => Ok(HpModeReport {
+        Ok((gpu_after, cpu_limit_observations_w, cpu_limits_read_error)) => Ok(HpModeReport {
             plan,
             gpu_before,
             gpu_after,
-            cpu_limits_w,
+            cpu_pl1_w: cpu_limit_observations_w.map(|(_, slow)| slow),
+            cpu_limit_observations_w,
+            cpu_limits_read_error,
         }),
         Err(error) if mode != HpMode::Balanced => {
             let fallback = hp_mode::plan(HpMode::Balanced, design.default_shared_budget_raw, ac)

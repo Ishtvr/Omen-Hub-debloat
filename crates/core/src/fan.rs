@@ -90,12 +90,13 @@ impl Smoother {
 }
 
 /// True when any reading demands full cooling: a hot sensor, a missing CPU
-/// reading or a set BIOS over-temperature/over-current protection bit.
+/// reading, a missing mandatory IR reading or a set BIOS protection bit.
+/// A sleeping GPU may have no temperature; an invalid supplied value is a fault.
 pub fn emergency(cpu_c: Option<f32>, gpu_c: Option<f32>, ir_c: Option<u8>, protection: u8) -> bool {
     protection != 0
         || cpu_c.is_none_or(|t| !t.is_finite() || t >= CPU_EMERGENCY_C)
-        || gpu_c.is_some_and(|t| t >= GPU_EMERGENCY_C)
-        || ir_c.is_some_and(|t| t >= IR_EMERGENCY_C)
+        || gpu_c.is_some_and(|t| !t.is_finite() || t >= GPU_EMERGENCY_C)
+        || ir_c.is_none_or(|t| t >= IR_EMERGENCY_C)
 }
 
 #[cfg(test)]
@@ -185,7 +186,9 @@ mod tests {
         assert!(emergency(Some(f32::INFINITY), Some(50.0), None, 0));
         assert!(emergency(Some(70.0), Some(GPU_EMERGENCY_C), None, 0));
         assert!(emergency(Some(70.0), Some(86.0), None, 0));
-        assert!(!emergency(Some(70.0), Some(84.9), None, 0));
+        assert!(!emergency(Some(70.0), Some(84.9), Some(40), 0));
+        assert!(emergency(Some(70.0), Some(50.0), None, 0));
+        assert!(emergency(Some(70.0), Some(f32::NAN), Some(40), 0));
         assert!(emergency(Some(70.0), None, Some(IR_EMERGENCY_C), 0));
         assert!(emergency(Some(70.0), None, Some(56), 0));
         assert!(!emergency(Some(70.0), None, Some(54), 0));

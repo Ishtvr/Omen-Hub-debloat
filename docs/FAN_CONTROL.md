@@ -1,5 +1,7 @@
 # HP-Lüfter: unabhängiger Max-Fan-Override
 
+**Aktualisierung 22. Oktober 2026:** Für CPU-, Windows-, Modus- und Lüftersteuerung gilt der aktuelle [Steuerungsnachweis](SYSTEM_CONTROLS.md). Insbesondere: Slow verwendet RSMU 0xCB, einzelnes STAPM ist gesperrt, AC/DC und Zielplan werden vollständig gesichert, Auto pausiert eigene Lüfterbefehle und bestätigt keine BIOS-Ownership. Frühere datierte Abschnitte unten sind historische Nachweise und keine heutige Erweiterung dieser Freigabe.
+
 Stand: **15. Oktober 2026**, HP OMEN 16-ap0xxx, Board **8E35**, BIOS **F.13**. Der eigene Windows-Adapter liest die Firmware direkt über den vorhandenen HP-BIOS-WMI-Provider. Er lädt keine OMEN-Hub-DLL. Auf dieser Kombination sind der manuelle Max-Fan-Schalter, vollständiger Schalter-Readback und persistierter Original-Restore qualifiziert. Eigene Temperaturkurven, BIOS-Automatikumschaltung und automatischer Profilstart bleiben gesperrt.
 
 ## Feste Schnittstellen
