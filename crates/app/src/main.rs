@@ -41,6 +41,8 @@ mod telemetry_worker;
 #[cfg(windows)]
 mod theme;
 #[cfg(windows)]
+mod tray;
+#[cfg(windows)]
 mod ui;
 #[cfg(test)]
 #[path = "../build_support/win_resource.rs"]

@@ -24,7 +24,7 @@ use windows_sys::Win32::{
 };
 
 const UPDATE: u32 = WM_APP + 1;
-const TRAY: u32 = WM_APP + 2;
+const TRAY: u32 = crate::tray::CALLBACK;
 const CPU_READER_PID: u32 = WM_APP + 61;
 const MODE_RESULT: u32 = WM_APP + 62;
 const REFRESH: usize = 101;
@@ -71,7 +71,7 @@ struct State {
     details: Cell<HWND>,
     profile: Cell<HWND>,
     preview: Cell<HWND>,
-    tray: Cell<bool>,
+    tray: crate::tray::TrayIcon,
     taskbar_message: u32,
     theme: crate::theme::Theme,
     preview_index: Cell<usize>,
@@ -461,22 +461,6 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
     }
 }
 
-fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
-    // SAFETY: NOTIFYICONDATAW has no invalid zero bit patterns.
-    let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
-    data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    data.hWnd = hwnd;
-    data.uID = 1;
-    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    data.uCallbackMessage = TRAY;
-    // Shared embedded icon, never destroyed by this process.
-    data.hIcon = crate::native_ui::app_icon(SM_CXSMICON);
-    for (target, value) in data.szTip.iter_mut().zip(wide(APP_NAME)) {
-        *target = value;
-    }
-    data
-}
-
 // SAFETY: Called only on the UI thread for the live, owned State bound to hwnd.
 unsafe fn redraw(state: &State) {
     if state.details.get().is_null() {
@@ -549,13 +533,10 @@ unsafe extern "system" fn window_proc(
         // Shared references plus Cell allow reentrant child-window notifications
         // without aliasing a Rust &mut State across a Windows call.
         let state = &*state_ptr;
-        if message == state.taskbar_message {
-            state
-                .tray
-                .set(Shell_NotifyIconW(NIM_ADD, &tray_data(hwnd)) != 0);
-            if !state.tray.get() {
-                ShowWindow(hwnd, SW_SHOW);
-                let _ = state.tx.send(Request::Visibility(true));
+        if state.taskbar_message != 0 && message == state.taskbar_message {
+            // MODIFY/ADD is idempotent even if Explorer broadcasts twice.
+            if !state.tray.ensure(hwnd) && !state.tray.retrying() && IsWindowVisible(hwnd) == 0 {
+                show_dashboard(hwnd, state);
             }
             return 0;
         }
@@ -581,9 +562,24 @@ unsafe extern "system" fn window_proc(
                     return -1;
                 }
                 state.theme.frame(hwnd);
-                state
-                    .tray
-                    .set(Shell_NotifyIconW(NIM_ADD, &tray_data(hwnd)) != 0);
+                // Explorer must be able to notify this window even if the app
+                // was launched elevated. Allow only this registered message.
+                if state.taskbar_message != 0 {
+                    ChangeWindowMessageFilterEx(
+                        hwnd,
+                        state.taskbar_message,
+                        MSGFLT_ALLOW,
+                        ptr::null_mut(),
+                    );
+                }
+                state.tray.ensure(hwnd);
+                0
+            }
+            WM_TIMER if wparam == crate::tray::RETRY_TIMER => {
+                if !state.tray.retry(hwnd) && IsWindowVisible(hwnd) == 0 {
+                    // Rebuild controls too: hidden dashboards released them.
+                    show_dashboard(hwnd, state);
+                }
                 0
             }
             WM_ERASEBKGND => {
@@ -809,8 +805,10 @@ unsafe extern "system" fn window_proc(
                 1
             }
             TRAY => {
-                match lparam as u32 {
-                    WM_LBUTTONUP | WM_LBUTTONDBLCLK => {
+                // Version 4 packs the icon ID in the high word; the legacy
+                // mouse callback has the same low-word event values.
+                match lparam as u32 & 0xFFFF {
+                    WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT | crate::tray::KEY_SELECT => {
                         show_dashboard(hwnd, state);
                     }
                     WM_RBUTTONUP | WM_CONTEXTMENU => {
@@ -846,12 +844,13 @@ unsafe extern "system" fn window_proc(
                 }
                 0
             }
-            WM_SIZE
-                if wparam == SIZE_MINIMIZED as usize
-                    && state.tray.get()
-                    && state.close_to_tray.get() =>
-            {
-                hide_dashboard(hwnd, state);
+            WM_SIZE if wparam == SIZE_MINIMIZED as usize && state.close_to_tray.get() => {
+                // A cached success cannot prove the shell still has the icon.
+                if state.tray.ensure(hwnd) {
+                    hide_dashboard(hwnd, state);
+                } else {
+                    show_dashboard(hwnd, state);
+                }
                 0
             }
             WM_SIZE => {
@@ -859,8 +858,12 @@ unsafe extern "system" fn window_proc(
                 0
             }
             WM_CLOSE => {
-                if state.tray.get() && state.close_to_tray.get() {
-                    hide_dashboard(hwnd, state);
+                if state.close_to_tray.get() {
+                    if state.tray.ensure(hwnd) {
+                        hide_dashboard(hwnd, state);
+                    } else {
+                        show_dashboard(hwnd, state);
+                    }
                 } else {
                     DestroyWindow(hwnd);
                 }
@@ -868,9 +871,7 @@ unsafe extern "system" fn window_proc(
             }
             WM_DESTROY => {
                 let _ = state.tx.send(Request::Stop);
-                if state.tray.get() {
-                    Shell_NotifyIconW(NIM_DELETE, &tray_data(hwnd));
-                }
+                state.tray.remove(hwnd);
                 PostQuitMessage(0);
                 0
             }
@@ -904,7 +905,7 @@ fn run_window(
         details: Cell::new(ptr::null_mut()),
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
-        tray: Cell::new(false),
+        tray: crate::tray::TrayIcon::default(),
         taskbar_message: 0,
         theme: crate::theme::Theme::new(),
         preview_index: Cell::new(1),
@@ -915,7 +916,7 @@ fn run_window(
         mode_status: RefCell::new(t("mode.bios_unreadable").into()),
         close_to_tray: Cell::new(
             omen_platform::profile_store::ProfileStore::user_data()
-                .is_ok_and(|s| s.close_to_tray()),
+                .map_or(true, |s| s.close_to_tray()),
         ),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
@@ -956,7 +957,7 @@ fn run_window(
             UnregisterClassW(class_name.as_ptr(), instance);
             return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
-        let initially_visible = !start_in_tray || !state.tray.get();
+        let initially_visible = !start_in_tray || !state.tray.registered();
         let worker_hwnd = hwnd as usize;
         let mode_result = state.mode_result.clone();
         // Previews never request Windows approval.

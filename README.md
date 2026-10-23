@@ -14,6 +14,8 @@ Auf **8E35/F.13** liest der eigene BIOS-WMI-Adapter Max-Fan-Zustand, CPU-/GPU-Dr
 
 ## Ausführen
 
+Beim Minimieren oder Schließen ins Tray prüft Omen Hub++ das eigene App-Symbol erneut und meldet es bei Bedarf wieder bei Windows an. Die Wiederherstellung nach der Explorer-Meldung `TaskbarCreated` ist wiederholbar; fehlgeschlagene Anmeldungen werden begrenzt erneut versucht. Ohne erreichbares Tray-Symbol bleibt die Oberfläche zugänglich. Das Tray-Menü beendet die App vollständig; die Einstellung **Beim Schließen in den Tray minimieren** bleibt berücksichtigt. Windows verwaltet weiterhin, ob das Symbol direkt neben der Uhr oder im Überlauf angezeigt wird. Native Regressionsprüfung: `scripts/smoke-tray-ui.ps1`; genaue Ergebnisse in [VALIDATION.md](docs/VALIDATION.md).
+
 Windows x64, Rust mit MSVC-Toolchain und Visual Studio C++ Build Tools:
 
 ```powershell
