@@ -1,4 +1,6 @@
-# HP-Lüfter: unabhängiger Max-Fan-Override
+# HP-Lüfter: eigene Regelung und sichere Freigabe
+
+**Aktualisierung 23. Oktober 2026:** DSDT-Steuerfelder und der reale Rückfall nach ungefähr zwei Minuten ohne Heartbeat sind untersucht. Nach eigener Regelung fordert eine Pause oder ein regulärer Stop zunächst einmal volle Kühlung an und meldet `handover_pending`. Der direkte Firmware-Schalter bleibt nach einer thermisch abgebrochenen Probe gesperrt. Aktueller Befund: [FAN_HANDOVER.md](FAN_HANDOVER.md). Die älteren datierten Abschnitte bleiben historische Nachweise.
 
 **Aktualisierung 22. Oktober 2026:** Für CPU-, Windows-, Modus- und Lüftersteuerung gilt der aktuelle [Steuerungsnachweis](SYSTEM_CONTROLS.md). Insbesondere: Slow verwendet RSMU 0xCB, einzelnes STAPM ist gesperrt, AC/DC und Zielplan werden vollständig gesichert, Auto pausiert eigene Lüfterbefehle und bestätigt keine BIOS-Ownership. Frühere datierte Abschnitte unten sind historische Nachweise und keine heutige Erweiterung dieser Freigabe.
 
@@ -42,10 +44,10 @@ Der Benutzer bestätigte am **15. Oktober**, nach Abschluss dieser Proben, die a
 
 ## Lüfterdienst, Kurve und Schnellschalter (Stand 16. Oktober 2026)
 
-Seit 16. Oktober übernimmt ein eigener Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`, geschützte Kopie unter `Program Files\OmenHubPlusPlus`, einmalige Windows-Freigabe) die Softwareregelung: Heartbeat `0x10` alle 20 s, Level `0x2E` alle 2 s, CPU-Tctl, GPU- und IR-Temperatur, Notfall-Vollkühlung und Glättung. Solange der Original-Hub läuft, wartet der Dienst; ohne Kurve sendet er nichts und das BIOS regelt.
+Seit 16. Oktober übernimmt ein eigener Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`, geschützte Kopie unter `Program Files\OmenHubPlusPlus`, einmalige Windows-Freigabe) die Softwareregelung: Heartbeat `0x10` alle 20 s, Level `0x2E` alle 2 s, CPU-Tctl, GPU- und IR-Temperatur, Notfall-Vollkühlung und Glättung. Solange der Original-Hub läuft, wartet der Dienst. Ohne Kurve pausiert er; seit 23. Oktober sendet er nach bereits begonnener eigener Regelung vorher einmal das konservative Maximum. Das bestätigt keine unmittelbare BIOS-Übernahme.
 
 - Das Lüfterfenster speichert die gemeinsame CPU-/GPU-Kurve nur noch als `active-fan-curve.json`, nicht mehr als Leistungsprofil.
-- Der Lüfterschalter auf der Startseite (rechts neben **Steuerung**, seit 17. Oktober dreistufig) schreibt `fan-mode.json`: **Auto** (`bios`) lässt das BIOS mit seiner Standardkurve regeln, der Dienst sendet nichts; **Kurve** (`curve`) folgt der gespeicherten Kurve; **Max** (`max`) setzt beide Lüfter auf Höchststufe. Ohne Datei gilt Auto. Der frühere Wert `auto` des zweistufigen Schalters bedeutete „Kurve folgen“ und wird weiter so gelesen. Kurve und Max installieren den Dienst bei Bedarf nach einmaliger Windows-Freigabe; ist eine ältere Dienstversion installiert, wird sie auch für Auto aktualisiert, weil ältere Builds jeden Wert außer `max` als Kurve deuteten.
+- Der Lüfterschalter auf der Startseite (rechts neben **Steuerung**, seit 17. Oktober dreistufig) schreibt `fan-mode.json`: **Auto** (`bios`) pausiert die eigene Regelung nach der beschriebenen sicheren Freigabe; **Kurve** (`curve`) folgt der gespeicherten Kurve; **Max** (`max`) setzt beide Lüfter auf Höchststufe. Ohne Datei gilt Auto. Der frühere Wert `auto` des zweistufigen Schalters bedeutete „Kurve folgen“ und wird weiter so gelesen. Kurve und Max installieren den Dienst bei Bedarf nach einmaliger Windows-Freigabe; ist eine ältere Dienstversion installiert, wird sie auch für Auto aktualisiert, weil ältere Builds jeden Wert außer `max` als Kurve deuteten.
 - Derselbe Dienst setzt die CCD-Affinität aus `ccd-affinity.json` (Preset-Einstellung, siehe [8E35](models/8e35.md)): jedes Programm im Vordergrund läuft dann nur auf den gewählten CCDs, „beide“ oder das Dienstende geben die alte Zuordnung zurück. Das läuft unabhängig von Lüfterkurve und Original-Hub; wendet ein Preset die CCD-Affinität an, wird der Dienst vorher installiert oder aktualisiert.
 
 Der folgende Abschnitt beschreibt den Stand vor dem Lüfterdienst.

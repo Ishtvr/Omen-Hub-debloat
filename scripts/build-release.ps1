@@ -33,7 +33,7 @@ try {
         'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-app.ps1" %*',
         'if errorlevel 1 pause'
     )
-    Copy-Item -LiteralPath (Join-Path $taskRepo 'LICENSE'), (Join-Path $taskRepo 'THIRD_PARTY.md'), (Join-Path $taskRepo 'docs\RECOVERY.md'), (Join-Path $taskRepo 'docs\HARDWARE_MATRIX.md'), (Join-Path $taskRepo 'docs\SYSTEM_CONTROLS.md'), (Join-Path $taskRepo 'docs\VALIDATION.md') -Destination $taskDist
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'LICENSE'), (Join-Path $taskRepo 'THIRD_PARTY.md'), (Join-Path $taskRepo 'docs\RECOVERY.md'), (Join-Path $taskRepo 'docs\HARDWARE_MATRIX.md'), (Join-Path $taskRepo 'docs\SYSTEM_CONTROLS.md'), (Join-Path $taskRepo 'docs\FAN_HANDOVER.md'), (Join-Path $taskRepo 'docs\VALIDATION.md') -Destination $taskDist
 
     # License texts of every crate linked into the Windows executable, from the
     # locked graph. Build-only and dev-only dependencies are excluded.

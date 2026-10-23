@@ -415,6 +415,7 @@
   "fan.status.no_curve": "Keine aktive Lüfterkurve; eigene Regelung pausiert.",
   "fan.status.invalid_curve": "Lüfterkurve ungültig: {0}",
   "fan.status.bios": "Auto: Eigene Lüfterregelung pausiert.",
+  "fan.status.handover": "Übergabe ausstehend: vorsorglich volle Kühlung, eigene Regelung pausiert.",
   "fan.quick.label": "Lüfter",
   "fan.quick.auto": "Auto",
   "fan.quick.max": "Max",

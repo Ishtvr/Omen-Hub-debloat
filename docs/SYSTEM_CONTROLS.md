@@ -1,5 +1,7 @@
 # Sichere Steuerungsprüfung am Referenzgerät
 
+**Ergänzung 23. Oktober:** Die Freigabe des Lüfterdienstes fordert nach eigener Regelung zunächst einmal 48/48 an und stoppt anschließend Heartbeat/Level. Ein realer Firmware-Rückfall nach ungefähr zwei Minuten ist beobachtet. Der direkte HPCM/FAMC-Payload wurde in einer kurzen Probe an der konservativen Temperaturgrenze abgebrochen und bleibt außerhalb der Runtime. Befund und Grenzen: [FAN_HANDOVER.md](FAN_HANDOVER.md). Die folgenden Proben gehören zu ihrem datierten Stand vom 22. Oktober.
+
 Stand: **22. Oktober 2026**. HP **8E35 / F.13**, Ryzen 9 **8940HX**, SMU **0x546F00**, PM-Tabelle **0x540208**, RTX 5070 Laptop mit NVIDIA **617.42**. Die Prüfungen sind kurze Funktionsproben mit Rücklesen und Wiederherstellung. Sie sind keine Freigabe beliebiger OC-Werte oder ein Laststabilitätstest.
 
 Der Benutzer erlaubte ausdrücklich kleine, sichere Schreibproben sowie das vorübergehende Schließen von OMEN Hub und UXTU. Er legte **Unleashed** als Anfangs-/Endzustand der HP-Modustests fest. Der CPU-GET bestätigte **−20 Curve-Optimizer-Schritte auf allen 16 physischen Kernen**. Geprüft wird −19 und anschließend die vollständige Rückkehr zu −20; Schritte sind keine Millivolt.

@@ -155,13 +155,14 @@ pub struct FanServiceStatus {
     pub updated_unix_s: u64,
 }
 
-fn hub_running() -> bool {
+/// None means enumeration failed, not that a vendor actually took ownership.
+fn hub_running() -> Option<bool> {
     // SAFETY: Snapshot handle is closed below; the entry is sized as required.
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
             // Unknown ownership must not start a second controller.
-            return true;
+            return None;
         }
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
@@ -169,7 +170,7 @@ fn hub_running() -> bool {
         let mut ok = Process32FirstW(snapshot, &mut entry) != 0;
         if !ok {
             CloseHandle(snapshot);
-            return true;
+            return None;
         }
         while ok && !found {
             let length = entry
@@ -181,8 +182,11 @@ fn hub_running() -> bool {
             found = HUB_PROCESSES.contains(&name.as_str());
             ok = Process32NextW(snapshot, &mut entry) != 0;
         }
+        // A failure in the middle of enumeration must not masquerade as an
+        // absent controller. ERROR_NO_MORE_FILES is the normal end marker.
+        let complete = found || std::io::Error::last_os_error().raw_os_error() == Some(18);
         CloseHandle(snapshot);
-        found
+        complete.then_some(found)
     }
 }
 
@@ -225,10 +229,9 @@ fn requested_level(
     })
 }
 
-/// Runs until the process ends. `mode` is the dashboard fan switch: Auto
-/// leaves the BIOS table in charge, Curve follows `load` (the active shared
-/// curve; None also leaves the BIOS in charge) and Max runs both fans at
-/// maximum. `ccd` returns the saved CCD selection (None: every CCD).
+/// Runs until the process ends. Auto pauses the software loop after a safe
+/// release; it does not assert a firmware ownership GET. Curve follows `load`
+/// and Max runs both fans at maximum. `ccd` returns the saved CCD selection.
 /// `report` persists each status.
 pub fn run(
     inventory: &Inventory,
@@ -262,182 +265,248 @@ pub fn run_until(
     let mut gpu: Option<GpuTemperature> = None;
     let mut smoother = (Smoother::default(), Smoother::default());
     let mut last_heartbeat: Option<Instant> = None;
+    let mut control = fan::SoftwareControl::default();
     let mut protection = 0u8;
     let ccd_masks = super::ccd::ccd_masks();
     let mut pinning = Pinning {
         enforcer: omen_core::ccd::Enforcer::default(),
         processes: super::ccd::WindowsProcesses::default(),
     };
-    loop {
-        if stop(Duration::ZERO)? {
-            return Ok(());
-        }
-        let started = Instant::now();
-        // CCD pinning is independent of the fans and of the original Hub. An
-        // unreadable selection or topology releases every pinned program.
-        let target = match (&ccd_masks, ccd()) {
-            (Ok(masks), Ok(Some(selection))) => {
-                omen_core::ccd::affinity(selection, masks).unwrap_or(None)
+    let result = (|| -> Result<(), String> {
+        loop {
+            if stop(Duration::ZERO)? {
+                return Ok(());
             }
-            _ => None,
-        };
-        let Pinning {
-            enforcer,
-            processes,
-        } = &mut pinning;
-        enforcer.tick(processes, target);
-        let ccd_pinned = enforcer.pinned();
-        let now = || {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs())
-        };
-        let idle = |state: &'static str, detail: String| FanServiceStatus {
+            let started = Instant::now();
+            // CCD pinning is independent of the fans and of the original Hub. An
+            // unreadable selection or topology releases every pinned program.
+            let target = match (&ccd_masks, ccd()) {
+                (Ok(masks), Ok(Some(selection))) => {
+                    omen_core::ccd::affinity(selection, masks).unwrap_or(None)
+                }
+                _ => None,
+            };
+            let Pinning {
+                enforcer,
+                processes,
+            } = &mut pinning;
+            enforcer.tick(processes, target);
+            let ccd_pinned = enforcer.pinned();
+            let now = || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs())
+            };
+            let idle = |state: &'static str, detail: String| FanServiceStatus {
+                schema: 1,
+                state,
+                detail,
+                cpu_c: None,
+                gpu_c: None,
+                ir_c: None,
+                protection: 0,
+                cpu_level: 0,
+                gpu_level: 0,
+                ccd_pinned,
+                updated_unix_s: now(),
+            };
+            let pause = |control: &mut fan::SoftwareControl,
+                         detail: String|
+             -> Result<FanServiceStatus, String> {
+                control.release(|| {
+                    bios.set_fan_levels(fan::MAX_LEVEL, fan::MAX_LEVEL)
+                        .map_err(|e| e.to_string())
+                })?;
+                if control.handover_pending() {
+                    Ok(FanServiceStatus {
+                        cpu_level: fan::MAX_LEVEL,
+                        gpu_level: fan::MAX_LEVEL,
+                        ..idle(
+                            "handover_pending",
+                            omen_core::message::msg("fan.status.handover", &[]),
+                        )
+                    })
+                } else {
+                    Ok(idle("bios", detail))
+                }
+            };
+            // Pause our controller by sending nothing. A BIOS handover cannot be
+            // asserted from this status: ownership has no qualified readback.
+            let vendor = hub_running()
+                .ok_or("Original controller enumeration failed; ownership is unknown")?;
+            if vendor {
+                control.vendor_active();
+                last_heartbeat = None;
+                cpu = None;
+                gpu = None;
+                report(&idle(
+                    "waiting_for_hub",
+                    omen_core::message::msg("fan.status.hub_running", &[]),
+                ));
+                if stop(Duration::from_secs(2))? {
+                    return Ok(());
+                }
+                continue;
+            }
+            let mode = mode();
+            if mode == FanMode::Bios {
+                last_heartbeat = None;
+                cpu = None;
+                gpu = None;
+                report(&pause(
+                    &mut control,
+                    omen_core::message::msg("fan.status.bios", &[]),
+                )?);
+                if stop(Duration::from_secs(2))? {
+                    return Ok(());
+                }
+                continue;
+            }
+            let max = mode == FanMode::Max;
+            let curve = match load().and_then(|p| p.map(|p| curve_of(&p)).transpose()) {
+                Ok(curve) if max => curve,
+                Ok(Some(curve)) => Some(curve),
+                Ok(None) => {
+                    last_heartbeat = None;
+                    cpu = None;
+                    gpu = None;
+                    report(&pause(
+                        &mut control,
+                        omen_core::message::msg("fan.status.no_curve", &[]),
+                    )?);
+                    if stop(Duration::from_secs(2))? {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                Err(_) if max => None,
+                Err(e) => {
+                    last_heartbeat = None;
+                    cpu = None;
+                    gpu = None;
+                    report(&pause(
+                        &mut control,
+                        omen_core::message::msg("fan.status.invalid_curve", &[&e]),
+                    )?);
+                    if stop(Duration::from_secs(2))? {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
+            if last_heartbeat.is_none() {
+                // Qualify the complete measured fan layout before the first
+                // heartbeat/level SET, including a new arm after BIOS/Hub waiting.
+                super::cooling::FanControl::new(inventory)?.capture()?;
+            }
+            if last_heartbeat.is_none_or(|t| t.elapsed() >= HEARTBEAT) {
+                control.arm();
+                protection = bios.heartbeat().map_err(|e| e.to_string())?;
+                last_heartbeat = Some(Instant::now());
+            }
+            if max {
+                cpu = None;
+                gpu = None;
+            }
+            if !max && cpu.is_none() {
+                cpu = CpuHardwareReader::new(inventory).ok();
+            }
+            let cpu_c = cpu
+                .as_mut()
+                .and_then(|r| r.temperature_sample().ok())
+                .and_then(|s| s.temperature_c);
+            if !max && gpu.is_none() {
+                gpu = GpuTemperature::new().ok();
+            }
+            let gpu_c = gpu.as_ref().and_then(|reader| reader.sample().ok());
+            if gpu_c.is_none() {
+                gpu = None;
+            }
+            let ir_c = bios
+                .get(Read::SurfaceSensor)
+                .ok()
+                .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
+                .map(|t| t.celsius);
+            // Maximum is unconditional and works without loading sensor drivers.
+            // A curve may never lower cooling when its GPU reader is unavailable.
+            let full = !max
+                && (gpu_c.is_none()
+                    || fan::emergency(
+                        cpu_c.map(|t| t as f32),
+                        gpu_c.map(|t| t as f32),
+                        ir_c,
+                        protection,
+                    ));
+            let target = |t: Option<i32>| requested_level(mode, curve.as_ref(), full, t);
+            let cpu_t = cpu_c.map(|t| t.round() as i32);
+            // The GPU fan follows the hotter of GPU and CPU when the GPU sleeps.
+            let gpu_t = gpu_c.or(cpu_t);
+            let cpu_level = smoother.0.step(target(cpu_t));
+            let gpu_level = smoother.1.step(target(gpu_t));
+            control.arm();
+            bios.set_fan_levels(cpu_level, gpu_level)
+                .map_err(|e| e.to_string())?;
+            report(&FanServiceStatus {
+                schema: 1,
+                state: if full {
+                    "full_cooling"
+                } else if max {
+                    "max"
+                } else {
+                    "curve"
+                },
+                detail: String::new(),
+                cpu_c,
+                gpu_c,
+                ir_c,
+                protection,
+                cpu_level,
+                gpu_level,
+                ccd_pinned,
+                updated_unix_s: now(),
+            });
+            if stop(CYCLE.saturating_sub(started.elapsed()))? {
+                return Ok(());
+            }
+        }
+    })();
+    // A clean stop and a failed attempt use the same conservative release.
+    // Never overwrite a positively identified vendor controller. If ownership
+    // cannot be enumerated, retain an explicit error instead of claiming Auto.
+    let release = match hub_running() {
+        Some(true) => {
+            control.vendor_active();
+            Ok(false)
+        }
+        Some(false) => control.release(|| {
+            bios.set_fan_levels(fan::MAX_LEVEL, fan::MAX_LEVEL)
+                .map_err(|e| e.to_string())
+        }),
+        None => Err("Controller ownership is unknown; safe release could not be dispatched".into()),
+    };
+    drop(pinning);
+    if control.handover_pending() {
+        report(&FanServiceStatus {
             schema: 1,
-            state,
-            detail,
+            state: "handover_pending",
+            detail: omen_core::message::msg("fan.status.handover", &[]),
             cpu_c: None,
             gpu_c: None,
             ir_c: None,
             protection: 0,
-            cpu_level: 0,
-            gpu_level: 0,
-            ccd_pinned,
-            updated_unix_s: now(),
-        };
-        // Pause our controller by sending nothing. A BIOS handover cannot be
-        // asserted from this status: ownership has no qualified readback.
-        if hub_running() {
-            last_heartbeat = None;
-            cpu = None;
-            gpu = None;
-            report(&idle(
-                "waiting_for_hub",
-                omen_core::message::msg("fan.status.hub_running", &[]),
-            ));
-            if stop(Duration::from_secs(2))? {
-                return Ok(());
-            }
-            continue;
-        }
-        let mode = mode();
-        if mode == FanMode::Bios {
-            last_heartbeat = None;
-            cpu = None;
-            gpu = None;
-            report(&idle(
-                "bios",
-                omen_core::message::msg("fan.status.bios", &[]),
-            ));
-            if stop(Duration::from_secs(2))? {
-                return Ok(());
-            }
-            continue;
-        }
-        let max = mode == FanMode::Max;
-        let curve = match load().and_then(|p| p.map(|p| curve_of(&p)).transpose()) {
-            Ok(curve) if max => curve,
-            Ok(Some(curve)) => Some(curve),
-            Ok(None) => {
-                last_heartbeat = None;
-                cpu = None;
-                gpu = None;
-                report(&idle(
-                    "bios",
-                    omen_core::message::msg("fan.status.no_curve", &[]),
-                ));
-                if stop(Duration::from_secs(2))? {
-                    return Ok(());
-                }
-                continue;
-            }
-            Err(_) if max => None,
-            Err(e) => {
-                last_heartbeat = None;
-                cpu = None;
-                gpu = None;
-                report(&idle(
-                    "bios",
-                    omen_core::message::msg("fan.status.invalid_curve", &[&e]),
-                ));
-                if stop(Duration::from_secs(2))? {
-                    return Ok(());
-                }
-                continue;
-            }
-        };
-        if last_heartbeat.is_none() {
-            // Qualify the complete measured fan layout before the first
-            // heartbeat/level SET, including a new arm after BIOS/Hub waiting.
-            super::cooling::FanControl::new(inventory)?.capture()?;
-        }
-        if last_heartbeat.is_none_or(|t| t.elapsed() >= HEARTBEAT) {
-            protection = bios.heartbeat().map_err(|e| e.to_string())?;
-            last_heartbeat = Some(Instant::now());
-        }
-        if max {
-            cpu = None;
-            gpu = None;
-        }
-        if !max && cpu.is_none() {
-            cpu = CpuHardwareReader::new(inventory).ok();
-        }
-        let cpu_c = cpu
-            .as_mut()
-            .and_then(|r| r.temperature_sample().ok())
-            .and_then(|s| s.temperature_c);
-        if !max && gpu.is_none() {
-            gpu = GpuTemperature::new().ok();
-        }
-        let gpu_c = gpu.as_ref().and_then(|reader| reader.sample().ok());
-        if gpu_c.is_none() {
-            gpu = None;
-        }
-        let ir_c = bios
-            .get(Read::SurfaceSensor)
-            .ok()
-            .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
-            .map(|t| t.celsius);
-        // Maximum is unconditional and works without loading sensor drivers.
-        // A curve may never lower cooling when its GPU reader is unavailable.
-        let full = !max
-            && (gpu_c.is_none()
-                || fan::emergency(
-                    cpu_c.map(|t| t as f32),
-                    gpu_c.map(|t| t as f32),
-                    ir_c,
-                    protection,
-                ));
-        let target = |t: Option<i32>| requested_level(mode, curve.as_ref(), full, t);
-        let cpu_t = cpu_c.map(|t| t.round() as i32);
-        // The GPU fan follows the hotter of GPU and CPU when the GPU sleeps.
-        let gpu_t = gpu_c.or(cpu_t);
-        let cpu_level = smoother.0.step(target(cpu_t));
-        let gpu_level = smoother.1.step(target(gpu_t));
-        bios.set_fan_levels(cpu_level, gpu_level)
-            .map_err(|e| e.to_string())?;
-        report(&FanServiceStatus {
-            schema: 1,
-            state: if full {
-                "full_cooling"
-            } else if max {
-                "max"
-            } else {
-                "curve"
-            },
-            detail: String::new(),
-            cpu_c,
-            gpu_c,
-            ir_c,
-            protection,
-            cpu_level,
-            gpu_level,
-            ccd_pinned,
-            updated_unix_s: now(),
+            cpu_level: fan::MAX_LEVEL,
+            gpu_level: fan::MAX_LEVEL,
+            ccd_pinned: 0,
+            updated_unix_s: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
         });
-        if stop(CYCLE.saturating_sub(started.elapsed()))? {
-            return Ok(());
-        }
+    }
+    match (result, release) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(()), Err(error)) => Err(format!("Safe fan release failed: {error}")),
+        (Err(error), Err(release)) => Err(format!("{error}; safe fan release failed: {release}")),
     }
 }
 

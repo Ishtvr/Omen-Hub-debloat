@@ -1,6 +1,6 @@
 # Hardwarematrix
 
-Stand: **22. Oktober 2026**. Diese Matrix unterscheidet Implementierung, kurze reale Funktionsprobe und offene Lebenszyklusnachweise. Die vollständigen aktuellen Interface-Beobachtungen stehen in [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md), buildbezogene Ergebnisse in [VALIDATION.md](VALIDATION.md).
+Stand: **23. Oktober 2026**. Diese Matrix unterscheidet Implementierung, kurze reale Funktionsprobe und offene Lebenszyklusnachweise. Die vollständigen aktuellen Interface-Beobachtungen stehen in [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md), der neue Lüfterbefund in [FAN_HANDOVER.md](FAN_HANDOVER.md), buildbezogene Ergebnisse in [VALIDATION.md](VALIDATION.md).
 
 ## Qualifizierte Kombination
 
@@ -27,7 +27,7 @@ Stand: **22. Oktober 2026**. Diese Matrix unterscheidet Implementierung, kurze r
 | CCD-Auswahl | Gespeicherte Auswahl und echter eigener Testprozess, beide CCDs und Release | Hintergrunddienst; andere Benutzerprogramme wurden in der Probe nicht umgeordnet |
 | MUX | Hybrid/Discrete-Startvorgabe gesetzt, zurückgelesen und restauriert | Wirkt nach Neustart; physischer Wechsel und iGPU-only nicht damit qualifiziert |
 | Max-Fan-Override | Vollständiger Schalter, Tabelle/Zuordnung, Readback/Restore | Profilfreigabe ist kein Lifecycle-Nachweis |
-| Eigene Lüfterkurve / Max im Dienst | Konservative reale Probe bis 4800/4800 RPM | Warten auf Original-Hub, CPU/GPU/IR-Schutz, regulärer Stop. Auto pausiert eigene Befehle; BIOS-Ownership bleibt unbestätigt |
+| Eigene Lüfterkurve / Max im Dienst | Konservative reale Probe bis 4800/4800 RPM | Warten auf Original-Hub, CPU/GPU/IR-Schutz; Pause/Stop fordert nach eigenen Befehlen einmal volle Kühlung an. `handover_pending` bleibt explizit; direkter BIOS-Auto-Schalter nicht freigegeben |
 | Vier-Zonen-RGB / statisch Ein/Aus | Vollständige Capability-, Farb- und Modusbilder; sichtbare Wirkung früher vom Benutzer bestätigt | Erhöhter Capture vor jedem Write; keine freigegebenen Animationen, Prozenthelligkeit oder Hotkey-Lifecycle |
 | Direkte GPU-/VRAM-Spannungen, FPS-Limiter, Clock-Lock | Entfernt / nicht unterstützt | Kein zulässiges partielles Apply alter Profile |
 | Profil-Anmeldung | Geschützte Kopie, feste Aufgabe, exakt autorisierte Revision und dauerhaftes Journal | Echte Neustart-/Resume-/AC-Probe bleibt erforderlich; Speichern alleine autorisiert keinen Autostart |

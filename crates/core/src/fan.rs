@@ -62,6 +62,52 @@ pub const CPU_EMERGENCY_C: f32 = 92.0;
 pub const GPU_EMERGENCY_C: f32 = 85.0;
 pub const IR_EMERGENCY_C: u8 = 55;
 
+/// Tracks only this controller's commands, never infers firmware ownership.
+/// A paused writer can leave its last low target latched until the firmware
+/// watchdog expires. Release therefore sends maximum once before going quiet.
+#[derive(Debug, Default)]
+pub struct SoftwareControl {
+    state: ControlState,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+enum ControlState {
+    #[default]
+    Idle,
+    Active,
+    Released,
+}
+
+impl SoftwareControl {
+    /// Arm before a heartbeat/level attempt: a failed call may have committed.
+    pub fn arm(&mut self) {
+        self.state = ControlState::Active;
+    }
+
+    /// Only call after positively identifying the original controller.
+    pub fn vendor_active(&mut self) {
+        self.state = ControlState::Idle;
+    }
+
+    /// Preserve an explicit pending handover after success; elapsed time alone
+    /// is not a firmware ownership readback. A failure retains responsibility.
+    pub fn release(
+        &mut self,
+        maximum: impl FnOnce() -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if self.state != ControlState::Active {
+            return Ok(false);
+        }
+        maximum()?;
+        self.state = ControlState::Released;
+        Ok(true)
+    }
+
+    pub fn handover_pending(&self) -> bool {
+        self.state == ControlState::Released
+    }
+}
+
 /// Curve percent to HP level: 0 % stops the fan, anything else runs at
 /// least at the Hub's minimum running speed.
 pub fn level(percent: u8) -> u8 {
@@ -102,6 +148,66 @@ pub fn emergency(cpu_c: Option<f32>, gpu_c: Option<f32>, ir_c: Option<u8>, prote
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn release_after_a_write_preserves_cooling_without_repeating_commands() {
+        let mut control = SoftwareControl::default();
+        let mut sent = 0;
+        assert!(
+            !control
+                .release(|| panic!("Idle must not write firmware"))
+                .unwrap()
+        );
+        control.arm();
+        assert!(
+            control
+                .release(|| {
+                    sent += 1;
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert!(control.handover_pending());
+        assert!(
+            !control
+                .release(|| panic!("Paused state must not extend control"))
+                .unwrap()
+        );
+        assert_eq!(sent, 1);
+        // Re-arming is a new request and requires another safe release.
+        control.arm();
+        assert!(
+            control
+                .release(|| {
+                    sent += 1;
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert_eq!(sent, 2);
+    }
+
+    #[test]
+    fn failed_release_is_not_reported_as_a_completed_handover() {
+        let mut control = SoftwareControl::default();
+        control.arm();
+        assert!(control.release(|| Err("transport failed".into())).is_err());
+        assert!(!control.handover_pending());
+        assert!(control.release(|| Ok(())).unwrap());
+        assert!(control.handover_pending());
+    }
+
+    #[test]
+    fn confirmed_vendor_preempts_a_release_without_another_set() {
+        let mut control = SoftwareControl::default();
+        control.arm();
+        control.vendor_active();
+        assert!(
+            !control
+                .release(|| panic!("Do not overwrite the vendor"))
+                .unwrap()
+        );
+        assert!(!control.handover_pending());
+    }
     #[test]
     fn levels_smoothing_and_emergency() {
         assert_eq!(level(0), 0);

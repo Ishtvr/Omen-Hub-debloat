@@ -415,6 +415,7 @@
   "fan.status.no_curve": "No active fan curve; custom control is paused.",
   "fan.status.invalid_curve": "Fan curve invalid: {0}",
   "fan.status.bios": "Auto: custom fan control is paused.",
+  "fan.status.handover": "Handover pending: maximum cooling requested, custom control paused.",
   "fan.quick.label": "Fans",
   "fan.quick.auto": "Auto",
   "fan.quick.max": "Max",

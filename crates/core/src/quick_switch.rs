@@ -4,10 +4,10 @@
 /// Fan control chosen on the dashboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FanMode {
-    /// The BIOS regulates with its own default fan table; the service sends nothing.
+    /// Pause our loop after safe release; firmware ownership is not readable.
     #[default]
     Bios,
-    /// The service follows the saved shared curve (BIOS while none is saved).
+    /// The service follows the saved shared curve; missing curves pause it.
     Curve,
     /// Both fans at maximum.
     Max,
@@ -21,7 +21,7 @@ impl FanMode {
             Self::Max => "max",
         }
     }
-    /// Unknown values fall back to the BIOS. Before the three-way switch,
+    /// Unknown values pause our controller. Before the three-way switch,
     /// "auto" meant following the saved curve, so it keeps that meaning.
     pub fn parse(stored: &str) -> Self {
         match stored {
