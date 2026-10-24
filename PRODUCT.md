@@ -26,6 +26,8 @@ Check GPU wattage and temperature together with CPU performance first; profile s
 
 ## Capabilities and Constraints
 
+The **24 October 2026 sensor update** separates CPU reader preparation from measurement requests and retains only the qualified device identity across pauses. Driver/module validation and fresh energy/clock baselines remain required after every pause. Release A0F4113A… passed five native UI tray cycles and another five strict memory cycles, including all 32 effective clocks, plus refresh and simulated suspend/resume. Total tray working set including the existing fan helper was **33.95 MB**. The previous timeout did not recur in today's unchanged-build baseline either; the fixed nested timeout budgets and bounded evidence are described in docs/CPU_SENSORS.md and docs/VALIDATION.md. Real standby/reboot and a load benchmark were not performed.
+
 - Native Rust and Windows-first; technical names `omen-hub-plus-plus` and `omen-hub-pp`.
 - **50 MB working-set budget in tray idle**, raised explicitly by the user on 13 October 2026. Measure the release build and distinguish MB from MiB in records.
 - On 14 October 2026 the user allowed the open window to exceed 50 MB for a better interface. The total tray-idle budget stays 50 MB, including paused helpers. The requested application is modern, clean and dark, with clearer fields and prominent actions.

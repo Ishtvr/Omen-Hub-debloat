@@ -118,12 +118,22 @@ mod tests {
     #[test]
     fn every_key_used_in_code_exists() {
         let german = keys(GERMAN);
-        let sources = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap();
+        let mut sources = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src"
+        ))];
         let mut missing = vec![];
-        for entry in sources {
-            let path = entry.unwrap().path();
+        while let Some(path) = sources.pop() {
+            if path.is_dir() {
+                sources.extend(
+                    std::fs::read_dir(path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+                continue;
+            }
             // This module's own scanner text is not a translation call.
-            if path.ends_with("i18n.rs") {
+            if path.extension().is_none_or(|e| e != "rs") || path.ends_with("i18n.rs") {
                 continue;
             }
             let source = std::fs::read_to_string(&path).unwrap();

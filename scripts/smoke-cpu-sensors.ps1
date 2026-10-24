@@ -1,6 +1,6 @@
 ﻿# Owned native UI integration; fixed read-only CPU helper uses explicit Windows UAC.
 #requires -Version 5.1
-param([string]$CaptureDirectory)
+param([string]$CaptureDirectory,[ValidateRange(1,20)][int]$ResumeCycles=3)
 $ErrorActionPreference='Stop'
 # UI labels below are German; pin the app language so the checks stay stable.
 $env:OMEN_HUB_LANG = 'de'
@@ -61,14 +61,15 @@ try{
  $taskReader=Get-Process -Id $taskReaderPid
  $taskLive|Set-Content -LiteralPath (Join-Path $taskRepo '.local\cpu-ui-live-text.txt') -Encoding UTF8
  # Closing to tray pauses the existing helper without another UAC prompt.
- [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
- Start-Sleep -Milliseconds 500
- $taskProcess.Refresh();if($taskProcess.HasExited){throw 'Close exited instead of pausing in tray.'}
- Send-CpuCommand $taskWindow 201
- Wait-CpuText $taskWindow 'CPU-Paketleistung\s+Wird gemessen'|Out-Null
- Wait-CpuText $taskWindow 'Effektivtakt wird gemessen'|Out-Null
- Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Effektiv max\.: \d+ MHz.*32 logische CPUs'|Out-Null
- if([OmenCpuSensorSmoke]::ReaderPid($taskWindow)-ne$taskReaderPid){throw 'Tray resume replaced the approved helper.'}
+ for($taskCycle=0;$taskCycle-lt$ResumeCycles;$taskCycle++){
+  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0010,[UIntPtr]::Zero,[IntPtr]::Zero)
+  Start-Sleep -Milliseconds 500
+  $taskProcess.Refresh();if($taskProcess.HasExited){throw 'Close exited instead of pausing in tray.'}
+  Send-CpuCommand $taskWindow 201
+  Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+Wird gemessen.*Effektivtakt wird gemessen'|Out-Null
+  Wait-CpuText $taskWindow '(?s)CPU-Paketleistung\s+\d+[\.,]\d+ W.*Effektiv max\.: \d+ MHz.*32 logische CPUs'|Out-Null
+  if([OmenCpuSensorSmoke]::ReaderPid($taskWindow)-ne$taskReaderPid){throw 'Tray resume replaced the approved helper.'}
+ }
  # Dispatch our own power-event handler; this does not suspend the computer.
  [void][OmenCpuSensorSmoke]::PostMessage($taskWindow,0x0218,[UIntPtr]::new([uint64]4),[IntPtr]::Zero)
  Start-Sleep -Milliseconds 300
@@ -110,7 +111,7 @@ public static class OmenCpuCapture {
  Send-CpuCommand $taskWindow 202
  if(-not$taskProcess.WaitForExit(3000)-or$taskProcess.ExitCode-ne0){throw 'Dashboard failed to exit cleanly.'}
  if(-not$taskReader.WaitForExit(3000)){throw 'Approved reader failed to exit with its parent.'}
- [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;automatic_read_only_uac=$true;real_energy_mean_and_tctl=$true;effective_clock_32_processors=$true;windows_clock_separate=$true;tray_resume_new_baseline=$true;simulated_suspend_resume_new_baseline=$true;refresh_new_baseline=$true;same_approved_helper=$true;actual_computer_suspend=$false;public_gpu_offsets_unchanged=$true;private_gpu_curve_checked=$false;hardware_tuning_writes=$false;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\cpu-ui-smoke.json') -Encoding UTF8
+ [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;automatic_read_only_uac=$true;real_energy_mean_and_tctl=$true;effective_clock_32_processors=$true;windows_clock_separate=$true;tray_resume_cycles=$ResumeCycles;tray_resume_new_baseline=$true;simulated_suspend_resume_new_baseline=$true;refresh_new_baseline=$true;same_approved_helper=$true;actual_computer_suspend=$false;public_gpu_offsets_unchanged=$true;private_gpu_curve_checked=$false;hardware_tuning_writes=$false;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\cpu-ui-smoke.json') -Encoding UTF8
  'Native mean CPU watts/Tctl, effective clocks, separate Windows MHz, tray/simulated suspend/refresh baselines and clean exit passed.'
 }finally{
  if($taskProcess){$taskProcess.Refresh();if(-not$taskProcess.HasExited){Stop-Process -Id $taskProcess.Id};$taskProcess.Dispose()}

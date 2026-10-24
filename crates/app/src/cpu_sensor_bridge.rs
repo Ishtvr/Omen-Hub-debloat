@@ -1,5 +1,7 @@
 //! Read-only CPU helper. A same-user, local, PID-bound pipe carries fixed
-//! sample/pause/stop requests; no profiles, register IDs or driver blobs in IPC.
+//! prepare/sample/pause/stop requests; no profiles, register IDs or driver blobs
+//! in IPC. Preparation has its own budget; samples never run inventory queries.
+mod session;
 use crate::native_ui::{token, wide};
 use omen_core::CpuHardwareSample;
 use omen_platform::CpuHardwareReader;
@@ -28,6 +30,11 @@ const MAX_LAUNCH_FRAME: usize = 4096;
 const SAMPLE: u8 = 1;
 const PAUSE: u8 = 2;
 const STOP: u8 = 3;
+const PREPARE: u8 = 4;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+// Only preparation may run the isolated inventory child (bounded separately at
+// five seconds). Never nest that full allowance inside a five-second sample.
+const PREPARE_TIMEOUT: Duration = crate::read_process::READ_TIMEOUT.saturating_add(REQUEST_TIMEOUT);
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LaunchFrame {
@@ -80,6 +87,7 @@ pub struct CpuSensorBridge {
     _child: Handle,
     nonce: String,
     sequence: u64,
+    prepared: bool,
 }
 impl CpuSensorBridge {
     pub fn start() -> Result<Self, String> {
@@ -185,12 +193,15 @@ impl CpuSensorBridge {
             }
             thread::sleep(Duration::from_millis(20));
         }
-        Ok(Self {
+        let mut bridge = Self {
             pipe,
             _child: child,
             nonce,
             sequence: 0,
-        })
+            prepared: false,
+        };
+        bridge.prepare()?;
+        Ok(bridge)
     }
     fn request(&mut self, command: u8) -> Result<Option<CpuHardwareSample>, String> {
         self.sequence = self
@@ -211,7 +222,12 @@ impl CpuSensorBridge {
         {
             return Err("CPU reader request pipe closed".into());
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now()
+            + if command == PREPARE {
+                PREPARE_TIMEOUT
+            } else {
+                REQUEST_TIMEOUT
+            };
         loop {
             let mut available = 0;
             let mut remaining = 0;
@@ -246,36 +262,69 @@ impl CpuSensorBridge {
                 {
                     return Err("CPU reader returned an incomplete message".into());
                 }
-                let frame: Frame =
-                    serde_json::from_slice(&frame[..bytes as usize]).map_err(|e| e.to_string())?;
-                if frame.schema != 1 || frame.nonce != self.nonce || frame.sequence != self.sequence
-                {
-                    return Err("CPU reader returned a stale or unrelated response".into());
-                }
-                let sample = frame.result?;
-                if let Some(sample) = &sample {
-                    sample.validate()?;
-                }
-                if (command == SAMPLE) != sample.is_some() {
-                    return Err("CPU response does not match its fixed operation".into());
-                }
-                return Ok(sample);
+                return response(
+                    &frame[..bytes as usize],
+                    &self.nonce,
+                    self.sequence,
+                    command,
+                );
+            }
+            if unsafe { WaitForSingleObject(self._child.0, 0) } != WAIT_TIMEOUT {
+                return Err("CPU reader disconnected before replying".into());
             }
             if Instant::now() >= deadline {
-                return Err("CPU reader timed out; old sensor values were discarded".into());
+                return Err(if command == PREPARE {
+                    "CPU reader preparation timed out; no sample was accepted"
+                } else {
+                    "CPU reader timed out; old sensor values were discarded"
+                }
+                .into());
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
     pub fn sample(&mut self) -> Result<CpuHardwareSample, String> {
+        if !self.prepared {
+            self.prepare()?;
+        }
         self.request(SAMPLE)?.ok_or("No CPU sample".into())
     }
     pub fn pause(&mut self) -> Result<(), String> {
+        self.prepared = false;
         self.request(PAUSE).map(|_| ())
+    }
+    fn prepare(&mut self) -> Result<(), String> {
+        self.prepared = false;
+        self.request(PREPARE)?;
+        self.prepared = true;
+        Ok(())
     }
     pub fn process_id(&self) -> u32 {
         unsafe { GetProcessId(self._child.0) }
     }
+}
+
+fn response(
+    bytes: &[u8],
+    nonce: &str,
+    sequence: u64,
+    command: u8,
+) -> Result<Option<CpuHardwareSample>, String> {
+    if bytes.len() > MAX_FRAME {
+        return Err("CPU reader response exceeds its bounded frame".into());
+    }
+    let frame: Frame = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    if frame.schema != 1 || frame.nonce != nonce || frame.sequence != sequence {
+        return Err("CPU reader returned a stale or unrelated response".into());
+    }
+    let sample = frame.result?;
+    if let Some(sample) = &sample {
+        sample.validate()?;
+    }
+    if !matches!(command, PREPARE | SAMPLE | PAUSE) || (command == SAMPLE) != sample.is_some() {
+        return Err("CPU response does not match its fixed operation".into());
+    }
+    Ok(sample)
 }
 
 pub fn launch(nonce: &str, parent: u32) -> Result<(), String> {
@@ -367,7 +416,7 @@ pub fn child(nonce: &str, parent: u32) -> Result<(), String> {
     if unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server) } == 0 || server != parent {
         return Err("CPU reader server PID differs from the specified parent".into());
     }
-    let mut reader = None;
+    let mut session = session::ReaderSession::new();
     let mut sequence = 0u64;
     loop {
         let mut command = 0u8;
@@ -387,27 +436,19 @@ pub fn child(nonce: &str, parent: u32) -> Result<(), String> {
         }
         sequence = sequence.checked_add(1).ok_or("CPU sequence exhausted")?;
         let result = match command {
-            SAMPLE => (|| {
-                if reader.is_none() {
-                    // WMI lives only in our bounded, disposable inventory
-                    // process, never in the long-lived sensor helper.
-                    reader = Some(CpuHardwareReader::new(&crate::inventory::read())?);
-                }
-                reader
-                    .as_mut()
-                    .ok_or("CPU reader missing")?
-                    .sample()
-                    .map(Some)
-            })(),
+            PREPARE => session
+                .prepare(crate::inventory::try_read, CpuHardwareReader::new)
+                .map(|()| None),
+            SAMPLE => session.sample(CpuHardwareReader::sample).map(Some),
             PAUSE => {
-                reader = None;
+                session.pause();
                 Ok(None)
             }
             STOP => break,
             _ => return Err("Unknown CPU sensor request; no hardware operation dispatched".into()),
         };
         if result.is_err() {
-            reader = None;
+            session.pause();
         }
         let frame = serde_json::to_vec(&Frame {
             schema: 1,
@@ -440,6 +481,61 @@ pub fn child(nonce: &str, parent: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparation_acknowledgement_cannot_become_a_sample_or_cross_a_sequence() {
+        let ack = serde_json::to_vec(&Frame {
+            schema: 1,
+            nonce: "current".into(),
+            sequence: 4,
+            result: Ok(None),
+        })
+        .unwrap();
+        assert!(response(&ack, "current", 4, PREPARE).unwrap().is_none());
+        assert!(response(&ack, "current", 4, PAUSE).unwrap().is_none());
+        assert!(response(&ack, "current", 4, SAMPLE).is_err());
+        assert!(response(&ack, "old", 4, PREPARE).is_err());
+        assert!(response(&ack, "current", 5, PREPARE).is_err());
+        assert!(response(&ack, "current", 4, STOP).is_err());
+
+        let sample = serde_json::to_vec(&Frame {
+            schema: 1,
+            nonce: "current".into(),
+            sequence: 5,
+            result: Ok(Some(CpuHardwareSample {
+                schema: 1,
+                source: omen_core::CpuHardwareSource::PawnioAmdRapl,
+                temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
+                package_power_w: None,
+                temperature_c: Some(50.0),
+                power_interval_ms: None,
+                effective_clocks: None,
+                warnings: vec![],
+            })),
+        })
+        .unwrap();
+        assert!(response(&sample, "current", 5, SAMPLE).unwrap().is_some());
+        assert!(response(&sample, "current", 5, PREPARE).is_err());
+        assert!(response(&sample, "current", 5, PAUSE).is_err());
+        assert!(response(&sample, "current", 4, SAMPLE).is_err());
+    }
+
+    #[test]
+    fn preparation_budget_includes_both_bounded_phases_and_preserves_errors() {
+        assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(5));
+        assert!(PREPARE_TIMEOUT >= crate::read_process::READ_TIMEOUT + REQUEST_TIMEOUT);
+        let error = "Isolated read exceeded the 5-second deadline";
+        let bytes = serde_json::to_vec(&Frame {
+            schema: 1,
+            nonce: "current".into(),
+            sequence: 1,
+            result: Err(error.into()),
+        })
+        .unwrap();
+        assert_eq!(response(&bytes, "current", 1, PREPARE).unwrap_err(), error);
+        assert!(response(&vec![b' '; MAX_FRAME + 1], "current", 1, PREPARE).is_err());
+    }
+
     #[test]
     fn launch_reply_binds_approval_to_session_and_preserves_cancelled_uac() {
         let frame = |nonce: &str, result| {

@@ -27,6 +27,8 @@ use windows_sys::Win32::{
     System::{JobObjects::*, Pipes::CreatePipe, Threading::*},
 };
 
+pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 struct ReadJob(HANDLE);
 impl ReadJob {
     fn new() -> Result<Self, String> {
@@ -254,7 +256,7 @@ pub fn capture<T: DeserializeOwned>(command: ReadCommand) -> Result<T, String> {
         let result = output.take(65_537).read_to_end(&mut bytes).map(|_| bytes);
         let _ = tx.send(result);
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + READ_TIMEOUT;
     let status = loop {
         match child_status(&child) {
             Ok(Some(status)) => break status,
