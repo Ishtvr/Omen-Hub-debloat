@@ -88,6 +88,7 @@ pub struct CpuSensorBridge {
     nonce: String,
     sequence: u64,
     prepared: bool,
+    pending: Option<(u64, u8)>,
 }
 impl CpuSensorBridge {
     pub fn start() -> Result<Self, String> {
@@ -199,11 +200,15 @@ impl CpuSensorBridge {
             nonce,
             sequence: 0,
             prepared: false,
+            pending: None,
         };
         bridge.prepare()?;
         Ok(bridge)
     }
     fn request(&mut self, command: u8) -> Result<Option<CpuHardwareSample>, String> {
+        if self.pending.is_some() {
+            return Err("CPU request still outstanding; pause must drain it first".into());
+        }
         self.sequence = self
             .sequence
             .checked_add(1)
@@ -222,6 +227,10 @@ impl CpuSensorBridge {
         {
             return Err("CPU reader request pipe closed".into());
         }
+        self.pending = Some((self.sequence, command));
+        self.receive(self.sequence, command)
+    }
+    fn receive(&mut self, sequence: u64, command: u8) -> Result<Option<CpuHardwareSample>, String> {
         let deadline = Instant::now()
             + if command == PREPARE {
                 PREPARE_TIMEOUT
@@ -262,12 +271,8 @@ impl CpuSensorBridge {
                 {
                     return Err("CPU reader returned an incomplete message".into());
                 }
-                return response(
-                    &frame[..bytes as usize],
-                    &self.nonce,
-                    self.sequence,
-                    command,
-                );
+                self.pending = None;
+                return response(&frame[..bytes as usize], &self.nonce, sequence, command);
             }
             if unsafe { WaitForSingleObject(self._child.0, 0) } != WAIT_TIMEOUT {
                 return Err("CPU reader disconnected before replying".into());
@@ -291,6 +296,12 @@ impl CpuSensorBridge {
     }
     pub fn pause(&mut self) -> Result<(), String> {
         self.prepared = false;
+        if let Some((sequence, command)) = self.pending {
+            // Windows may have frozen both peers during an in-flight sample.
+            // Accept only its known nonce/sequence/operation, discard its data,
+            // then send PAUSE. Never relabel that late sample as an ack.
+            self.receive(sequence, command)?;
+        }
         self.request(PAUSE).map(|_| ())
     }
     fn prepare(&mut self) -> Result<(), String> {
@@ -481,6 +492,186 @@ pub fn child(nonce: &str, parent: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_drains_only_the_exact_outstanding_sample_before_its_own_ack() {
+        for stale in [false, true] {
+            let nonce = token();
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    name(&nonce).as_ptr(),
+                    PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                    PIPE_TYPE_MESSAGE
+                        | PIPE_READMODE_MESSAGE
+                        | PIPE_NOWAIT
+                        | PIPE_REJECT_REMOTE_CLIENTS,
+                    1,
+                    MAX_FRAME as u32,
+                    MAX_FRAME as u32,
+                    100,
+                    ptr::null(),
+                )
+            };
+            assert_ne!(handle, INVALID_HANDLE_VALUE);
+            let pipe = Handle(handle);
+            let peer_nonce = nonce.clone();
+            // A local test peer exercises the real message pipe, never UAC,
+            // inventory, a device, a driver, or a hardware sampling operation.
+            let peer = thread::spawn(move || {
+                let handle = unsafe {
+                    CreateFileW(
+                        name(&peer_nonce).as_ptr(),
+                        GENERIC_READ | GENERIC_WRITE,
+                        0,
+                        ptr::null(),
+                        OPEN_EXISTING,
+                        0,
+                        ptr::null_mut(),
+                    )
+                };
+                assert_ne!(handle, INVALID_HANDLE_VALUE);
+                let peer = Handle(handle);
+                let mut command = 0u8;
+                let mut count = 0;
+                assert_ne!(
+                    unsafe {
+                        ReadFile(
+                            peer.0,
+                            (&mut command as *mut u8).cast(),
+                            1,
+                            &mut count,
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(command, SAMPLE);
+                thread::sleep(Duration::from_millis(20));
+                let frame = Frame {
+                    schema: 1,
+                    nonce: if stale {
+                        "unrelated".into()
+                    } else {
+                        peer_nonce.clone()
+                    },
+                    sequence: 1,
+                    result: Ok(Some(CpuHardwareSample {
+                        schema: 1,
+                        source: omen_core::CpuHardwareSource::PawnioAmdRapl,
+                        temperature_kind: omen_core::CpuTemperatureKind::AmdTctl,
+                        package_power_w: None,
+                        temperature_c: Some(50.0),
+                        power_interval_ms: None,
+                        effective_clocks: None,
+                        warnings: vec![],
+                    })),
+                };
+                let reply = serde_json::to_vec(&frame).unwrap();
+                assert_ne!(
+                    unsafe {
+                        WriteFile(
+                            peer.0,
+                            reply.as_ptr().cast(),
+                            reply.len() as u32,
+                            &mut count,
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                if stale {
+                    return;
+                }
+                assert_ne!(
+                    unsafe {
+                        ReadFile(
+                            peer.0,
+                            (&mut command as *mut u8).cast(),
+                            1,
+                            &mut count,
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(command, PAUSE);
+                let ack = serde_json::to_vec(&Frame {
+                    schema: 1,
+                    nonce: peer_nonce,
+                    sequence: 2,
+                    result: Ok(None),
+                })
+                .unwrap();
+                assert_ne!(
+                    unsafe {
+                        WriteFile(
+                            peer.0,
+                            ack.as_ptr().cast(),
+                            ack.len() as u32,
+                            &mut count,
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
+                // Keep the writer alive until the parent consumes its ack.
+                unsafe {
+                    FlushFileBuffers(peer.0);
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let connected = unsafe { ConnectNamedPipe(pipe.0, ptr::null_mut()) };
+                let error = unsafe { GetLastError() };
+                if connected != 0 || error == ERROR_PIPE_CONNECTED {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+            let process = unsafe {
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                    0,
+                    std::process::id(),
+                )
+            };
+            assert!(!process.is_null());
+            let mut bridge = CpuSensorBridge {
+                pipe,
+                _child: Handle(process),
+                nonce,
+                sequence: 1,
+                prepared: true,
+                pending: Some((1, SAMPLE)),
+            };
+            let mut written = 0;
+            let command = SAMPLE;
+            assert_ne!(
+                unsafe {
+                    WriteFile(
+                        bridge.pipe.0,
+                        (&command as *const u8).cast(),
+                        1,
+                        &mut written,
+                        ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            let result = bridge.pause();
+            if stale {
+                assert!(result.unwrap_err().contains("stale or unrelated"));
+            } else {
+                assert!(result.is_ok());
+                assert_eq!(bridge.sequence, 2);
+                assert!(bridge.pending.is_none());
+            }
+            assert!(!bridge.prepared);
+            drop(bridge);
+            peer.join().unwrap();
+        }
+    }
 
     #[test]
     fn preparation_acknowledgement_cannot_become_a_sample_or_cross_a_sequence() {

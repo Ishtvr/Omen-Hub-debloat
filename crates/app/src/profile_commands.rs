@@ -60,7 +60,9 @@ pub fn handles(command: &str) -> bool {
             | "profile-set-vf"
             | "profile-import"
             | "profile-plan"
+            | "profile-verify-current"
             | "profile-apply"
+            | "profile-apply-trace"
             | "profile-restore"
             | "profile-ui-apply"
             | "mode-ui-apply"
@@ -76,6 +78,7 @@ pub fn handles(command: &str) -> bool {
             | "profile-startup-disable"
             | "profile-startup-apply"
             | "profile-startup-status"
+            | "profile-startup-check"
             | "profile-storage"
             | "profile-migrate-legacy"
     )
@@ -463,11 +466,28 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let mut controller = Controller::for_profile(&profile)?;
             print(&transaction::plan(&profile, &mut controller, false))
         }
-        Some("profile-apply" | "profile-ui-apply")
+        Some("profile-verify-current") if args.len() == 2 => {
+            let _lease = ControlLease::acquire()?;
+            let profile = store.load(&args[1])?;
+            // The journal must describe a completed application of this exact
+            // revision. Verification only GETs current targets; it never applies
+            // a profile, repairs a mismatch, or grants a startup approval.
+            store.startup_eligibility(&profile.id)?;
+            let mut controller = Controller::for_profile(&profile)?;
+            controller.verify_applied(&store.last_transaction::<RestoreState>()?)?;
+            print(
+                &serde_json::json!({"schema":1,"profile_id":profile.id,"profile_digest":profile_digest(&profile)?,"verified":true,"hardware_applied":false}),
+            )
+        }
+        Some("profile-apply" | "profile-apply-trace" | "profile-ui-apply")
             if args.len() == 2 || (args[0] == "profile-ui-apply" && args.len() == 3) =>
         {
             let _lease = ControlLease::acquire()?;
-            let nonce = args.get(2).map(String::as_str);
+            let nonce = if args[0] == "profile-ui-apply" {
+                args.get(2).map(String::as_str)
+            } else {
+                None
+            };
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
             let digest = profile_digest(&profile)?;
@@ -481,9 +501,19 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 crate::startup_setup::ensure_fan_service()?;
             }
             let mut controller = Controller::for_profile(&profile)?;
+            let tracing = args[0] == "profile-apply-trace";
+            if tracing {
+                controller.trace_cpu_readbacks();
+            }
             let result = transaction::apply(&profile, &digest, &mut controller, &mut store, false);
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"result":result}))?;
-            print(&result)?;
+            if tracing {
+                print(
+                    &serde_json::json!({"result":result,"cpu_readbacks":controller.cpu_readback_observations()}),
+                )?;
+            } else {
+                print(&result)?;
+            }
             result
                 .map(|_| ())
                 .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
@@ -560,13 +590,30 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             if result.is_err() {
                 store.disable_startup()?;
             }
-            store.save_startup_result(&serde_json::json!({"schema":1,"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"result":result}))?;
+            store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"result":result}))?;
             print(&result)?;
             result.map(|_| ())
         }
         Some("profile-startup-status") if args.len() == 1 => print(
             &serde_json::json!({"selection":store.startup()?,"installation":omen_platform::verify_startup_installation()}),
         ),
+        Some("profile-startup-check") if args.len() == 1 => {
+            // Inspection only: never apply, enable, authorize or disable startup.
+            let selection = store.startup()?;
+            let result = (|| -> Result<Option<serde_json::Value>, String> {
+                let Some(profile) = store.startup_profile()? else {
+                    return Ok(None);
+                };
+                store.startup_eligibility(&profile.id)?;
+                omen_platform::verify_startup_profile(&profile)?;
+                Ok(Some(
+                    serde_json::json!({"profile_id":profile.id,"profile_digest":profile_digest(&profile)?}),
+                ))
+            })();
+            print(
+                &serde_json::json!({"schema":1,"selection":selection,"ready":matches!(&result,Ok(Some(_))),"verification":result,"hardware_applied":false}),
+            )
+        }
         _ => Err("Invalid profile command or argument count; use --help".into()),
     }
 }

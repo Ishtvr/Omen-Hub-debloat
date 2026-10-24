@@ -37,6 +37,9 @@ pub enum Message {
     SetCoreMargin,
     GetCoreMargin,
     GetFusedPpt,
+    /// Zen4Settings GetPboFusedApuSlowLimit. Diagnostic raw GET only: its
+    /// meaning/units must be measured before it can constrain a user setting.
+    GetFusedSlow,
     GetFusedTdc,
     /// Read-only OC capability bits (bit 0: overclocking enabled).
     IsOverclockable,
@@ -57,6 +60,7 @@ impl Message {
             Self::SetCoreMargin => 0x06,
             Self::GetCoreMargin => 0xD5,
             Self::GetFusedPpt => 0xDC,
+            Self::GetFusedSlow => 0xDA,
             Self::GetFusedTdc => 0xDB,
             Self::IsOverclockable => 0x6F,
             Self::GetBoostLimitFrequency => 0x6E,
@@ -313,6 +317,7 @@ pub struct SmuProbe {
     pub pm_table_head: Result<Vec<f32>, String>,
     pub pbo_scalar_raw: Result<u32, String>,
     pub fused_ppt_raw: Result<u32, String>,
+    pub fused_slow_raw: Result<u32, String>,
     pub fused_tdc_raw: Result<u32, String>,
     pub core_margins: Vec<Result<i32, String>>,
     /// RSMU 0x6F capability word. Bit 0 = the firmware allows the OC mode a
@@ -341,6 +346,7 @@ pub fn probe(inventory: &Inventory) -> Result<SmuProbe, String> {
         pbo_scalar_raw,
         boost_limit_mhz: smu.send(Message::GetBoostLimitFrequency, 0).map(|r| r[0]),
         fused_ppt_raw: smu.send(Message::GetFusedPpt, 0).map(|r| r[0]),
+        fused_slow_raw: smu.send(Message::GetFusedSlow, 0).map(|r| r[0]),
         fused_tdc_raw: smu.send(Message::GetFusedTdc, 0).map(|r| r[0]),
         // 8940HX: two CCDs with eight cores each.
         core_margins: (0..16u8)

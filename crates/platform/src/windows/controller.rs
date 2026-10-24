@@ -95,6 +95,7 @@ pub struct Controller {
     planned_power_scheme: Option<u128>,
     smu: Option<super::smu::Smu>,
     slow_limit_qualification: bool,
+    cpu_readback_trace: Option<Vec<super::cpu_tuning::CpuReadbackTrace>>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
@@ -185,6 +186,7 @@ impl Controller {
             planned_power_scheme: None,
             smu: None,
             slow_limit_qualification: false,
+            cpu_readback_trace: None,
         })
     }
     /// Only the fixed decreasing trial uses this constructor. Ordinary profiles
@@ -193,6 +195,12 @@ impl Controller {
         let mut controller = Self::new(true, None)?;
         controller.slow_limit_qualification = true;
         Ok(controller)
+    }
+    pub fn trace_cpu_readbacks(&mut self) {
+        self.cpu_readback_trace = Some(Vec::new());
+    }
+    pub fn cpu_readback_observations(&self) -> &[super::cpu_tuning::CpuReadbackTrace] {
+        self.cpu_readback_trace.as_deref().unwrap_or(&[])
     }
     pub fn for_profile(profile: &PerformanceProfile) -> Result<Self, String> {
         Self::new(
@@ -1080,7 +1088,28 @@ impl Backend for Controller {
         }
         if let RestoreState::AmdSmu { image } = &saved.restore {
             let feature = saved.feature;
-            return super::cpu_tuning::restore(self.smu()?, feature, image);
+            let tracing = self.cpu_readback_trace.is_some();
+            let mut samples = Vec::new();
+            let result =
+                super::cpu_tuning::restore(self.smu()?, feature, image, |elapsed_ms, live| {
+                    if tracing {
+                        samples.push(super::cpu_tuning::ReadbackSample {
+                            elapsed_ms,
+                            image: live.clone(),
+                        });
+                    }
+                });
+            if let Some(trace) = self.cpu_readback_trace.as_mut() {
+                trace.push(super::cpu_tuning::CpuReadbackTrace {
+                    feature,
+                    purpose: "restore",
+                    target: None,
+                    original: Some(image.clone()),
+                    samples,
+                    result: result.clone(),
+                });
+            }
+            return result;
         }
         if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
             super::write_hp_graphics_mode(&self.inventory, *mode)?;
@@ -1337,11 +1366,32 @@ impl Backend for Controller {
             };
         }
         if super::cpu_tuning::handles(setting.feature) {
-            return if super::cpu_tuning::matches(self.smu()?, setting.feature, &setting.value)? {
-                Ok(setting.value.clone())
-            } else {
-                Err(format!("SMU readback differs for {:?}", setting.feature))
-            };
+            let tracing = self.cpu_readback_trace.is_some();
+            let mut samples = Vec::new();
+            let result = super::cpu_tuning::verify_target(
+                self.smu()?,
+                setting.feature,
+                &setting.value,
+                |elapsed_ms, live| {
+                    if tracing {
+                        samples.push(super::cpu_tuning::ReadbackSample {
+                            elapsed_ms,
+                            image: live.clone(),
+                        });
+                    }
+                },
+            );
+            if let Some(trace) = self.cpu_readback_trace.as_mut() {
+                trace.push(super::cpu_tuning::CpuReadbackTrace {
+                    feature: setting.feature,
+                    purpose: "target",
+                    target: Some(setting.value.clone()),
+                    original: None,
+                    samples,
+                    result: result.as_ref().map(|_| ()).map_err(Clone::clone),
+                });
+            }
+            return result.map(|_| setting.value.clone());
         }
         if uses_hp_gpu_power(setting.feature) {
             let actual = self.read(setting.feature)?;

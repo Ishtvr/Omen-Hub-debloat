@@ -3,6 +3,7 @@ use crate::i18n::{t, tf};
 use omen_core::{
     APP_NAME, CpuHardwareStatus, Snapshot,
     hp_mode::HpMode,
+    power::Sampling,
     quick_switch::{FanMode, GraphicsMode},
 };
 use std::{
@@ -15,7 +16,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::{LibraryLoader::GetModuleHandleW, Power::*, SystemServices::GUID_ACDC_POWER_SOURCE},
+    System::LibraryLoader::GetModuleHandleW,
     UI::{
         Controls::{BST_CHECKED, BST_UNCHECKED},
         Shell::*,
@@ -26,6 +27,7 @@ use windows_sys::Win32::{
 const UPDATE: u32 = WM_APP + 1;
 const TRAY: u32 = crate::tray::CALLBACK;
 const CPU_READER_PID: u32 = WM_APP + 61;
+const POWER_STATE: u32 = WM_APP + 63;
 const MODE_RESULT: u32 = WM_APP + 62;
 const REFRESH: usize = 101;
 const PROFILE: usize = 102;
@@ -55,8 +57,6 @@ const DEFAULT_MODES: [(&str, HpMode); 4] = [
 enum Request {
     Refresh,
     Visibility(bool),
-    Suspend,
-    Resume,
     Power,
     ApplyPreset(String),
     ApplyMode(HpMode),
@@ -68,6 +68,7 @@ enum Request {
 struct State {
     tx: mpsc::Sender<Request>,
     snapshot: Arc<Mutex<Option<Snapshot>>>,
+    power: Arc<Mutex<Sampling>>,
     details: Cell<HWND>,
     profile: Cell<HWND>,
     preview: Cell<HWND>,
@@ -141,6 +142,7 @@ fn worker(
     initially_visible: bool,
     mode_result: Arc<Mutex<Option<String>>>,
     mut start_cpu_reader: bool,
+    power: Arc<Mutex<Sampling>>,
 ) {
     let mut snapshot = Snapshot {
         inventory: crate::inventory::read(),
@@ -148,7 +150,6 @@ fn worker(
         ..Default::default()
     };
     let mut visible = initially_visible;
-    let mut suspended = false;
     let mut nvidia = None;
     let mut cpu = None;
     let mut hardware: Option<crate::cpu_sensor_bridge::CpuSensorBridge> = None;
@@ -161,22 +162,41 @@ fn worker(
         }
     };
     loop {
+        let power_at_start = *power.lock().unwrap_or_else(|e| e.into_inner());
+        let mut suspended = !power_at_start.active();
         if visible && !suspended {
             snapshot.cpu = Some(cpu.get_or_insert_with(omen_platform::Cpu::new).sample());
             if let Some(reader) = hardware.as_mut() {
-                match reader.sample() {
-                    Ok(readout) => {
-                        if let Some(cpu) = snapshot.cpu.as_mut() {
-                            cpu.package_power_w = readout.package_power_w;
-                            cpu.temperature_c = readout.temperature_c;
-                            cpu.warnings.extend(readout.warnings.clone());
-                            cpu.hardware = Some(readout);
+                let result = reader.sample();
+                if *power.lock().unwrap_or_else(|e| e.into_inner()) != power_at_start {
+                    // A window notification is visible immediately, even when
+                    // the worker was inside a read as Windows suspended it.
+                    // Drain that exact outstanding response and reset both
+                    // baselines; never publish an interval across the transition.
+                    cpu = None;
+                    snapshot.cpu = None;
+                    match reader.pause() {
+                        Ok(()) => snapshot.cpu_hardware_status = CpuHardwareStatus::Paused,
+                        Err(error) => {
+                            hardware = None;
+                            cpu_failed(&mut snapshot, error);
                         }
-                        snapshot.cpu_hardware_status = CpuHardwareStatus::Active;
                     }
-                    Err(error) => {
-                        hardware = None;
-                        cpu_failed(&mut snapshot, error);
+                } else {
+                    match result {
+                        Ok(readout) => {
+                            if let Some(cpu) = snapshot.cpu.as_mut() {
+                                cpu.package_power_w = readout.package_power_w;
+                                cpu.temperature_c = readout.temperature_c;
+                                cpu.warnings.extend(readout.warnings.clone());
+                                cpu.hardware = Some(readout);
+                            }
+                            snapshot.cpu_hardware_status = CpuHardwareStatus::Active;
+                        }
+                        Err(error) => {
+                            hardware = None;
+                            cpu_failed(&mut snapshot, error);
+                        }
                     }
                 }
             }
@@ -184,6 +204,7 @@ fn worker(
             cpu = None;
             snapshot.cpu = None;
         }
+        suspended = !power.lock().unwrap_or_else(|e| e.into_inner()).active();
         if visible && !suspended && Instant::now() >= reopen_at {
             let nvidia = nvidia.get_or_insert_with(crate::telemetry_worker::GpuTelemetry::new);
             snapshot.gpu = nvidia.sample();
@@ -202,6 +223,14 @@ fn worker(
             snapshot.gpu = None;
         }
         if nvidia.as_ref().is_some_and(|api| api.needs_reconnect()) {
+            nvidia = None;
+        }
+        let current_power = *power.lock().unwrap_or_else(|e| e.into_inner());
+        suspended = !current_power.active();
+        if current_power != power_at_start || suspended {
+            snapshot.cpu = None;
+            snapshot.gpu = None;
+            cpu = None;
             nvidia = None;
         }
         snapshot.power = omen_platform::power_status();
@@ -238,10 +267,7 @@ fn worker(
                 Err(_) => break,
             }
         };
-        let reset_hardware = matches!(
-            &request,
-            Some(Request::Resume | Request::Refresh | Request::Power)
-        );
+        let reset_hardware = matches!(&request, Some(Request::Refresh | Request::Power));
         match request {
             Some(Request::Stop) => break,
             Some(Request::ApplyPreset(id)) => {
@@ -323,13 +349,6 @@ fn worker(
                 if value {
                     reopen_at = Instant::now();
                 }
-            }
-            Some(Request::Suspend) => suspended = true,
-            Some(Request::Resume) => {
-                cpu = None;
-                suspended = false;
-                nvidia = None;
-                reopen_at = Instant::now();
             }
             Some(Request::Refresh) => {
                 cpu = None;
@@ -789,18 +808,22 @@ unsafe extern "system" fn window_proc(
                 .as_ref()
                 .and_then(|s| s.cpu_reader_pid)
                 .unwrap_or(0) as isize,
+            POWER_STATE => {
+                let power = *state.power.lock().unwrap_or_else(|e| e.into_inner());
+                ((power.generation << 2)
+                    | u64::from(power.suspended)
+                    | (u64::from(!power.display_on) << 1)) as isize
+            }
             WM_POWERBROADCAST => {
-                match wparam as u32 {
-                    PBT_APMSUSPEND => {
-                        let _ = state.tx.send(Request::Suspend);
-                    }
-                    PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => {
-                        let _ = state.tx.send(Request::Resume);
-                    }
-                    PBT_APMPOWERSTATUSCHANGE | PBT_POWERSETTINGCHANGE => {
+                if let Some(event) = crate::power_events::decode(wparam as u32, lparam) {
+                    let changed = state
+                        .power
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .observe(event);
+                    if changed {
                         let _ = state.tx.send(Request::Power);
                     }
-                    _ => (),
                 }
                 1
             }
@@ -899,9 +922,11 @@ fn run_window(
 ) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let shared = Arc::new(Mutex::new(None));
+    let power = Arc::new(Mutex::new(Sampling::default()));
     let mut state = Box::new(State {
         tx,
         snapshot: shared.clone(),
+        power: power.clone(),
         details: Cell::new(ptr::null_mut()),
         profile: Cell::new(ptr::null_mut()),
         preview: Cell::new(ptr::null_mut()),
@@ -957,6 +982,14 @@ fn run_window(
             UnregisterClassW(class_name.as_ptr(), instance);
             return Err(tf("error.window", &[&std::io::Error::last_os_error()]));
         }
+        let power_notifications = match crate::power_events::Notifications::register(hwnd) {
+            Ok(notifications) => notifications,
+            Err(error) => {
+                DestroyWindow(hwnd);
+                UnregisterClassW(class_name.as_ptr(), instance);
+                return Err(tf("error.window", &[&error]));
+            }
+        };
         let initially_visible = !start_in_tray || !state.tray.registered();
         let worker_hwnd = hwnd as usize;
         let mode_result = state.mode_result.clone();
@@ -970,13 +1003,9 @@ fn run_window(
                 initially_visible,
                 mode_result,
                 auto_cpu,
+                power,
             )
         });
-        let power_registration = RegisterPowerSettingNotification(
-            hwnd,
-            &GUID_ACDC_POWER_SOURCE,
-            DEVICE_NOTIFY_WINDOW_HANDLE,
-        );
         if initially_visible && preview.is_none() {
             ShowWindow(hwnd, SW_SHOW);
         }
@@ -1015,9 +1044,7 @@ fn run_window(
         if worker.is_finished() {
             let _ = worker.join();
         }
-        if power_registration != 0 {
-            UnregisterPowerSettingNotification(power_registration);
-        }
+        drop(power_notifications);
         UnregisterClassW(class_name.as_ptr(), instance);
         result
     }

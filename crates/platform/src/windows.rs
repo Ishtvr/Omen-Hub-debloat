@@ -23,7 +23,7 @@ pub use controller::{Controller, RestoreState};
 pub use cooling::{FanReport, MaxFanImage, read_hp_fans};
 pub use cpu::Cpu;
 pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
-pub use cpu_tuning::SmuImage;
+pub use cpu_tuning::{CpuReadbackTrace, SmuImage};
 pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use fan_service::{request_stop as stop_fan_service, run_until as run_fan_service_until};
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};

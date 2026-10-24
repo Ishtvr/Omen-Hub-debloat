@@ -62,6 +62,8 @@ const LIMITS: [LimitSpec; 5] = [
 // and blocked every limit capture before any write; no new layout is inferred.
 const PM_TABLE_VERSION: u32 = 0x540208;
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+const READBACK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+const READBACK_QUIET: std::time::Duration = std::time::Duration::from_millis(100);
 /// The BIOS hands HP limits to the SMU a little later than RSMU messages land.
 const HP_SETTLE: std::time::Duration = std::time::Duration::from_millis(600);
 fn limit(feature: Feature) -> Option<(Message, usize, f32, (i64, i64))> {
@@ -314,12 +316,7 @@ pub fn write(smu: &Smu, feature: Feature, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the live SMU state equals the requested profile value.
-pub fn matches(smu: &Smu, feature: Feature, value: &Value) -> Result<bool, String> {
-    let live = capture(smu, feature)?;
-    image_matches(feature, &live, value)
-}
-
+/// Whether a captured SMU state equals the requested profile value.
 pub fn image_matches(feature: Feature, image: &SmuImage, value: &Value) -> Result<bool, String> {
     Ok(match (feature, value, image) {
         (Feature::CpuCurveOptimizerAllCore, Value::Integer(v), SmuImage::Margins { margins }) => {
@@ -337,6 +334,74 @@ pub fn image_matches(feature: Feature, image: &SmuImage, value: &Value) -> Resul
         }
         _ => &self::value(feature, image)? == value,
     })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadbackSample {
+    pub elapsed_ms: u64,
+    pub image: SmuImage,
+}
+#[derive(Debug, Serialize)]
+pub struct CpuReadbackTrace {
+    pub feature: Feature,
+    pub purpose: &'static str,
+    pub target: Option<Value>,
+    pub original: Option<SmuImage>,
+    pub samples: Vec<ReadbackSample>,
+    pub result: Result<(), String>,
+}
+
+fn observe_until(
+    smu: &Smu,
+    feature: Feature,
+    matches: impl Fn(&SmuImage) -> Result<bool, String>,
+    mut sample: impl FnMut(u64, &SmuImage),
+) -> Result<SmuImage, String> {
+    use omen_core::readback::{Decision, Settling};
+    use std::time::Instant;
+    let start = Instant::now();
+    let mut settling = Settling::new(READBACK_DEADLINE, READBACK_QUIET);
+    loop {
+        // Errors and identity/type mismatches are immediate failures. Only a
+        // valid old control value is observed again; the setter is never called.
+        let live = capture(smu, feature)?;
+        let elapsed = start.elapsed();
+        sample(elapsed.as_millis() as u64, &live);
+        let matched = matches(&live)?;
+        if limit(feature).is_none() {
+            return if matched {
+                Ok(live)
+            } else {
+                Err(format!(
+                    "SMU readback differs for {feature:?}: observed {live:?}"
+                ))
+            };
+        }
+        match settling.observe(elapsed, matched) {
+            Decision::Matched => return Ok(live),
+            Decision::TimedOut => {
+                return Err(format!(
+                    "SMU readback did not settle for {feature:?} within 2 seconds: observed {live:?}"
+                ));
+            }
+            Decision::Wait => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+}
+
+pub fn verify_target(
+    smu: &Smu,
+    feature: Feature,
+    target: &Value,
+    sample: impl FnMut(u64, &SmuImage),
+) -> Result<SmuImage, String> {
+    observe_until(
+        smu,
+        feature,
+        |live| image_matches(feature, live, target),
+        sample,
+    )
+    .map_err(|error| format!("{error}; requested {target:?}"))
 }
 
 pub fn image_owned(
@@ -369,7 +434,12 @@ pub fn image_owned(
     Ok(original == live || image_matches(feature, live, target)?)
 }
 
-pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), String> {
+pub fn restore(
+    smu: &Smu,
+    feature: Feature,
+    original: &SmuImage,
+    sample: impl FnMut(u64, &SmuImage),
+) -> Result<(), String> {
     validate_original(feature, original)?;
     match original {
         SmuImage::Margins { margins } => {
@@ -391,10 +461,7 @@ pub fn restore(smu: &Smu, feature: Feature, original: &SmuImage) -> Result<(), S
             return Err("Legacy HP limit image cannot select an RSMU restore".into());
         }
     }
-    if capture(smu, feature)? != *original {
-        return Err("SMU setting did not return to its captured original".into());
-    }
-    Ok(())
+    observe_until(smu, feature, |live| Ok(live == original), sample).map(|_| ())
 }
 
 pub fn validate_original(feature: Feature, original: &SmuImage) -> Result<(), String> {
