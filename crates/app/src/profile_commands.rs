@@ -606,6 +606,11 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 };
                 store.startup_eligibility(&profile.id)?;
                 omen_platform::verify_startup_profile(&profile)?;
+                let mut controller = Controller::for_profile(&profile)?;
+                let plan = transaction::plan(&profile, &mut controller, true);
+                if !plan.applicable {
+                    return Err(serde_json::to_string(&plan).map_err(|e| e.to_string())?);
+                }
                 Ok(Some(
                     serde_json::json!({"profile_id":profile.id,"profile_digest":profile_digest(&profile)?}),
                 ))

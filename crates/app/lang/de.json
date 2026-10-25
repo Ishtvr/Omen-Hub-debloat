@@ -434,5 +434,9 @@
   "fan.quick.failed": "Lüfterschalter nicht übernommen: {0}",
   "preset.startup_on_save": "Autostart wird beim Speichern angewendet und eingerichtet.",
   "preset.saved_startup": "Preset gespeichert, angewendet und für den Windows-Start eingerichtet.",
-  "preset.startup_blocked": "Dieses Preset enthält Einstellungen, die noch nicht für den Windows-Start freigegeben sind."
+  "preset.startup_blocked": "Dieses Preset enthält Einstellungen, die noch nicht für den Windows-Start freigegeben sind.",
+  "hp_control.cpu_power_conflict": "Die ursprüngliche HP-Steuerung (HPOmenCap) läuft noch. CPU-Leistungsgrenzen werden erst nach kontrollierter Übernahme angewendet. Es wurden keine Profilwerte geschrieben.",
+  "hp_control.unknown": "Die Zuständigkeit für die HP-Steuerung ist unbekannt ({0}). Es wurden keine Profilwerte geschrieben.",
+  "hp_control.cpu_power_changed": "Der HP-Controller ist während der Profilanwendung wieder aktiv geworden. Die Anwendung wurde abgebrochen und die Rücksetzung angefordert.",
+  "hp_control.write_unknown": "Die HP-Zuständigkeit konnte vor dem CPU-Schreibzugriff nicht bestätigt werden ({0}). Die Anwendung wurde zur Rücksetzung abgebrochen."
 }

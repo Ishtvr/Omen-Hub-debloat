@@ -632,6 +632,7 @@ impl Controller {
 impl Backend for Controller {
     type RestoreState = RestoreState;
     fn prepare_settings(&mut self, settings: &[Setting]) -> Result<(), String> {
+        super::hp_control::check_cpu_power_settings(settings)?;
         self.planned_power_scheme = super::windows_settings::requested_scheme(settings)?;
         Ok(())
     }
@@ -701,7 +702,7 @@ impl Backend for Controller {
                     reason: "AMD SMU message with exact per-core/scalar/limit readback".into(),
                     integer_range: Some(super::cpu_tuning::range(feature)),
                     requires_ac: false,
-                    startup_safe: true,
+                    startup_safe: super::hp_control::cpu_power_startup_safe(feature),
                 },
                 Err(reason) => Capability::unsupported(feature, reason),
             };
@@ -1899,6 +1900,7 @@ impl Backend for Controller {
             if !self.captured.contains_key(&setting.feature) {
                 return Err("No captured SMU original".into());
             }
+            super::hp_control::check_cpu_power_write(setting.feature)?;
             super::cpu_tuning::write(self.smu()?, setting.feature, &setting.value)?;
             self.windows_targets
                 .insert(setting.feature, setting.value.clone());

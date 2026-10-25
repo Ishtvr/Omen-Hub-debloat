@@ -15,4 +15,6 @@ pub fn inventory() -> omen_core::Inventory {
 pub fn power_status() -> omen_core::PowerStatus {
     Default::default()
 }
+#[cfg(any(windows, test))]
+mod ownership_store;
 pub mod profile_store;

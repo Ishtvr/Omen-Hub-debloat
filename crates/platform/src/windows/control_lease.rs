@@ -9,10 +9,13 @@ pub struct ControlLease {
 }
 impl ControlLease {
     pub fn acquire() -> Result<Self, String> {
-        let name: Vec<u16> = "Global\\OmenHubPP.HardwareController"
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
+        Self::named("Global\\OmenHubPP.HardwareController")
+    }
+    pub(crate) fn hp_ownership() -> Result<Self, String> {
+        Self::named("Global\\OmenHubPP.HpControllerOwner")
+    }
+    fn named(name: &str) -> Result<Self, String> {
+        let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         // SAFETY: Fixed terminated name, default security, no initial ownership.
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
         if handle.is_null() {

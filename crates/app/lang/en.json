@@ -434,5 +434,9 @@
   "fan.quick.failed": "Fan switch not applied: {0}",
   "preset.startup_on_save": "Autostart is applied and set up when you save.",
   "preset.saved_startup": "Preset saved, applied and set up for Windows startup.",
-  "preset.startup_blocked": "This preset contains settings that are not yet enabled for Windows startup."
+  "preset.startup_blocked": "This preset contains settings that are not yet enabled for Windows startup.",
+  "hp_control.cpu_power_conflict": "The original HP controller (HPOmenCap) is still active. CPU power limits require a controlled handover before application. No profile values were written.",
+  "hp_control.unknown": "HP controller ownership is unknown ({0}). No profile values were written.",
+  "hp_control.cpu_power_changed": "The HP controller became active again during profile application. Application was aborted and rollback was requested.",
+  "hp_control.write_unknown": "HP ownership could not be confirmed before the CPU write ({0}). Application was aborted for rollback."
 }

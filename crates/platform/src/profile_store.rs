@@ -559,7 +559,7 @@ pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), St
     data.push(b'\n');
     atomic_bytes(path, &data)
 }
-fn atomic_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
     if data.len() as u64 > MAX_FILE_BYTES {
         return Err("Profile/control file exceeds 1 MiB".into());
     }

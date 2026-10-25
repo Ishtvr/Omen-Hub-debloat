@@ -9,6 +9,7 @@ mod fan_service;
 mod gpu;
 mod gpu_support;
 mod hp;
+pub mod hp_control;
 mod lighting;
 mod nvidia;
 mod smu;

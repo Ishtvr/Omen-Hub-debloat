@@ -43,6 +43,8 @@ Abnahme: identifizierte Calls, belegte Payloads und modellbezogene Messungen; ke
 - [x] Heartbeat-Lifecycle mit Entschärfung bei AC-Wechsel, Suspend, Resume und Fehler.
 - [x] Optionaler lesender CPU-Adapter mit exakter Identitäts-/Hashprüfung des bereits laufenden PawnIO 2.2.0 und signiertem AMDFamily17 0.2.11; query-only SCM, kein Installations-/Treiberstart- oder Tuningpfad.
 - [ ] Ein einzelner privilegierter Controller mit exklusivem Gerätezugriff; keine konkurrierenden HP-/Drittanbieter-Schleifen.
+- [x] Eigene Controller-Zustands-/Recovery-Engine mit dauerhaftem Write-ahead-Journal, festem HPOmenCap-Adapter, Prozess-Erzeugungsidentität und Konfliktsperre für neue CPU-Leistungsprofile vorbereiten; reine Geräte-Status-/Preflight-Prüfung ohne Dienstaktion bestanden. Native Übernahme wird noch nicht automatisch aktiviert: [HP_CONTROL.md](HP_CONTROL.md).
+- [ ] Dedizierten Übernahmeprozess mit unabhängigem Rückkehrwächter und gekoppelter Kühlung beaufsichtigt qualifizieren; erst danach normalen UI-/Anmeldestart und echte Power-Übergänge freigeben.
 - [x] Typisierter lesender HP-WMI-Transport mit festen GETs, Begrenzung auf 8E35/F.13 sowie strengen Datentyp-/Längen-/Rückgabecode-Prüfungen; Größe-0-Eingabe am Gerät validiert.
 - [x] Typisierter direkter HP-BIOS-Tastaturadapter für Capability `[1,0,0,0]`: vollständige RGB-Bilder, exakte Modusbytes 0x64/0xE4, dauerhafte Originale, Readback und Recovery; übrige Steuerbytes erhalten.
 - [x] Typisierter direkter Max-Fan-Adapter für 8E35/F.13: Netzbetrieb, Tabellenhash, Topologie, Thermalpolicy und vollständige Schalterbytes vor SET prüfen; boolesches Ziel, vollständiger Readback und persistierter Original-Restore, fremde Zustände verwerfen.

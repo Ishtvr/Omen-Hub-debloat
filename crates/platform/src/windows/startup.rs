@@ -295,8 +295,53 @@ pub fn fan_service_installed() -> bool {
 /// Requires the protected installed binary, the same current build and the exact
 /// per-user interactive logon action. This is a read; installation is explicit.
 pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
-    let root = PathBuf::from(std::env::var_os("ProgramFiles").ok_or("Program Files unavailable")?)
-        .join("OmenHubPlusPlus");
+    let receipt = inspect_installed_binary(true)?;
+    let root = receipt
+        .executable
+        .parent()
+        .ok_or("Installed directory missing")?
+        .to_path_buf();
+    let sid = current_user_sid()?;
+    let sam = sam_name()?;
+    verify_startup_task(&receipt, &root, &sid, &sam)?;
+    Ok(receipt)
+}
+
+/// Fixed machine Known Folder, not a caller-controlled ProgramFiles variable.
+fn installation_root() -> Result<PathBuf, String> {
+    use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath};
+    let mut directory = ptr::null_mut();
+    let result =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, ptr::null_mut(), &mut directory) };
+    if result < 0 || directory.is_null() {
+        return Err("Program Files Known Folder is unavailable".into());
+    }
+    let path = (|| {
+        let mut count = 0;
+        unsafe {
+            while count < 32768 && *directory.add(count) != 0 {
+                count += 1;
+            }
+        }
+        if count == 32768 {
+            return Err("Program Files path exceeds its bound".into());
+        }
+        let path = String::from_utf16(unsafe { std::slice::from_raw_parts(directory, count) })
+            .map_err(|e| e.to_string())?;
+        Ok(PathBuf::from(path).join("OmenHubPlusPlus"))
+    })();
+    unsafe {
+        windows::Win32::System::Com::CoTaskMemFree(Some(directory.cast()));
+    }
+    path
+}
+
+/// Identity inspection is separate from autorun readiness. Recovery must stay
+/// possible when a user disables the logon task; no new approval is granted.
+pub(super) fn inspect_installed_binary(
+    require_current_build: bool,
+) -> Result<StartupInstallation, String> {
+    let root = installation_root()?;
     let file = File::open(root.join("installation.json")).map_err(|_| "Startup is not installed. Run scripts/install-startup.ps1 once with administrator rights.".to_owned())?;
     let mut bytes = vec![];
     file.take(65537)
@@ -309,7 +354,6 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
         serde_json::from_slice(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
             .map_err(|e| e.to_string())?;
     let sid = current_user_sid()?;
-    let sam = sam_name()?;
     if receipt.schema != 1
         || receipt.user_sid != sid
         || receipt.task_name != format!("OmenHubPP-Profile-{sid}")
@@ -318,14 +362,24 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
         return Err("Startup installation identity/path differs".into());
     }
     if !file_hash(&receipt.executable)?.eq_ignore_ascii_case(&receipt.sha256)
-        || !file_hash(&std::env::current_exe().map_err(|e| e.to_string())?)?
-            .eq_ignore_ascii_case(&receipt.sha256)
+        || (require_current_build
+            && !file_hash(&std::env::current_exe().map_err(|e| e.to_string())?)?
+                .eq_ignore_ascii_case(&receipt.sha256))
     {
         return Err(
             "Installed startup binary differs from this build; reinstall the current release"
                 .into(),
         );
     }
+    Ok(receipt)
+}
+
+fn verify_startup_task(
+    receipt: &StartupInstallation,
+    root: &std::path::Path,
+    sid: &str,
+    sam: &str,
+) -> Result<(), String> {
     // SAFETY: Public COM initialization on the current thread, with paired lifetime.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     // RPC_E_CHANGED_MODE means the thread already owns a usable apartment.
@@ -346,7 +400,7 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
             if !task.Enabled()?.as_bool() {
                 return Err(task_error("Scheduled task is disabled"));
             }
-            verify_principal_xml(&task.Xml()?.to_string(), &sid).map_err(task_error)?;
+            verify_principal_xml(&task.Xml()?.to_string(), sid).map_err(task_error)?;
             let definition = task.Definition()?;
             let triggers = definition.Triggers()?;
             let mut trigger_count = 0;
@@ -363,7 +417,7 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
             logon_trigger.UserId(&mut trigger_user)?;
             logon_trigger.Delay(&mut delay)?;
             if !enabled.as_bool()
-                || (trigger_user != sid && !trigger_user.to_string().eq_ignore_ascii_case(&sam))
+                || (trigger_user != sid && !trigger_user.to_string().eq_ignore_ascii_case(sam))
                 || delay != "PT15S"
             {
                 return Err(task_error(
@@ -407,7 +461,7 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
         }
     };
     query().map_err(|e| format!("Startup task readback differs or is unavailable: {e}"))?;
-    Ok(receipt)
+    Ok(())
 }
 
 #[cfg(test)]

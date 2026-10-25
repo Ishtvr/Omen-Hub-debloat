@@ -11,6 +11,7 @@ pub mod hp;
 pub mod hp_mode;
 pub mod keyboard;
 pub mod message;
+pub mod ownership;
 pub mod power;
 pub mod preset;
 pub mod profiles;

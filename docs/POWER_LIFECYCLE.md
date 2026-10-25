@@ -2,6 +2,8 @@
 
 ## Implementierter Ablauf
 
+Seit dem Softwarestand vom 25. Oktober sperrt ein aktiver oder unklarer HPOmenCap die neue Anwendung von PPT-/Slow-Profilen schon vor Capture/SET. Eine getrennte eigene Übernahme-/Recovery-Engine ist vorbereitet, aber noch nicht automatisch aktiv. Sie ersetzt weder den unabhängigen Rückkehrwächter noch die gekoppelte Kühlungs-/Power-Abnahme. Echte Prepare-/Standby-/Neustartchecks verlangen unverändert ein aktuell vollständig bestätigtes Profil. Umfang: [HP_CONTROL.md](HP_CONTROL.md).
+
 Das Referenzgerät 8E35/F.13 unterstützt laut lokalem `powercfg /a` **Modern Standby (S0, Netzwerk verbunden)** und Ruhezustand. Der Dashboard-Prozess registriert sich ausdrücklich für Suspend/Resume, den Bildschirmzustand seiner Benutzersitzung und Netzteilwechsel. Die Abonnements werden gemeinsam besessen, auf Fehler geprüft und beim Ende freigegeben. Grundlage sind die öffentlichen Microsoft-Verträge für [RegisterSuspendResumeNotification](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registersuspendresumenotification) und [GUID_SESSION_DISPLAY_STATUS](https://learn.microsoft.com/en-us/windows/win32/power/power-setting-guids).
 
 Ein ausgeschalteter Bildschirm pausiert die Dashboard-Sensoren. Automatisches Aufwachen hebt diese Pause nicht auf; erst ein aktiver oder gedimmter Bildschirm gibt die Abfragen wieder frei. Suspend und Bildschirmzustand sind unabhängig. Netzteilwechsel setzt Messbaselines zurück, hebt aber keine Pause auf. Die plattformunabhängige Richtlinie liegt in `crates/core/src/power.rs`.
