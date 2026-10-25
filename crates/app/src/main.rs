@@ -262,6 +262,10 @@ fn run() -> Result<(), String> {
             );
         }
         #[cfg(windows)]
+        Some("hp-control-guardian") if args.len() == 1 => {
+            omen_platform::hp_control::run_guardian_process()?;
+        }
+        #[cfg(windows)]
         Some("hp-control-status") if args.len() == 1 => {
             println!(
                 "{}",

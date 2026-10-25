@@ -8,6 +8,7 @@ mod cpu_tuning;
 mod fan_service;
 mod gpu;
 mod gpu_support;
+pub mod guardian;
 mod hp;
 pub mod hp_control;
 mod lighting;

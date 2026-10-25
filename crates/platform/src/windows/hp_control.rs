@@ -1,5 +1,7 @@
 //! Fixed HPOmenCap inspection and explicit session backend. No driver/service
 //! configuration is changed. The dashboard never acquires this backend itself.
+mod guard;
+pub use guard::Report as GuardianReport;
 use omen_core::{
     Inventory,
     ownership::{self, Identity, Owner, Snapshot, State, Subject},
@@ -368,10 +370,12 @@ fn validate_configuration(config: &Configuration, path: &std::path::Path) -> Res
 
 /// Native backend for the explicit handover engine. Not constructed by profile
 /// Apply, dashboard startup, or status/plan reads. No arbitrary service target.
-pub struct ServiceController {
+struct ServiceController {
     service: Service,
     identity: Identity,
     _image: std::fs::File,
+    guardian: Option<super::guardian::GuardianProcess>,
+    start_requests: u32,
 }
 impl ServiceController {
     pub fn prepare_explicit_session(inventory: &Inventory) -> Result<Self, String> {
@@ -385,6 +389,8 @@ impl ServiceController {
             service,
             identity: snapshot.identity,
             _image: image,
+            guardian: None,
+            start_requests: 0,
         })
     }
     pub fn identity(&self) -> &Identity {
@@ -414,6 +420,10 @@ impl ownership::Backend for ServiceController {
         Ok(snapshot)
     }
     fn stop(&mut self, expected: &Snapshot) -> Result<(), String> {
+        self.guardian
+            .as_mut()
+            .ok_or("A ready independent guardian is required before STOP")?
+            .ensure_running()?;
         let current = self.inspect()?;
         if &current != expected
             || current.state != State::Running
@@ -423,11 +433,13 @@ impl ownership::Backend for ServiceController {
             return Err("HPOmenCap STOP precondition changed".into());
         }
         let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+        self.guardian.as_mut().unwrap().ensure_running()?;
         // SAFETY: Fixed verified user-mode service handle; exact STOP only.
         if unsafe { ControlService(self.service.0, SERVICE_CONTROL_STOP, &mut status) } == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        self.wait(State::Stopped)
+        self.wait(State::Stopped)?;
+        self.guardian.as_mut().unwrap().ensure_running()
     }
     fn start(&mut self, expected: &Identity) -> Result<(), String> {
         let current = self.inspect()?;
@@ -435,6 +447,7 @@ impl ownership::Backend for ServiceController {
             return Err("HPOmenCap START precondition changed".into());
         }
         // SAFETY: Fixed verified user-mode service, no service arguments.
+        self.start_requests += 1;
         if unsafe { StartServiceW(self.service.0, 0, ptr::null()) } == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -451,6 +464,7 @@ pub struct Inspection {
     pub audit: Result<Option<(Snapshot, Configuration)>, String>,
     pub known_controller_processes: Result<Vec<String>, String>,
     pub recovery: Result<Option<ownership::Record>, String>,
+    pub last_guardian: Result<Option<GuardianReport>, String>,
     pub automatic_takeover_enabled: bool,
     pub services_changed: bool,
     pub hardware_applied: bool,
@@ -471,6 +485,7 @@ pub fn inspect(inventory: &Inventory) -> Inspection {
         audit,
         known_controller_processes: known_controllers(),
         recovery: recovery_record(),
+        last_guardian: guard::last_report(),
         automatic_takeover_enabled: false,
         services_changed: false,
         hardware_applied: false,
@@ -636,6 +651,8 @@ pub fn recover_controller() -> Result<ownership::Record, String> {
         service,
         identity: snapshot.identity.clone(),
         _image: image,
+        guardian: None,
+        start_requests: 0,
     };
     ownership::recover(&mut backend, &mut journal, &snapshot.identity, live)
         .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))
@@ -699,29 +716,43 @@ impl ScopedSession {
             );
         }
         let mut journal = protected_journal()?;
+        if ownership::Journal::load(&journal)?.is_some_and(|r| !r.phase.complete()) {
+            return Err("Pending controller recovery blocks another qualification".into());
+        }
         let mut backend = ServiceController::prepare_explicit_session(inventory)?;
         let identity = backend.identity().clone();
-        let record = ownership::acquire(
-            &mut backend,
-            &mut journal,
-            current_owner_identity()?,
-            &identity,
-            consent,
-        )
-        .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))?;
-        Ok(Self {
+        let owner = current_owner_identity()?;
+        let request = super::guardian::Request {
+            schema: 1,
+            owner: owner.clone(),
+            identity: identity.clone(),
+        };
+        backend.guardian = Some(super::guardian::GuardianProcess::spawn_self(
+            &request,
+            &["hp-control-guardian".into()],
+        )?);
+        let record = ownership::acquire(&mut backend, &mut journal, owner, &identity, consent)
+            .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))?;
+        let mut scope = Self {
             backend,
             journal,
             record,
             finished: false,
             auto_restore: true,
             _lifetime: lifetime,
-        })
+        };
+        scope.verify()?;
+        Ok(scope)
     }
     pub fn verify(&mut self) -> Result<(), String> {
         if self.finished {
             return Err("Controller scope is already released".into());
         }
+        self.backend
+            .guardian
+            .as_mut()
+            .ok_or("Controller guardian is absent")?
+            .ensure_running()?;
         if !known_controllers()?.is_empty() {
             return Err("Another tuning controller became active during handover".into());
         }
@@ -751,8 +782,17 @@ impl ScopedSession {
             .ok()
             .flatten()
             .is_some_and(|r| r.owner == self.record.owner && r.phase.complete());
+        if self.finished {
+            if let Some(guardian) = self.backend.guardian.as_mut() {
+                guardian.disconnect();
+                let _ = guardian.wait_for_exit(Duration::from_secs(2));
+            }
+        }
         result
     }
+}
+pub fn run_guardian_process() -> Result<(), String> {
+    guard::run()
 }
 impl Drop for ScopedSession {
     fn drop(&mut self) {

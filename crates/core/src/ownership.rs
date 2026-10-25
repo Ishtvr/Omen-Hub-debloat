@@ -19,7 +19,7 @@ pub struct Identity {
     pub configuration_sha256: String,
 }
 impl Identity {
-    fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         if [&self.image_sha256, &self.configuration_sha256]
             .iter()
             .any(|s| s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()))
