@@ -46,6 +46,14 @@ Für `AfterStandby` müssen Bootidentität und App-/Leser-PIDs erhalten bleiben.
 
 `scripts/test-power-lifecycle-evidence.ps1` prüft 18 künstliche Belegkombinationen: unter anderem fehlende/vertauschte/zu alte oder nach dem Checkpoint liegende S0-Ereignisse, unvollständige Vorbereitung, fehlende/geänderte Reader-PID, nicht chronologische Checkpoints, alte Startup-Ergebnisse, fehlgeschlagene Aufgaben und abweichende Builds/Profile. Diese Tests lösen keine Stromzustandsänderung aus und zählen nicht als echte Standby-/Neustartabnahme.
 
+## Ergänzung vom 25. Oktober 2026: Dienstisolation
+
+Nach gesonderter Nutzerfreigabe wurde **HPOmenCap einmal kurz angehalten**. Die identifizierte Originaloberfläche samt Hintergrundprozess war geschlossen, UXTU/Afterburner liefen nicht und die eigene Lüfterregelung war nach bestätigten **4800/4800 RPM** pausiert. Die abgefragten Treiberzustände und Starttypen stimmten vor/nach Dienststopp überein. Mit dem unveränderten Release E95616E4… wurde das unveränderte Profil „Test“ einmal angewendet und vollständig bestätigt. Slow **70 W** und PPT **75 W** blieben in sechs anschließenden GET-Stichproben bis ungefähr zwölf Sekunden nach dem Apply bestehen; Tctl fiel dabei von 68 auf 60,875 °C. Die festen Temperatur-/Lüfterlesezugriffe funktionierten bei gestopptem Dienst weiter.
+
+Anschließend wurden die vollständigen zuvor erfassten Hardwarebilder restauriert, das vorherige Recovery-Journal und die Startup-Auswahl byteidentisch erhalten, der Dienst und die eigene Lüfteraufgabe gestartet sowie der Original-Hub wieder geöffnet. Der gesonderte Rückkehrhelfer musste nicht eingreifen. Es wurde kein zweites Profil-Apply für einen Vergleich und kein realer Schlaf-/Neustart ausgeführt.
+
+Dies stützt die Hypothese einer Beeinflussung durch **HPOmenCap bzw. seinen Lifecycle** gegenüber den Rücksetzern bei weiterlaufendem Dienst am Vortag. Es identifiziert weder einen konkreten Setter noch eine alleinige Ursache. Kurze feste GETs und einmaliges Apply bei gestopptem Dienst beweisen keinen vollständigen HP-Ersatz, laufenden eigenen Lüfterbetrieb ohne Dienst oder langfristige Profilstabilität. Es gibt noch keinen automatischen Dienststopp in Omen Hub++. Eine kontrollierte Übernahme und die tatsächliche Standby-/Neustartabnahme bleiben offen. Zeitpunkte, Messwerte, Wiederherstellung und Freigabeumfang: [VALIDATION.md](VALIDATION.md).
+
 ## Befund vom 24. Oktober 2026
 
 Das unveränderte Nutzerprofil **„Test“** enthält Slow-PPT **70 W**, PPT **75 W**, Tctl-Limit **85 °C**, CO **−18**, eine vollständige GPU-Kurve und Dynamic Boost. Gelesener Ausgangszustand war unter anderem Slow **66 W** und PPT **80 W**. Die bestehende geschützte Freigabe gehört zur installierten älteren Binary A0F4113A…; eine neue Freigabe wurde nicht erteilt.

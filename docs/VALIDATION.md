@@ -1,6 +1,31 @@
-# Validierungsstand — 24. Oktober 2026
+# Validierungsstand — 25. Oktober 2026
 
 Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Laptop GPU. Windows x64. Build-Werkzeuge: Rust/Cargo 1.99.0, MSVC-Toolchain. Auf anderen Geräten ist dieser Stand nicht validiert.
+
+## Gesondert freigegebene HPOmenCap-Isolation — 25. Oktober, 02:22:50…02:23:26 CET
+
+Der Nutzer erlaubte ausdrücklich **einen** Ausschlusstest mit kurzem Anhalten von **HPOmenCap**, einmaliger Anwendung des bereits freigegebenen unveränderten Profils „Test“, voller Kühlung und anschließender Wiederherstellung. Verwendet wurde die unveränderte, unten qualifizierte Release-Binary **E95616E445FF5795EA46484CB2D3AA0B8C4DB4ADC5E4B5DB7D871D8BA4519D5B**, aus Quellstand **69a9873**, **2.781.184 Bytes**. Es gab keine Änderung der Runtime oder Erweiterung numerischer Grenzen. Die Zeitangaben sind ausdrücklich **CET (UTC+1)** nach der Zeitumstellung; lokal gespeicherte ISO-Zeitstempel enthalten den Offset.
+
+Die tatsächlich laufende Originaloberfläche `HP.Omen.OmenCommandCenter.exe` und ihr Hintergrundprozess wurden nach Paketpfad-/Sitzungsprüfung geschlossen. UXTU und Afterburner liefen nicht; die UXTU-Logon-Aufgabe wurde temporär deaktiviert. Eigene Kühlung übernahm zunächst die gespeicherte Kurve. Erst nach sauberem Stop des eigenen Helfers bei angeforderten **48/48**, beobachteten Drehzahlen **≥4000 RPM** beider Lüfter, vollständigem Profil-Preflight und frischen kühlen Sensoren durfte der Dienst angehalten werden. Dienstpfad, SHA-256 **9EECCBDD7BEAA9C33930551853A572AB1E56E2E9A72F6453DC53E190284FE0C8**, Laufzustand und fehlende abhängige Dienste wurden geprüft. Ein getrennt gestarteter Rückkehrhelfer hätte bei Elternende oder nach einer Minute die Wiederaufnahme angefordert; er musste nicht eingreifen.
+
+**Direkter Transport bei gestopptem HPOmenCap:** Die CPU-/GPU-/IR-/Lüfter-GETs funktionierten weiter und lieferten eine frische Temperaturaufnahme: CPU-Tctl **69,25 °C**, GPU **44 °C**, beide Lüfter **4800 RPM**. Die laufenden Zustände und Starttypen von PawnIO, AMDRyzenMasterDriverV31, AmdPPM und AmdPpkg blieben vor/nach Dienststopp sowie nach der Wiederherstellung gleich. Es gab keine direkten Treiberaktionen oder Änderung von Dienst-Starttypen.
+
+**02:23:09, einmaliges Apply:** Alle sieben unveränderten Profilziele wurden bestätigt: vollständige GPU-V/F-Kurve, Dynamic Boost, Tctl-Limit **85 °C**, Slow-PPT **70 W**, Fast/PPT **75 W**, CO **−18** und Windows-Boost `efficient_aggressive`. Der vor dem Apply erfasste CPU-Ausgangszustand enthielt **66/80 W**, Tctl-Limit 85 °C und CO −18. Slow und PPT bestanden jeweils drei GET-Beobachtungen über **102…104 ms**, einschließlich abschließendem Gesamtvergleich. Anschließend wurden nur feste GETs ausgeführt, ohne weitere Tuning-SETs:
+
+| Zeit CET | Slow / PPT | Tctl-Limit | CPU-Tctl |
+| --- | --- | --- | --- |
+| 02:23:10,674 | 70 / 75 W | 85 °C | 68,000 °C |
+| 02:23:12,897 | 70 / 75 W | 85 °C | 65,000 °C |
+| 02:23:15,119 | 70 / 75 W | 85 °C | 64,875 °C |
+| 02:23:17,330 | 70 / 75 W | 85 °C | 63,125 °C |
+| 02:23:19,538 | 70 / 75 W | 85 °C | 63,000 °C |
+| 02:23:21,751 | 70 / 75 W | 85 °C | 60,875 °C |
+
+Die letzte SMU-Aufnahme lag ungefähr **zwölf Sekunden nach dem Apply-Ergebnis**; die Tabellenzeiten enthalten zusätzlich die anschließende Temperaturlesung. In allen sechs Stichproben stimmten Slow/PPT überein. Dies unterscheidet sich von den Rücksetzern nach etwa 1…5 s bei weiterlaufendem HPOmenCap am Vortag. Es ist ein **Hinweis auf einen Einfluss dieses Dienstes bzw. seines Lifecycles**, kein Nachweis eines bestimmten periodischen Setters oder einer alleinigen Ursache. Ein zeitnaher A/B/A-Vergleich wurde nicht durchgeführt. Während des Beobachtungsfensters wurden CPU-Limits/Tctl geprüft; die übrigen Profilziele wurden beim Apply vollständig geprüft, nicht in jedem nachfolgenden Sample erneut. Kein Lastbenchmark, Langzeitbetrieb, echtes Standby oder Neustart.
+
+**02:23:24…26, vollständiger Abschluss:** `profile-restore` bestätigte die vollständigen vor dem Test erfassten Hardwarebilder. Der abgeschlossene Prüf-Recovery wurde archiviert und das vorherige vollständige Nutzerjournal byteidentisch erhalten. Profil, Startup-Auswahl, Lüftermodus und aktive Kurvendatei stimmen weiterhin mit ihren vorherigen Hashes überein. HPOmenCap ist wieder **Running / Auto**, die eigene Lüfteraufgabe wurde wieder gestartet, UXTUs vorheriger Aufgabenstatus wiederhergestellt und der Original-Hub wieder geöffnet. Der Lüfterhelfer meldete danach `waiting_for_hub`. Der unabhängige Rückkehrhelfer endete ohne Fehler und ohne Eingriff. Installierte App, Lüfter-Binary und geschützte Startup-Freigabe bleiben unverändert auf **A0F4113A…**. Es bleibt kein vorübergehender Dienststopp bestehen; das 70/75-W-Prüfziel wird nicht als abschließend aktiver Dauerzustand ausgegeben.
+
+**02:29:36, Tray-Abschlusskontrolle:** Die unverändert installierte App war mit derselben Dashboard-PID verborgen; `Shell_NotifyIconGetRect` bestätigte ihr tatsächliches Symbol erneut. Die finale Software enthält weiterhin **keinen automatischen HPOmenCap-Stopp**. Kontrollierte HP-Übernahme, längere Profilbeständigkeit und Power-Lifecycle müssen separat implementiert beziehungsweise nachgewiesen werden. Rohdaten und vorbereitete Skripte verbleiben ignoriert unter `.local/research/power-lifecycle-20261024/hp-cap-probe/run-20261025-012250/`.
 
 ## Modern-Standby-Code und begrenzter CPU-Readback — 24. Oktober, 20:53 CEST
 
