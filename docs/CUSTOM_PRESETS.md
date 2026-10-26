@@ -2,6 +2,8 @@
 
 **Leistungsprofile** öffnet den nativen Tab **Custom Presets**, alternativ `presets-ui [id]`. `gpu-ui` bleibt ein kompatibler Einstieg. Der Editor bündelt gespeicherte Vorgaben; er ist kein Nachweis, dass alle angebotenen Parameter auf dem Gerät schreibbar sind.
 
+**Entwicklung `0.9.0-dev.2`:** Das öffentliche **GPU-Leistungslimit (W)** ist wieder vorhanden. Der native Feld-/Speicherweg erhält exakte Milliwattwerte; 90,125 W wurden als 90125 mW gespeichert und beim ausdrücklichen Abwählen entfernt, ohne Hardwareanwendung. Anwendbarkeit hängt von einem lesbaren Original, aktuellen Treibergrenzen und dem öffentlichen NVML-Setter ab. Auf dem Referenzlaptop fehlt der konfigurierte Originalwert in dieser Schnittstelle; der Wert bleibt deshalb nicht anwendbar. Native Kontroll-IDs sind jetzt von der Reihenfolge der Felder getrennt, damit neue Felder den bestehenden V/F-Editor und Automationszugriffe nicht verschieben. Aktueller Nachweis: [GPU_PROFILES.md](GPU_PROFILES.md).
+
 ## Bedienung
 
 1. Ein gespeichertes Preset auswählen oder **Neu** wählen und einen Namen eingeben.

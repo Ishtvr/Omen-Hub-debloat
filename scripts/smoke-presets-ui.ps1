@@ -1,11 +1,11 @@
-﻿# Save-only preset integration. No Apply/Restore/Startup action is invoked.
+# Save-only preset integration. No Apply/Restore/Startup action is invoked.
 #requires -Version 5.1
-param()
+param([string]$Executable='')
 $ErrorActionPreference='Stop'
 # UI labels below are German; pin the app language so the checks stay stable.
 $env:OMEN_HUB_LANG = 'de'
 $taskRepo=Split-Path -Parent $PSScriptRoot
-$taskExe=Join-Path $taskRepo 'dist\Omen Hub++.exe'
+$taskExe=if($Executable){(Resolve-Path -LiteralPath $Executable).Path}else{Join-Path $taskRepo 'dist\Omen Hub++.exe'}
 $taskName='Preset UI '+[Guid]::NewGuid().ToString('N')
 $taskStore=& $taskExe profile-storage|Out-String|ConvertFrom-Json
 $taskProfiles=[IO.Path]::GetFullPath((Join-Path $taskStore.directory 'profiles'))
@@ -102,6 +102,26 @@ try{
  if($taskItem.Count-ne1){throw 'Created preset not found exactly once.'}
  $taskFile=$taskItem[0].FullName;$taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json;$taskId=$taskProfile.id
  if(@($taskProfile.settings|Where-Object feature -eq 'gpu_memory_offset_mhz')[0].value.value-ne-24){throw 'GPU memory edit was not saved.'}
+ # The public wattage adapter has its own original/range contract. Editing
+ # and saving exact watts is metadata-only even when this notebook driver
+ # cannot return a restorable current power limit.
+ $taskPower=[OmenPresetSmoke]::Labeled($taskWindow,'GPU-Leistungslimit (W)')
+ if($taskPower-eq[IntPtr]::Zero){throw 'Public GPU power-limit field is missing.'}
+ $taskPowerId=[OmenPresetSmoke]::Id($taskPower)
+ [void][OmenPresetSmoke]::Message($taskPower,0x00F1,1);Click $taskWindow $taskPowerId
+ [OmenPresetSmoke]::SetWindowText([OmenPresetSmoke]::Control($taskWindow,($taskPowerId+1)),'90,125')
+ Click $taskWindow 704;$null=Wait-Ready $taskWindow 'Preset gespeichert.'
+ $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
+ $taskPowerSetting=@($taskProfile.settings|Where-Object feature -eq 'gpu_power_limit_mw')
+ if($taskPowerSetting.Count-ne1-or$taskPowerSetting[0].value.value-ne90125){throw 'GPU power watts did not save as exact milliwatts.'}
+ $taskPowerPlan=Read-Json @('profile-plan',$taskId)
+ $taskPowerCapability=@($taskPowerPlan.capabilities|Where-Object feature -eq 'gpu_power_limit_mw')
+ if($taskPowerCapability.Count-ne1){throw 'Public GPU power capability missing from plan.'}
+ if($taskPowerCapability[0].access-cne'read_write'-and($taskPowerPlan.applicable-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705)))){throw 'Unavailable driver power control was incorrectly made applicable.'}
+ [void][OmenPresetSmoke]::Message($taskPower,0x00F1,0);Click $taskWindow $taskPowerId
+ Click $taskWindow 704;$null=Wait-Ready $taskWindow 'Preset gespeichert.'
+ $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
+ if(@($taskProfile.settings|Where-Object feature -eq 'gpu_power_limit_mw').Count-ne0){throw 'Unchecked GPU power limit was not omitted.'}
  # Dynamic Boost remains an explicit profile option, including false. The
  # qualified HP flag is available for Apply; Save alone never authorizes startup.
  $taskBoost=[OmenPresetSmoke]::Labeled($taskWindow,'Dynamic Boost')
@@ -203,7 +223,7 @@ try{
  $taskAfterImage=@($taskAfterCurve.nodes|ForEach-Object{@($_.index,$_.voltage_uv,$_.delta_khz)})|ConvertTo-Json -Depth 5 -Compress
  $taskMetadataAfter=@($taskFiles|ForEach-Object{if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{'absent'}})
  if($taskControlImage-cne$taskAfterImage-or($taskMetadataBefore-join',')-cne($taskMetadataAfter-join',')){throw 'Metadata test changed programmed controls or main journal/startup.'}
- [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;create_save_delete=$true;dynamic_boost_on_off_save_reload=$true;dynamic_boost_qualified_apply=$true;saved_only_startup_blocked=$true;cpu_apu_fields_absent=$true;windows_separate_section=$true;windows_values_save_reload=$true;declined_switch_keeps_identity_draft_save_target=$true;cpu_gpu_separate=$true;exact_watt_units=$true;custom_curve_preserved=$true;concurrent_hidden_fields_preserved=$true;unsupported_apply_startup_blocked=$true;hardware_writes=$false;gpu_controls_and_metadata_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\presets-ui-smoke.json') -Encoding UTF8
+ [pscustomobject]@{measured_at=(Get-Date).ToString('o');binary_sha256=(Get-FileHash -LiteralPath $taskExe).Hash;create_save_delete=$true;public_gpu_power_metadata=$true;dynamic_boost_on_off_save_reload=$true;dynamic_boost_qualified_apply=$true;saved_only_startup_blocked=$true;cpu_apu_fields_absent=$true;windows_separate_section=$true;windows_values_save_reload=$true;declined_switch_keeps_identity_draft_save_target=$true;cpu_gpu_separate=$true;exact_watt_units=$true;custom_curve_preserved=$true;concurrent_hidden_fields_preserved=$true;unsupported_apply_startup_blocked=$true;hardware_writes=$false;gpu_controls_and_metadata_unchanged=$true;clean_exit=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $taskRepo '.local\presets-ui-smoke.json') -Encoding UTF8
  'Native custom presets: create, exact units, merged full curve/hidden fields, save/delete, blocked unsafe apply/startup and unchanged hardware passed.'
 }finally{
  if($taskProcess){$taskProcess.Refresh();if(-not$taskProcess.HasExited){Stop-Process -Id $taskProcess.Id};$taskProcess.Dispose()}

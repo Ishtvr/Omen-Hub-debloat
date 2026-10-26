@@ -85,7 +85,8 @@ try{
  $taskCountBefore=@(Get-ChildItem -LiteralPath $taskProfiles -Filter '*.json').Count
  Open-CurvePreset
  $taskText=[OmenPresetCurveSmoke]::AllText($taskWindow)
- if($taskText-match'(?m)^(GPU-Spannungs|VRAM-Spannungs|Bildratenlimit|GPU-Leistungslimit|GPU-Temperaturlimit|GPU-Taktlimit|VRAM-Taktlimit|Eigener GPU-Leistungsrahmen)'){throw 'Retired GPU control remains visible.'}
+ if($taskText-match'(?m)^(GPU-Spannungs|VRAM-Spannungs|Bildratenlimit|GPU-Temperaturlimit|GPU-Taktlimit|VRAM-Taktlimit|Eigener GPU-Leistungsrahmen)'){throw 'Retired GPU control remains visible.'}
+ if($taskText-notmatch'GPU-Leistungslimit'){throw 'Public GPU power-limit field is missing.'}
  # New unnamed preset opens; cancel creates no hidden profile or setting.
  Open-CurveDraft
  $taskCancelledFirst=Select-FirstCurvePoint
@@ -129,7 +130,7 @@ try{
  Close-CurvePreset
  # Old metadata loads; only explicit Save retires removed controls, preserving
  # the full curve and another setting which the lighting UI manages separately.
- $taskRetired=@('gpu_voltage_offset_mv','gpu_memory_voltage_offset_mv','gpu_voltage_limit_mv','gpu_frame_rate_limit','gpu_power_limit_mw','gpu_temperature_limit_c','gpu_core_clock_limit_mhz','gpu_memory_clock_limit_mhz','gpu_custom_tgp','omen_performance_mode')
+ $taskRetired=@('gpu_voltage_offset_mv','gpu_memory_voltage_offset_mv','gpu_voltage_limit_mv','gpu_frame_rate_limit','gpu_temperature_limit_c','gpu_core_clock_limit_mhz','gpu_memory_clock_limit_mhz','gpu_custom_tgp','omen_performance_mode')
  foreach($taskFeature in $taskRetired){
   $taskValue=switch($taskFeature){'gpu_voltage_limit_mv'{'900'}'gpu_frame_rate_limit'{'60'}'gpu_power_limit_mw'{'80000'}'gpu_temperature_limit_c'{'87'}'gpu_core_clock_limit_mhz'{'2000'}'gpu_memory_clock_limit_mhz'{'7000'}'gpu_unleashed'{'true'}'gpu_dynamic_boost'{'true'}'gpu_custom_tgp'{'true'}'omen_performance_mode'{'balanced'}default{'0'}}
   Read-CurveJson @('profile-set',$taskId,$taskFeature,$taskValue)|Out-Null

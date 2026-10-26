@@ -8,6 +8,7 @@ pub mod curve_input;
 pub mod curve_view;
 pub mod fan;
 pub mod features;
+pub mod gpu_power;
 pub mod guardian;
 pub mod hp;
 pub mod hp_mode;

@@ -421,8 +421,8 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
     unsafe {
         let pane = state.pane.get();
         let mut rows = state.rows.borrow_mut();
-        for (index, field) in preset_fields::fields().into_iter().enumerate() {
-            let id = FIELD_BASE + index * FIELD_STRIDE;
+        for field in preset_fields::fields() {
+            let id = FIELD_BASE + field.control_slot() * FIELD_STRIDE;
             let label = if field.unit().is_empty() {
                 field.label().to_string()
             } else {
@@ -1160,6 +1160,14 @@ unsafe extern "system" fn pane_proc(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
     }
 }
 /// Shows what a setting changes and what it does.
+fn field_index(state: &State, id: usize) -> Option<usize> {
+    let slot = id.checked_sub(FIELD_BASE)? / FIELD_STRIDE;
+    state
+        .rows
+        .borrow()
+        .iter()
+        .position(|row| row.field.control_slot() == slot)
+}
 fn explain(hwnd: HWND, state: &State, index: usize) {
     if let Some(row) = state.rows.borrow().get(index) {
         unsafe {
@@ -1429,7 +1437,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     && (id - FIELD_BASE) % FIELD_STRIDE == INFO_OFFSET
                     && notification == BN_CLICKED as usize
                 {
-                    explain(hwnd, state, (id - FIELD_BASE) / FIELD_STRIDE);
+                    if let Some(index) = field_index(state, id) {
+                        explain(hwnd, state, index);
+                    }
                     return 0;
                 }
                 if state.rendering.get() || state.busy.get() {
@@ -1444,7 +1454,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     return 0;
                 }
                 if id >= FIELD_BASE {
-                    let index = (id - FIELD_BASE) / FIELD_STRIDE;
+                    let Some(index) = field_index(state, id) else {
+                        return 0;
+                    };
                     let offset = (id - FIELD_BASE) % FIELD_STRIDE;
                     let is_curve = state
                         .rows

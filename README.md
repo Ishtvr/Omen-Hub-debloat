@@ -2,6 +2,8 @@
 
 **Entwicklungsstand:** Die Veröffentlichung von Beta 0.9.0 wurde zurückgezogen. Ein neuer experimenteller Release wird für den erweiterten Funktionsumfang vorbereitet. Der Quellstand und die bisherigen Prüfnachweise bleiben nachvollziehbar erhalten.
 
+Der aktuelle Umfang und die noch fehlenden Hardwarepfade stehen in [UNLOCKED_STATUS.md](docs/UNLOCKED_STATUS.md). Die Umsetzung dieser Pfade ist ein Entwicklungsauftrag; das bloße Entfernen einer Sperre macht einen fehlenden Hardwareadapter nicht funktionsfähig.
+
 ## Entwicklung, Nutzung und Haftung
 
 **Dieses Programm befindet sich in aktiver Entwicklung.** Funktionen können unvollständig, experimentell oder auf bestimmten Geräten nicht verfügbar sein. Die Anwendung greift auf Leistungs-, Spannungs-, Temperatur- und Lüftereinstellungen zu; ungeeignete Einstellungen oder Programmfehler können Instabilität, Datenverlust und Schäden an Hardware verursachen. Ein sichtbarer Regler ist keine Zusicherung, dass das jeweilige Gerät die Funktion unterstützt.
@@ -41,7 +43,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 .\scripts\build-release.ps1
 ```
 
-Das Buildskript erzeugt `dist/Omen Hub++.exe` und `target/OmenHubPlusPlus-0.9.0-beta.1-x64.zip` samt SHA-256-Prüfsumme. Das ZIP wird aus einem frischen Staging-Ordner erstellt und enthält auch Installer, Release Notes, Buildnachweis und erforderliche Lizenzdateien. Ohne vorbereitete CPU-Module stehen die entsprechenden Hardwarefunktionen im Build nicht zur Verfügung. Laufzeitvoraussetzungen: [CPU-Sensoren](docs/CPU_SENSORS.md).
+Der aktuelle Quellstand trägt die Entwicklungsversion **`0.9.0-dev.2`**. Das Buildskript erzeugt `dist/Omen Hub++.exe` und `target/OmenHubPlusPlus-<Version>-x64.zip` samt SHA-256-Prüfsumme. Das ZIP wird aus einem frischen Staging-Ordner erstellt und enthält auch Installer, den Buildnachweis und erforderliche Lizenzdateien; für Veröffentlichungen kommen versionsbezogene Release Notes hinzu. Ohne vorbereitete CPU-Module stehen die entsprechenden Hardwarefunktionen im Build nicht zur Verfügung. Laufzeitvoraussetzungen: [CPU-Sensoren](docs/CPU_SENSORS.md).
 
 ## Lokale Dateien und Bereinigung
 

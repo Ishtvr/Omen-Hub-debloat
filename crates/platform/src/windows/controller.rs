@@ -1,4 +1,5 @@
 //! One controller owns typed adapters. Capabilities gate writes again at dispatch.
+mod public_power;
 use super::{
     GpuControlsReport, NvidiaIdentity, OffsetState, gpu::NvidiaControl, inventory, power_status,
 };
@@ -54,6 +55,10 @@ pub enum RestoreState {
         identity: NvidiaIdentity,
         state: omen_core::vf::VfState,
         core_offset: OffsetState,
+    },
+    NvidiaPowerLimit {
+        identity: NvidiaIdentity,
+        state: omen_core::gpu_power::PowerLimitState,
     },
     Windows {
         image: super::windows_settings::WindowsImage,
@@ -670,6 +675,9 @@ impl Backend for Controller {
     }
 
     fn capability(&mut self, feature: Feature) -> Capability {
+        if feature == Feature::GpuPowerLimitMw {
+            return self.public_power_capability();
+        }
         if feature == Feature::GraphicsMode {
             return if self.inventory.manufacturer == "HP"
                 && self.inventory.board == "8E35"
@@ -912,6 +920,12 @@ impl Backend for Controller {
     }
 
     fn read(&mut self, feature: Feature) -> Result<Value, String> {
+        if feature == Feature::GpuPowerLimitMw {
+            return self
+                .gpu()?
+                .power_limit()
+                .map(|s| Value::Integer(i64::from(s.current_mw)));
+        }
         if feature == Feature::GraphicsMode {
             return Ok(Value::Choice(mux_choice(super::read_hp_graphics_mode(
                 &self.inventory,
@@ -944,6 +958,9 @@ impl Backend for Controller {
     }
 
     fn capture(&mut self, feature: Feature) -> Result<Captured<RestoreState>, String> {
+        if feature == Feature::GpuPowerLimitMw {
+            return self.capture_public_power();
+        }
         if feature == Feature::GraphicsMode {
             let mode = super::read_hp_graphics_mode(&self.inventory)?;
             let saved = Captured {
@@ -1078,6 +1095,9 @@ impl Backend for Controller {
     fn restore(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Restore state was not captured by this controller session".into());
+        }
+        if matches!(saved.restore, RestoreState::NvidiaPowerLimit { .. }) {
+            return self.restore_public_power(saved);
         }
         if let RestoreState::Windows { image } = &saved.restore {
             self.verify_captured(saved)?;
@@ -1219,6 +1239,9 @@ impl Backend for Controller {
     }
 
     fn verify_captured(&mut self, saved: &Captured<RestoreState>) -> Result<(), String> {
+        if matches!(saved.restore, RestoreState::NvidiaPowerLimit { .. }) {
+            return self.verify_public_power(saved);
+        }
         if self.captured.get(&saved.feature) != Some(saved) {
             return Err("Control verification image is not owned by this session".into());
         }
@@ -1304,6 +1327,7 @@ impl Backend for Controller {
                 state, core_offset, ..
             } => (core_offset, Some(state), None),
             RestoreState::HpKeyboardColors { .. }
+            | RestoreState::NvidiaPowerLimit { .. }
             | RestoreState::HpMaxFan { .. }
             | RestoreState::Windows { .. }
             | RestoreState::HpGpuPower { .. }
@@ -1358,6 +1382,9 @@ impl Backend for Controller {
     }
 
     fn verify_target(&mut self, setting: &Setting) -> Result<Value, String> {
+        if setting.feature == Feature::GpuPowerLimitMw {
+            return self.verify_public_power_target(setting);
+        }
         if setting.feature == Feature::GraphicsMode {
             let actual = self.read(setting.feature)?;
             return if actual == setting.value {
@@ -1550,7 +1577,12 @@ impl Backend for Controller {
         transaction: &PendingTransaction<RestoreState>,
     ) -> Result<(), String> {
         transaction.validate()?;
-        if transaction.requested.iter().any(|s| uses_nvidia(s.feature)) {
+        if transaction.requested.iter().any(|s| {
+            matches!(
+                s.feature,
+                Feature::GpuCoreOffsetMhz | Feature::GpuMemoryOffsetMhz | Feature::GpuVfCurve
+            )
+        }) {
             self.qualifies()?;
         }
         // Same rule as plan/apply/recover: an incidental NVIDIA identity in a
@@ -1565,6 +1597,10 @@ impl Backend for Controller {
         // Validate every image/current value before arming any restore. A user or
         // other controller's unrelated tuning must never be overwritten silently.
         for (saved, requested) in transaction.original.iter().zip(&transaction.requested) {
+            if matches!(saved.restore, RestoreState::NvidiaPowerLimit { .. }) {
+                self.prepare_public_power_recovery(saved, requested)?;
+                continue;
+            }
             if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
                 let live = super::read_hp_graphics_mode(&self.inventory)?;
                 if requested.feature != saved.feature
@@ -1884,6 +1920,9 @@ impl Backend for Controller {
         {
             return Err(capability.reason);
         }
+        if setting.feature == Feature::GpuPowerLimitMw {
+            return self.write_public_power(setting);
+        }
         if setting.feature == Feature::GraphicsMode {
             let Value::Choice(choice) = setting.value else {
                 return Err("Graphics mode needs a choice".into());
@@ -2066,6 +2105,12 @@ impl Backend for Controller {
     }
     fn validate_setting(&mut self, setting: &Setting) -> Result<(), String> {
         setting.validate()?;
+        if setting.feature == Feature::GpuPowerLimitMw {
+            let Value::Integer(value) = setting.value else {
+                return Err("GPU power needs milliwatts".into());
+            };
+            return self.gpu()?.power_limit()?.target(value).map(|_| ());
+        }
         if super::windows_settings::handles(setting.feature) {
             return super::windows_settings::validate(setting.feature, &setting.value);
         }

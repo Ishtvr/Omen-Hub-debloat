@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "omen-core"
-version = "0.9.0-beta.1"
+version = "0.9.0-dev.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "omen-hub-plus-plus"
-version = "0.9.0-beta.1"
+version = "0.9.0-dev.2"
 dependencies = [
  "omen-core",
  "omen-platform",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "omen-platform"
-version = "0.9.0-beta.1"
+version = "0.9.0-dev.2"
 dependencies = [
  "libloading",
  "omen-core",

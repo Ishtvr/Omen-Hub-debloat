@@ -1,5 +1,13 @@
 # GPU-Steuerung und gespeicherte Profile
 
+## Entwicklungsstand 26. Oktober: öffentliches GPU-Wattlimit
+
+Der Quellstand `0.9.0-dev.2` ergänzt einen eigenen NVML-Adapter für `GpuPowerLimitMw`. Er liest den aktuellen konfigurierten Wert und die zulässigen Treibergrenzen in Milliwatt, sichert Geräteidentität und vollständigen Originalzustand im Transaktionsjournal, schreibt genau einmal und prüft den zurückgelesenen Zielwert. Rücksetzung und Wiederaufnahme eines unterbrochenen Profils akzeptieren ausschließlich Original oder eigenen Zielwert bei unveränderten Grenzen. Das Feld **GPU-Leistungslimit (W)** ist wieder im Preseteditor vorhanden. Speichern bleibt eine Metadatenaktion.
+
+Die öffentlichen Verträge stehen in der [NVML-Abfragedokumentation](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html) und den [Gerätebefehlen](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceCommands.html). Der veraltete Power-Management-Mode-GET ist keine zusätzliche Freigabebedingung. Auch der aktuelle Default- oder effektiv erzwungene Grenzwert ersetzt kein lesbares Original des konfigurierten Limits.
+
+**Gerätebefund:** Auf der RTX 5070 Laptop mit 617.42 sind 5000…115000 mW als Bereich lesbar. Der konfigurierte Wert liefert `NVML_ERROR_NOT_SUPPORTED` (3). Die separate öffentliche Feldabfrage bestätigt 115000 mW als effektives Limit; das angeforderte Limit (Feld 192) bleibt nicht unterstützt. Der Adapter sendet in diesem Zustand keinen SET. Es wurde kein Default als Original angenommen und kein Watt-/Spannungswert geändert. Das ist kein Nachweis einer tatsächlichen Leistungsaufnahme von 115 W. Andere Treiber/Geräte mit lesbarem Original können den neuen öffentlichen Adapter anbieten; dafür liegt hier noch keine physische Schreibprobe vor.
+
 Stand: **22. Oktober 2026**. Die Oberfläche bietet getrennte GPU-, CPU- und Windows-Bereiche unter **Leistungsprofile → Custom Presets**. Die GPU-Leistungskurve öffnet direkt einen nativen Editor, auch aus einem neuen oder geänderten Preset. GPU-Watt und Temperatur stehen im Dashboard neben den gemessenen CPU-Werten. Der aktuelle geräteübergreifende Steuerungsnachweis steht in [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md), konkrete Build-/Hardwareergebnisse in [VALIDATION.md](VALIDATION.md).
 
 ## GPU-Verträge

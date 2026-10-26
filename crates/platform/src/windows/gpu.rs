@@ -1,4 +1,5 @@
 //! NVIDIA controls through public NVML contracts. Never calls private NVAPI IDs.
+mod power;
 use super::nvidia::{system_library, text_buffer};
 use libloading::Library;
 use omen_core::{
@@ -61,6 +62,9 @@ pub struct GpuControlsReport {
     pub temperature_c: Option<u32>,
     pub slowdown_temperature_c: Option<u32>,
     pub clock_setter_export: bool,
+    pub power_limit: Result<omen_core::gpu_power::PowerLimitState, String>,
+    pub power_limit_bounds_mw: Result<(u32, u32), String>,
+    pub power_limit_setter_export: bool,
 }
 
 /// Thread-confined RAII driver session. Handles and pointers never outlive its DLL.
@@ -72,10 +76,11 @@ pub(super) struct NvidiaControl {
     uuid: DeviceTextFn,
     vbios: DeviceTextFn,
     driver: SystemTextFn,
-    get_offsets: OffsetFn,
+    get_offsets: Option<OffsetFn>,
     set_offsets: Option<OffsetFn>,
     temperature: Option<ThermalFn>,
     threshold: Option<ThermalFn>,
+    power: power::PowerControl,
 }
 
 fn status(operation: &str, result: i32) -> Result<(), String> {
@@ -106,10 +111,11 @@ impl NvidiaControl {
         let uuid = symbol(&library, b"nvmlDeviceGetUUID\0")?;
         let vbios = symbol(&library, b"nvmlDeviceGetVbiosVersion\0")?;
         let driver = symbol(&library, b"nvmlSystemGetDriverVersion\0")?;
-        let get_offsets = symbol(&library, b"nvmlDeviceGetClockOffsets\0")?;
+        let get_offsets = symbol(&library, b"nvmlDeviceGetClockOffsets\0").ok();
         let set_offsets = symbol(&library, b"nvmlDeviceSetClockOffsets\0").ok();
         let temperature = symbol(&library, b"nvmlDeviceGetTemperature\0").ok();
         let threshold = symbol(&library, b"nvmlDeviceGetTemperatureThreshold\0").ok();
+        let power = power::PowerControl::load(&library);
         // SAFETY: Public no-argument initializer; all shutdown/error paths are paired.
         status("initialize", unsafe { init() })?;
         let mut session = Self {
@@ -124,6 +130,7 @@ impl NvidiaControl {
             set_offsets,
             temperature,
             threshold,
+            power,
         };
         // Construct RAII ownership before enumeration so failures also shut down.
         if let Some(id) = requested_uuid {
@@ -194,7 +201,9 @@ impl NvidiaControl {
         };
         // SAFETY: Exact versioned public C structure; P0/domain fixed by the enum.
         status("clock offset GET", unsafe {
-            (self.get_offsets)(self.handle, &mut value)
+            (self
+                .get_offsets
+                .ok_or("NVML clock-offset GET is unavailable")?)(self.handle, &mut value)
         })?;
         if value.clock_type != clock_type
             || value.pstate != 0
@@ -226,7 +235,24 @@ impl NvidiaControl {
             temperature_c: self.thermal(self.temperature, 0),
             slowdown_temperature_c: self.thermal(self.threshold, 1),
             clock_setter_export: self.set_offsets.is_some(),
+            power_limit: self.power_limit(),
+            power_limit_bounds_mw: self.power.bounds(self.handle),
+            power_limit_setter_export: self.power.can_set(),
         })
+    }
+
+    pub fn power_limit(&self) -> Result<omen_core::gpu_power::PowerLimitState, String> {
+        self.power.read(self.handle)
+    }
+    pub fn power_limit_setter(&self) -> bool {
+        self.power.can_set()
+    }
+    pub fn set_power_limit(
+        &self,
+        expected: &omen_core::gpu_power::PowerLimitState,
+        requested_mw: i64,
+    ) -> Result<(), String> {
+        self.power.write(self.handle, expected, requested_mw)
     }
 
     pub fn thermal_guard(&self, model_threshold_c: u32) -> Result<(), String> {

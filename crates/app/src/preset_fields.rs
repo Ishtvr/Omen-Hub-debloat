@@ -34,7 +34,6 @@ pub const REMOVED_GPU_OPTIONS: &[F] = &[
     F::GpuVoltageOffsetMv,
     F::GpuMemoryVoltageOffsetMv,
     F::GpuVoltageLimitMv,
-    F::GpuPowerLimitMw,
     F::GpuTemperatureLimitC,
     F::GpuCoreClockLimitMhz,
     F::GpuMemoryClockLimitMhz,
@@ -97,6 +96,7 @@ pub fn fields() -> Vec<Field> {
     let rows = [
         (F::GpuCoreOffsetMhz, 0, 0),
         (F::GpuMemoryOffsetMhz, 0, 0),
+        (F::GpuPowerLimitMw, 0, 90000),
         (F::GpuVfCurve, 0, 0),
         (F::MaxFan, 0, 0),
         (F::GpuUnleashed, 0, 0),
@@ -134,6 +134,50 @@ pub fn fields() -> Vec<Field> {
         .collect()
 }
 impl Field {
+    /// Preserve existing native automation IDs as new fields are inserted.
+    /// Layout order is independent of control identity.
+    pub fn control_slot(&self) -> usize {
+        const LEGACY: &[F] = &[
+            F::GpuCoreOffsetMhz,
+            F::GpuMemoryOffsetMhz,
+            F::GpuVfCurve,
+            F::MaxFan,
+            F::GpuUnleashed,
+            F::CpuTemperatureLimitC,
+            F::CpuSlowPptLimitMw,
+            F::CpuPptLimitMw,
+            F::CpuTdcMa,
+            F::CpuEdcMa,
+            F::CpuPboScalar,
+            F::CpuCurveOptimizerAllCore,
+            F::CpuCurveOptimizerPerCore,
+            F::IntelPl1Mw,
+            F::IntelPl2Mw,
+            F::IntelPl4Mw,
+            F::IntelIccMaxMa,
+            F::IntelCpuPowerBalance,
+            F::WindowsBoostMode,
+            F::WindowsMinimumProcessorPercent,
+            F::WindowsMaximumProcessorPercent,
+            F::WindowsProcessorEppPercent,
+            F::WindowsCoreParkingMinPercent,
+            F::WindowsCoreParkingMaxPercent,
+            F::CpuCcdAffinity,
+            F::WindowsEnergyMode,
+            F::WindowsPowerPlan,
+            F::DisplayRefreshRateHz,
+            F::GraphicsMode,
+        ];
+        LEGACY
+            .iter()
+            .position(|f| *f == self.feature)
+            .unwrap_or_else(|| {
+                64 + F::all()
+                    .iter()
+                    .position(|f| *f == self.feature)
+                    .expect("Catalog feature")
+            })
+    }
     /// Display name from the language file (`field.<Feature>`).
     pub fn label(&self) -> &'static str {
         t(&format!("field.{:?}", self.feature))
@@ -197,6 +241,50 @@ impl Field {
         }
     }
 }
+
 pub fn choice_label(choice: C) -> &'static str {
     t(&format!("choice.{choice:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn new_power_field_keeps_chart_cpu_windows_control_ids_and_has_a_unique_identity() {
+        let fields = fields();
+        assert_eq!(
+            fields
+                .iter()
+                .find(|f| f.feature == F::GpuVfCurve)
+                .unwrap()
+                .control_slot(),
+            2
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|f| f.feature == F::CpuPptLimitMw)
+                .unwrap()
+                .control_slot(),
+            7
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|f| f.feature == F::WindowsBoostMode)
+                .unwrap()
+                .control_slot(),
+            18
+        );
+        let slots: std::collections::BTreeSet<_> = fields.iter().map(Field::control_slot).collect();
+        assert_eq!(slots.len(), fields.len());
+        assert!(
+            fields
+                .iter()
+                .find(|f| f.feature == F::GpuPowerLimitMw)
+                .unwrap()
+                .control_slot()
+                >= 64
+        );
+    }
 }
