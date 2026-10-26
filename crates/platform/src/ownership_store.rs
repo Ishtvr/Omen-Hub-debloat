@@ -87,17 +87,21 @@ impl Journal for OwnershipJournal {
 mod tests {
     use super::*;
     use omen_core::ownership::{Identity, Owner, Phase, Snapshot, State, Subject};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     struct TestDirectory(PathBuf);
     impl TestDirectory {
         fn new() -> Self {
             let root = std::env::temp_dir().join(format!(
-                "OmenHubPP-ownership-{}-{}",
+                "OmenHubPP-ownership-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::create_dir(&root).unwrap();
             Self(root)
