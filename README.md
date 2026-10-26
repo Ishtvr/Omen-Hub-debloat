@@ -1,5 +1,46 @@
 # Omen Hub++
 
+Native Windows-Anwendung in Rust zur Steuerung unterstützter HP-OMEN-Laptops: Leistungsprofile, CPU-/GPU-Einstellungen, Lüfterkurven und Tastaturbeleuchtung. Das Ziel ist ein vollständiger Ersatz des ursprünglichen OMEN Gaming Hubs ohne dessen Hintergrunddienste, Werbung oder Telemetrie.
+
+Das Projekt befindet sich in Entwicklung. Hardwarefreigaben gelten nur für die jeweils dokumentierte Geräte-/BIOS-/Treiberversion; vollständiger eigenständiger Betrieb und reale Neustart-/Standby-Übergänge sind noch nicht abschließend geprüft. Aktueller Stand: [Validierung](docs/VALIDATION.md), [Hardwarematrix](docs/HARDWARE_MATRIX.md) und [Roadmap](docs/ROADMAP.md).
+
+## Projektstruktur
+
+| Pfad | Inhalt |
+| --- | --- |
+| `crates/core/` | Plattformunabhängige Profile, Regeln und Wiederherstellungslogik |
+| `crates/platform/` | Windows- und Hardwareadapter |
+| `crates/app/` | Native Oberfläche, Tray, Übersetzungen und Kommandozeile |
+| `scripts/` | Build, Installation und abgegrenzte Prüfabläufe |
+| `docs/` | Architektur, Schnittstellenbeobachtungen und Validierungsnachweise |
+| `.github/` | Automatische Rust-Prüfungen |
+| `.impeccable/` | Versionierte Designkonfiguration und Oberflächenanforderungen; lokale Reviews sind ignoriert |
+
+`PRODUCT.md` beschreibt das Produkt, `DESIGN.md` das Oberflächendesign. Lizenzen und Fremdkomponenten stehen in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Bauen
+
+Voraussetzungen: Rust mit MSVC-Ziel für Windows x64 sowie die Visual-Studio-C++-Buildtools und das Windows SDK.
+
+```powershell
+# Optional: geprüfte CPU-Module und zugehörige Lizenz/Quellen lokal vorbereiten.
+# Das Skript installiert keinen Treiber.
+.\scripts\prepare-cpu-module.ps1
+
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+.\scripts\build-release.ps1
+```
+
+Das Buildskript erzeugt `dist/Omen Hub++.exe` und `target/OmenHubPlusPlus-0.1.0-x64.zip`. Das ZIP enthält auch die Installationsskripte und erforderlichen Lizenzdateien. Ohne vorbereitete CPU-Module stehen die entsprechenden Hardwarefunktionen im Build nicht zur Verfügung. Laufzeitvoraussetzungen: [CPU-Sensoren](docs/CPU_SENSORS.md).
+
+## Lokale Dateien und Bereinigung
+
+Build-Ausgaben (`target/`, `dist/`), Werkzeuge und heruntergeladene Komponenten (`.tools/`), Forschungsdaten und rohe Messprotokolle (`.local/`) sowie lokal installierte Skills (`.agents/`) gehören nicht in Git. Proprietäre DLLs, Treiber, dekompilierter Code und persönliche Diagnoseabbilder werden nicht veröffentlicht. Versioniert werden eigener Quellcode, Tests, Buildskripte, Originalgrafiken und nachvollziehbare Schnittstellen-/Prüfberichte.
+
+Compiler-Caches können bei beendetem Build gelöscht und neu erzeugt werden. Die vorbereiteten Module unter `.tools/pawnio/`, deren Lizenz-/Quellarchive, benötigte Prüfprogramme und Hardware-Messnachweise müssen für weitere Entwicklung erhalten bleiben. Aktuelle Release-Dateien sind von alten Caches zu unterscheiden. Ein pauschales Löschen aller ignorierten Dateien würde auch diese benötigten lokalen Daten entfernen.
+
 <img src="docs/assets/app-icon.png" alt="Omen Hub++ App-Symbol" width="96" align="right">
 
 Eine native, leichtgewichtige Open-Source-Alternative zum OMEN Gaming Hub in Rust. Ziel sind HP-Systemkontrolle und die relevanten Tuning-Möglichkeiten von UXTU in einer einzigen Anwendung: ohne Werbung, Overlay, Telemetrie, Konto oder Hintergrund-Updater.

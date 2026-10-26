@@ -1,5 +1,6 @@
 /target/
 /dist/
+# Local research, proprietary inputs and installed design skills stay off Git.
 /.tools/
 /.local/
 /.agents/
@@ -10,7 +11,34 @@
 !/.impeccable/surface-briefs/**
 !/.impeccable/surfaces/
 !/.impeccable/surfaces/**
-*.pdb
+# Compiled artifacts, installers and diagnostic dumps are release/local files.
+*.exe
 *.dll
 *.sys
+*.pdb
+*.obj
+*.rlib
+*.rmeta
+*.ilk
+*.exp
+*.msi
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+*.dmp
+*.zip
+# Temporary files and local interpreter/editor caches.
+*.log
+*.tmp
+*.bak
+*.py[cod]
+__pycache__/
+.DS_Store
+Thumbs.db
+Desktop.ini
+# Local secrets; only explicitly sanitized examples may be committed.
+.env
+.env.*
+!.env.example
 !docs/**/*.md
