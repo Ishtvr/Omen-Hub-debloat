@@ -70,6 +70,25 @@ if (-not ([Security.Principal.WindowsPrincipal]::new($appIdentity)).IsInRole([Se
     return
 }
 
+# A pending coupled recovery must keep both protected binaries and tasks intact.
+# Serialize against the native qualification owner before any installer action.
+$recoveryGate = [Threading.Mutex]::new($false, 'Global\OmenHubPP.HpControllerOwner')
+$recoveryGateOwned = $false
+try {
+    try { $recoveryGateOwned = $recoveryGate.WaitOne(0) }
+    catch [Threading.AbandonedMutexException] { $recoveryGateOwned = $true }
+    if (-not $recoveryGateOwned) { throw 'An Omen Hub++ controller session is active; installation/removal was blocked.' }
+    foreach ($recoveryFile in @('controller-ownership.json','controller-cooling.json')) {
+        $recoveryPath = Join-Path $appRoot $recoveryFile
+        if (Test-Path -LiteralPath $recoveryPath) {
+            $recoveryItem = Get-Item -LiteralPath $recoveryPath
+            if ($recoveryItem.Length -gt 16384 -or ($recoveryItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Controller recovery record is oversized or redirected; installation/removal was blocked.' }
+            $recoveryRecord = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
+            if ($recoveryRecord.schema -ne 1 -or $recoveryRecord.phase -cnotin @('restored','superseded') -or $recoveryRecord.owner.session -cnotmatch '^[a-fA-F0-9]{64}$') {
+                throw 'Complete controller/cooling recovery before updating or removing either helper.'
+            }
+        }
+    }
 if ((Test-Path -LiteralPath $appRoot) -and ((Get-Item -LiteralPath $appRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     throw 'The installation directory is a reparse point; nothing was changed.'
 }
@@ -150,3 +169,8 @@ foreach ($appShortcut in $(if ($NoDesktopShortcut) { @($appShortcuts[0]) } else 
     ProfileSelected = $false
     HardwareApplied = $false
 } | ConvertTo-Json
+
+} finally {
+    if ($recoveryGateOwned) { $recoveryGate.ReleaseMutex() }
+    $recoveryGate.Dispose()
+}

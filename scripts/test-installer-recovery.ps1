@@ -6,9 +6,10 @@ $testRoot=Join-Path ([IO.Path]::GetTempPath()) ('OmenInstallerGuard-'+[Guid]::Ne
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $taskInstallRoot=$testRoot
 $fanRoot=$testRoot
+$appRoot=$testRoot
 $testPassed=0
 try {
-    foreach($testInstaller in @('install-startup.ps1','install-fan-service.ps1')) {
+    foreach($testInstaller in @('install-startup.ps1','install-fan-service.ps1','install-app.ps1')) {
         $testTokens=$null;$testErrors=$null
         $testAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $testInstaller),[ref]$testTokens,[ref]$testErrors)
         if($testErrors.Count){throw 'Installer syntax failed.'}

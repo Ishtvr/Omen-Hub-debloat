@@ -2,6 +2,16 @@
 
 Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Laptop GPU. Windows x64. Build-Werkzeuge: Rust/Cargo 1.99.0, MSVC-Toolchain. Auf anderen Geräten ist dieser Stand nicht validiert.
 
+## Erste öffentliche Beta 0.9.0 — 26. Oktober 2026
+
+Version **`0.9.0-beta.1`**, Git-Tag **`v0.9.0-beta.1`**, Windows-x64-Binary **3.098.624 Bytes**, SHA-256 **`8B2CCB4E9265173D595DDD817D10CB4CD64A2EC75AD4F3E31E1B8C250696BD0B`**. Versionsressource, ProductVersion/FileVersion und CLI-Hilfe tragen dieselbe Version; das Windows-Prerelease-Flag ist gesetzt. Die Binary ist nicht codesigniert. Gegenüber dem vorherigen Entwicklungsbuild wurden Versions-/Release-Metadaten, Paketierung und der Installer-Rücksetzungsschutz verändert; neue Hardware-Payloads oder Leistungsgrenzen wurden nicht eingeführt.
+
+Formatprüfung, **226 Rust-Tests** (128 Core / 70 Platform / 28 App), **14 Prozessszenarien mit Dateisimulation**, Clippy mit `-D warnings` und Release-Build bestanden. Der App-Installer prüft jetzt wie Startup-/Lüfterinstaller die aktive Sitzungs-Sperre und beide Recovery-Journale, bevor er die geschützte Binary verändert oder entfernt. **60 isolierte Installer-Fixtures** bestanden; sie führen nur die Prüfblöcke gegen temporäre Daten aus.
+
+Die Paketprüfung bestätigte **120 Dateien**, genau eine aktuelle Anwendungs-EXE, Installer, Dokumentation, Rust-Lizenzen und die zu den eingebetteten CPU-Modulen gehörenden Lizenz-/Quellarchive. Die Version im Paket und der EXE-Hash stimmen mit `build-info.json` überein. Eine zusätzliche alte EXE sowie ein als uncommitted markierter Quellstand wurden in Negativproben zurückgewiesen. Das öffentliche Paket wird nach dem Commit neu aus einem geleerten, versionsgebundenen Staging-Ordner erzeugt und gegen den exakten Tag-Commit geprüft; der finale ZIP-Hash steht in der mitveröffentlichten SHA256SUMS-Datei. Lokale Backups, Forschungsdaten und Dateien aus einem älteren `dist/` gelangen nicht in das Paket.
+
+**13:23:56…13:24:00 CET, lesender Gerätecheck:** Die Beta-EXE erkannte den laufenden HPOmenCap und wies das unveränderte CPU-PPT-/Slow-Profil vor Capture/SET ab. Controller-/Treiber-/Prozesszustände und die geprüften Profil-/Startup-/Installations-/Recovery-Dateien blieben unverändert. Vollständiger unelevierter Identitätsaudit weiterhin mit Zugriffsfehler. Keine Installation, Dienstaktion, Leistungs-/Spannungsänderung, neue Lastmessung oder erneuerte Tray-RAM-Qualifikation. Die Grenzen der bisherigen Hardwareproben gelten weiterhin; die Veröffentlichung ist keine Abnahme des vollständigen Betriebs ohne Original-HP-Dienste. [Release Notes](releases/0.9.0-beta.1.md).
+
 ## Gekoppelte Kühlungs-/Dienstwiederherstellung — 26. Oktober 2026
 
 Release **3.098.624 Bytes**, SHA-256 **`76CCEB37C657A5613180B736D95A02B39E72624D4FC2EB9ADA524B923A97EB70`**. `cargo fmt --all -- --check`, **226 Rust-Tests** (128 Core / 70 Platform / 28 App), **14 echte Prozessszenarien mit Dateisimulation**, Clippy aller Targets mit `-D warnings` und gesperrter Release-Build bestanden. Zusätzlich bestanden **40 Installer-Guard-Fixtures**: Sie führen ausschließlich die tatsächlichen Recovery-Prüfblöcke der Installer gegen frische temporäre Dateien aus, ohne Installer-/Aufgaben-/Dienstaktion. Source: `scripts/test-installer-recovery.ps1`.

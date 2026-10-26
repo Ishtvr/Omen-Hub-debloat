@@ -27,6 +27,7 @@ fn main() {
         .expect("Valid app icon");
     resources.push(win_resource::version_resource(&win_resource::VersionInfo {
         version: parts,
+        prerelease: !env!("CARGO_PKG_VERSION_PRE").is_empty(),
         strings: &[
             ("FileDescription", "Omen Hub++"),
             ("FileVersion", version),

@@ -3,14 +3,41 @@ $ErrorActionPreference = 'Stop'
 $taskRepo = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $taskRepo
 try {
+    $taskMetadata = cargo metadata --format-version 1 --locked --filter-platform x86_64-pc-windows-msvc | Out-String | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed.' }
+    $taskRootPackage = $taskMetadata.packages | Where-Object { $_.name -eq 'omen-hub-plus-plus' }
+    $taskVersion = $taskRootPackage.version
+    if ($taskVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Invalid package version.' }
+    # A fresh, version-specific staging directory excludes old local binaries,
+    # backups and unrelated files already present in dist/ from public releases.
+    $taskDist = [IO.Path]::GetFullPath((Join-Path $taskRepo ('target\package-staging\' + $taskVersion)))
+    $taskStageRoot = [IO.Path]::GetFullPath((Join-Path $taskRepo 'target\package-staging'))
+    if ([IO.Path]::GetDirectoryName($taskDist) -cne $taskStageRoot) { throw 'Invalid release staging target.' }
+    $taskCheck = $taskDist
+    while ($taskCheck.Length -ge $taskRepo.Length) {
+        if ((Test-Path -LiteralPath $taskCheck) -and ((Get-Item -LiteralPath $taskCheck -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Release staging ancestor is redirected.' }
+        if ($taskCheck -eq $taskRepo) { break }
+        $taskCheck = [IO.Path]::GetDirectoryName($taskCheck)
+    }
+    if (Test-Path -LiteralPath $taskDist) {
+        $taskPendingDirectories = [Collections.Generic.Stack[string]]::new()
+        $taskPendingDirectories.Push($taskDist)
+        while ($taskPendingDirectories.Count) {
+            foreach ($taskEntry in Get-ChildItem -LiteralPath $taskPendingDirectories.Pop() -Force) {
+                if ($taskEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Release staging contains a redirected entry.' }
+                if ($taskEntry.PSIsContainer) { $taskPendingDirectories.Push($taskEntry.FullName) }
+            }
+        }
+        Remove-Item -LiteralPath $taskDist -Recurse -Force
+    }
     cargo build --release --locked -p omen-hub-plus-plus
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
-    $taskDist = Join-Path $taskRepo 'dist'
     New-Item -ItemType Directory -Force -Path $taskDist | Out-Null
     $taskOutput = Join-Path $taskDist 'Omen Hub++.exe'
     Copy-Item -LiteralPath (Join-Path $taskRepo 'target\release\omen-hub-pp.exe') -Destination $taskOutput
     # build.rs embeds icon and version information together; both must be present.
-    if ((Get-Item -LiteralPath $taskOutput).VersionInfo.ProductName -ne 'Omen Hub++') { throw 'Embedded icon/version resources are missing.' }
+    $taskInfo = (Get-Item -LiteralPath $taskOutput).VersionInfo
+    if ($taskInfo.ProductName -ne 'Omen Hub++' -or $taskInfo.ProductVersion -cne $taskVersion -or $taskInfo.IsPreRelease -ne ($taskVersion -match '-')) { throw 'Embedded product/version/prerelease resources differ.' }
     $taskCpuSource = Join-Path $taskRepo '.tools\pawnio\source-0.2.11'
     $taskModules = Join-Path $taskRepo '.tools\pawnio\modules-0.2.11'
     $taskSmu = Test-Path -LiteralPath (Join-Path $taskModules 'RyzenSMU.bin')
@@ -37,11 +64,11 @@ try {
 
     Copy-Item -LiteralPath (Join-Path $taskRepo 'docs\POWER_LIFECYCLE.md') -Destination $taskDist
     Copy-Item -LiteralPath (Join-Path $taskRepo 'docs\HP_CONTROL.md') -Destination $taskDist
+    $taskReleaseNotes = Join-Path $taskRepo ('docs\releases\' + $taskVersion + '.md')
+    if (Test-Path -LiteralPath $taskReleaseNotes) { Copy-Item -LiteralPath $taskReleaseNotes -Destination (Join-Path $taskDist 'RELEASE_NOTES.md') }
 
     # License texts of every crate linked into the Windows executable, from the
     # locked graph. Build-only and dev-only dependencies are excluded.
-    $taskMetadata = cargo metadata --format-version 1 --locked --filter-platform x86_64-pc-windows-msvc | Out-String | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed.' }
     $taskPackages = @{}
     foreach ($taskPackage in $taskMetadata.packages) { $taskPackages[$taskPackage.id] = $taskPackage }
     $taskNodes = @{}
@@ -59,7 +86,6 @@ try {
         }
     }
     $taskRustNotices = Join-Path $taskDist 'third-party\rust'
-    if (Test-Path -LiteralPath $taskRustNotices) { Remove-Item -LiteralPath $taskRustNotices -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $taskRustNotices | Out-Null
     $taskRows = @('# Rust dependencies', '', 'Crates in the locked graph of the Windows executable, including compile-time procedural macros. License files are copied from each crate source.', '', '| Crate | Version | License | License files |', '| --- | --- | --- | --- |')
     $taskMissing = @()
@@ -81,16 +107,43 @@ try {
     Set-Content -LiteralPath (Join-Path $taskDist 'third-party\RUST-DEPENDENCIES.md') -Encoding UTF8 -Value $taskRows
 
     $taskHash = (Get-FileHash -LiteralPath $taskOutput -Algorithm SHA256).Hash
-    $taskVersion = ($taskMetadata.packages | Where-Object { $_.id -eq $taskRoot }).version
+    $taskCommit = $null
+    $taskDirty = $null
+    if (Test-Path -LiteralPath (Join-Path $taskRepo '.git')) {
+        $taskCommit = (git rev-parse HEAD | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot identify release source commit.' }
+        $taskDirty = @(git status --porcelain).Count -ne 0
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect release source state.' }
+    }
+    [ordered]@{
+        schema = 1
+        product = 'Omen Hub++'
+        version = $taskVersion
+        target = 'x86_64-pc-windows-msvc'
+        source_commit = $taskCommit
+        source_dirty = $taskDirty
+        binary_sha256 = $taskHash
+        cpu_sensor_module = Test-Path -LiteralPath (Join-Path $taskModules 'AMDFamily17.bin')
+        cpu_smu_module = $taskSmu
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskDist 'build-info.json') -Encoding UTF8
     $taskZip = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-x64.zip"
     if (Test-Path -LiteralPath $taskZip) { Remove-Item -LiteralPath $taskZip }
     Get-ChildItem -Recurse -LiteralPath $taskDist | Where-Object { $_.LastWriteTime.Year -lt 1980 } | ForEach-Object { $_.LastWriteTime = (Get-Date) }
     Compress-Archive -Path (Join-Path $taskDist '*') -DestinationPath $taskZip
+    # Keep the familiar local output current without including unrelated dist
+    # files in the archive. Only the clean staging directory is packaged.
+    $taskLocalDist = Join-Path $taskRepo 'dist'
+    New-Item -ItemType Directory -Force -Path $taskLocalDist | Out-Null
+    Get-ChildItem -LiteralPath $taskDist -Force | Copy-Item -Destination $taskLocalDist -Recurse -Force
+    $taskChecksum = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-SHA256SUMS.txt"
+    $taskZipHash = (Get-FileHash -LiteralPath $taskZip -Algorithm SHA256).Hash
+    [IO.File]::WriteAllText($taskChecksum,($taskZipHash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($taskZip) + "`n"),[Text.UTF8Encoding]::new($false))
     [pscustomobject]@{
-        File = $taskOutput
+        File = Join-Path $taskLocalDist 'Omen Hub++.exe'
         Bytes = (Get-Item -LiteralPath $taskOutput).Length
         SHA256 = $taskHash
         Package = $taskZip
-        PackageSHA256 = (Get-FileHash -LiteralPath $taskZip -Algorithm SHA256).Hash
+        PackageSHA256 = $taskZipHash
+        Checksums = $taskChecksum
     } | Format-List
 } finally { Pop-Location }

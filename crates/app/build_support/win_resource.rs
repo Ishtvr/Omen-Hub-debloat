@@ -12,6 +12,7 @@ pub const ICON_GROUP_ID: u16 = 1;
 
 pub struct VersionInfo<'a> {
     pub version: [u16; 4],
+    pub prerelease: bool,
     pub strings: &'a [(&'a str, &'a str)],
 }
 
@@ -97,9 +98,9 @@ pub fn version_resource(info: &VersionInfo<'_>) -> (u16, u16, Vec<u8>) {
         (major << 16) | minor,
         (patch << 16) | build,
         0x3F,
-        0,
-        0x0004_0004, // VOS_NT_WINDOWS32
-        1,           // VFT_APP
+        if info.prerelease { 0x02 } else { 0 }, // VS_FF_PRERELEASE
+        0x0004_0004,                            // VOS_NT_WINDOWS32
+        1,                                      // VFT_APP
         0,
         0,
         0,
@@ -202,6 +203,7 @@ mod tests {
     fn version_tree_is_aligned_and_sized() {
         let (kind, _, data) = version_resource(&VersionInfo {
             version: [0, 1, 0, 0],
+            prerelease: true,
             strings: &[("ProductName", "Omen Hub++")],
         });
         assert_eq!(kind, RT_VERSION);
@@ -210,6 +212,7 @@ mod tests {
         // Header (6) + "VS_VERSION_INFO\0" (32) + padding (2) = fixed info at 40.
         assert_eq!(&data[40..44], &0xFEEF_04BDu32.to_le_bytes());
         assert_eq!(&data[48..52], &1u32.to_le_bytes());
+        assert_eq!(&data[68..72], &2u32.to_le_bytes());
         let text: Vec<u16> = data
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))

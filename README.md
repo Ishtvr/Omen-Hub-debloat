@@ -1,5 +1,7 @@
 # Omen Hub++
 
+**Erste Vorabversion: [Beta 0.9.0 herunterladen](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.9.0-beta.1).** Installationshinweise und Einschränkungen: [Release Notes](docs/releases/0.9.0-beta.1.md).
+
 Native Windows-Anwendung in Rust zur Steuerung unterstützter HP-OMEN-Laptops: Leistungsprofile, CPU-/GPU-Einstellungen, Lüfterkurven und Tastaturbeleuchtung. Das Ziel ist ein vollständiger Ersatz des ursprünglichen OMEN Gaming Hubs ohne dessen Hintergrunddienste, Werbung oder Telemetrie.
 
 Das Projekt befindet sich in Entwicklung. Hardwarefreigaben gelten nur für die jeweils dokumentierte Geräte-/BIOS-/Treiberversion; vollständiger eigenständiger Betrieb und reale Neustart-/Standby-Übergänge sind noch nicht abschließend geprüft. Aktueller Stand: [Validierung](docs/VALIDATION.md), [Hardwarematrix](docs/HARDWARE_MATRIX.md) und [Roadmap](docs/ROADMAP.md).
@@ -33,7 +35,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 .\scripts\build-release.ps1
 ```
 
-Das Buildskript erzeugt `dist/Omen Hub++.exe` und `target/OmenHubPlusPlus-0.1.0-x64.zip`. Das ZIP enthält auch die Installationsskripte und erforderlichen Lizenzdateien. Ohne vorbereitete CPU-Module stehen die entsprechenden Hardwarefunktionen im Build nicht zur Verfügung. Laufzeitvoraussetzungen: [CPU-Sensoren](docs/CPU_SENSORS.md).
+Das Buildskript erzeugt `dist/Omen Hub++.exe` und `target/OmenHubPlusPlus-0.9.0-beta.1-x64.zip` samt SHA-256-Prüfsumme. Das ZIP wird aus einem frischen Staging-Ordner erstellt und enthält auch Installer, Release Notes, Buildnachweis und erforderliche Lizenzdateien. Ohne vorbereitete CPU-Module stehen die entsprechenden Hardwarefunktionen im Build nicht zur Verfügung. Laufzeitvoraussetzungen: [CPU-Sensoren](docs/CPU_SENSORS.md).
 
 ## Lokale Dateien und Bereinigung
 
