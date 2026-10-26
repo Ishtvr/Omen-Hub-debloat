@@ -1,6 +1,18 @@
-# Validierungsstand — 25. Oktober 2026
+# Validierungsstand — 26. Oktober 2026
 
 Referenz: HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13, Ryzen 9 8940HX, RTX 5070 Laptop GPU. Windows x64. Build-Werkzeuge: Rust/Cargo 1.99.0, MSVC-Toolchain. Auf anderen Geräten ist dieser Stand nicht validiert.
+
+## Gekoppelte Kühlungs-/Dienstwiederherstellung — 26. Oktober 2026
+
+Release **3.098.624 Bytes**, SHA-256 **`76CCEB37C657A5613180B736D95A02B39E72624D4FC2EB9ADA524B923A97EB70`**. `cargo fmt --all -- --check`, **226 Rust-Tests** (128 Core / 70 Platform / 28 App), **14 echte Prozessszenarien mit Dateisimulation**, Clippy aller Targets mit `-D warnings` und gesperrter Release-Build bestanden. Zusätzlich bestanden **40 Installer-Guard-Fixtures**: Sie führen ausschließlich die tatsächlichen Recovery-Prüfblöcke der Installer gegen frische temporäre Dateien aus, ohne Installer-/Aufgaben-/Dienstaktion. Source: `scripts/test-installer-recovery.ps1`.
+
+Die native Entwicklungsroute verbindet das geschützte Dienstjournal mit einer vor der Max-Auswahl gespeicherten Kühlungsverantwortung. Sie bestätigt die vorhandene eigene Aufgaben-/Prozessidentität, frische Ausgabe und Heartbeat, erhält Originalbytes und widerruft spätes STOP vor der Rückgabe. Der Wächter bleibt bis zum Abschluss beider Journale zuständig. Der Lüfterhelfer serialisiert seine Schreibpakete, überlebt kurze Sperrkonflikte und meldet diese ausdrücklich. Ein Task-Update darf die offene Wiederherstellung nicht entfernen; ein blockierter Helfer wird vom Installer nicht mehr gewaltsam beendet. Umfang und feste thermische Grenzen: [HP_CONTROL.md](HP_CONTROL.md).
+
+Die fünf zusätzlichen Prozess-Fixtures prüfen Besitzerabbruch vor STOP sowie nach bereits zurückgegebenem Dienst, eine misslungene Dienstrückkehr mit erhaltener Max-Auswahl, Verlust des simulierten Kühlungshelfers und die Bewahrung einer externen Auswahl. Echte Prozesse/Job-Grenzen und Dateien werden benutzt; Dienstzustand, Lüfterausgabe und deren Bestätigung bleiben Simulation. Weitere Core-/Dateiprüfungen decken alte/fremde Meldungen, falsche PID-Erzeugungszeit, fehlenden Heartbeat, Originalschutz, Rückgabewiderruf und konkurrierende UI-/Recovery-Schreiber ab.
+
+**12:42:34…39 CET, lesender Geräteabgleich:** `check-hp-control.ps1` prüfte genau dieses Release und das unveränderte Nutzerprofil `Test`. HPOmenCap war Running; das CPU-PPT-/Slow-Profil wurde deshalb vor Capture/SET abgewiesen. Vollständiger unelevierter Identitätsaudit meldete weiterhin fehlende Rechte und wurde nicht als bestätigt ausgegeben. Die abgeglichenen Controller-/Treiber-/Prozesszustände sowie Profil-, Startup-, Installations- und Recovery-Dateien blieben gleich. Keine Dienstaktionen, Hardware-/Leistungsschreibungen oder Installation. App und Lüfterhelfer unter Program Files blieben auf dem bisherigen **A0F4113A…**-Build; Original-Hub und Afterburner liefen weiter.
+
+Die neue `hp-control-qualify --confirm-service-test`-Route wurde in diesem Durchgang **nicht am echten Dienst ausgeführt**. Ihre geschützte gleichversionige Installation, tatsächliche Max-Kühlung ohne HPOmenCap, vollständige Rückgabe, längerer eigenständiger Betrieb, Power-Übergänge und das gesamte Tray-Speicherbudget sind noch separat zu qualifizieren. Frühere Hardware-/RAM-Messungen werden nicht auf dieses Release übertragen. Das Produktziel ist ausdrücklich der vollständige Betrieb ohne ursprüngliche HP-/OMEN-Dienste; der temporäre OEM-Rückweg gehört nur zur Entwicklungsprobe.
 
 ## Unabhängiger Rückkehrwächter — 25. Oktober, 15:49 CET
 

@@ -392,6 +392,8 @@ impl ProfileStore {
     }
     /// Dashboard fan switch, read by the elevated fan service every cycle.
     pub fn save_fan_mode(&self, mode: FanMode) -> Result<(), String> {
+        #[cfg(windows)]
+        let _preference = lock_fan_preference(&self.root)?;
         atomic_json(
             &self.root.join("fan-mode.json"),
             &serde_json::json!({"schema": 1, "mode": mode.key()}),
@@ -486,6 +488,21 @@ impl ProfileStore {
             Ok(None)
         }
     }
+}
+
+/// All native fan-preference writers use the same fixed lock file. It is held
+/// only across compare/write, never while waiting for a helper or firmware.
+#[cfg(windows)]
+pub(crate) fn lock_fan_preference(root: &Path) -> Result<fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+        .open(root.join("fan-preference.lock"))
+        .map_err(|e| format!("Fan preference is busy or unavailable: {e}"))
 }
 
 impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
@@ -666,6 +683,23 @@ mod tests {
         store.save_close_to_tray(true).unwrap();
         assert!(store.close_to_tray());
         fs::remove_file(store.root().join("app-settings.json")).unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn cooling_restore_and_dashboard_preference_writes_are_serialized() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        store.save_fan_mode(FanMode::Curve).unwrap();
+        let original = fs::read(store.root().join("fan-mode.json")).unwrap();
+        let lock = lock_fan_preference(store.root()).unwrap();
+        assert!(store.save_fan_mode(FanMode::Max).is_err());
+        assert_eq!(
+            fs::read(store.root().join("fan-mode.json")).unwrap(),
+            original
+        );
+        drop(lock);
+        store.save_fan_mode(FanMode::Max).unwrap();
+        assert_eq!(store.fan_mode(), FanMode::Max);
     }
     #[test]
     fn quick_switches_persist_and_read_legacy_fan_files() {

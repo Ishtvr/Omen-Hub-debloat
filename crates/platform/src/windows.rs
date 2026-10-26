@@ -6,6 +6,7 @@ mod cpu;
 mod cpu_hardware;
 mod cpu_tuning;
 mod fan_service;
+mod fan_task;
 mod gpu;
 mod gpu_support;
 pub mod guardian;

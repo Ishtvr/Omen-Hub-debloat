@@ -3,7 +3,7 @@
 use super::*;
 use crate::windows::guardian::{self, Outcome, ParentProcess, Request, Target};
 use omen_core::{
-    guardian::{ParentState, Trigger},
+    guardian::{Observation, ParentState, Trigger},
     ownership::{Journal, Phase, Record},
 };
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,10 @@ pub struct Report {
     guardian_pid: u32,
     recorded_at_unix_seconds: u64,
     start_requested: bool,
+    #[serde(default)]
+    cooling_phase: Option<omen_core::cooling_override::Phase>,
+    #[serde(default)]
+    cooling_error: Option<String>,
     result: Result<Outcome, String>,
 }
 struct ReturnTarget {
@@ -23,10 +27,51 @@ struct ReturnTarget {
     backend: ServiceController,
     owner: Owner,
     expected: Identity,
+    cooling: cooling::Cooling,
+    last_maintenance: Option<Instant>,
+    awaiting_cooling_after_lock: bool,
+    cooling_error: Option<String>,
 }
 impl Target for ReturnTarget {
     fn record(&mut self) -> Result<Option<Record>, String> {
         self.journal.load()
+    }
+    fn observation(&mut self) -> Result<Option<Observation>, String> {
+        let service = self.journal.load()?;
+        let cooling = self.cooling.load()?;
+        Observation::coupled(
+            &self.owner,
+            &self.expected,
+            service.as_ref(),
+            cooling.as_ref(),
+        )
+    }
+    fn maintain(&mut self) -> Result<(), String> {
+        if self
+            .last_maintenance
+            .is_some_and(|v| v.elapsed() < Duration::from_secs(2))
+        {
+            return Ok(());
+        }
+        self.last_maintenance = Some(Instant::now());
+        // A service operation can temporarily own the hardware lease. The fan
+        // worker reports that wait explicitly and renews maximum afterwards.
+        let _hardware = match super::super::ControlLease::acquire() {
+            Ok(lease) => lease,
+            Err(error) if error == "Another Omen Hub++ hardware transaction is running" => {
+                self.awaiting_cooling_after_lock = true;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        drop(_hardware);
+        if self.awaiting_cooling_after_lock {
+            self.awaiting_cooling_after_lock = false;
+            return Ok(()); // one normal two-second helper cycle to acknowledge
+        }
+        let result = self.cooling.maintain(&self.owner, &self.expected);
+        self.cooling_error = result.as_ref().err().cloned();
+        result
     }
     fn recover(&mut self, _trigger: Trigger, parent: ParentState) -> Result<Phase, String> {
         // The parent's lifetime mutex is abandoned only after actual exit.
@@ -36,16 +81,14 @@ impl Target for ReturnTarget {
         } else {
             None
         };
-        let _hardware = super::super::ControlLease::acquire()?;
-        require_hardware_recovery_complete()?;
-        ownership::release(
+        handoff::return_session(
             &mut self.backend,
             &mut self.journal,
+            &self.cooling,
             &self.owner,
             &self.expected,
         )
-        .map(|r| r.phase)
-        .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))
+        .map(|r| r.service.map_or(Phase::Restored, |s| s.phase))
     }
 }
 pub(super) fn run() -> Result<(), String> {
@@ -61,6 +104,21 @@ pub(super) fn run() -> Result<(), String> {
     // Decode any existing record before claiming readiness; never treat a bad
     // recovery ledger as an empty one and let the parent issue STOP.
     let _ = journal.load()?;
+    let cooling = cooling::Cooling::open(true)?;
+    let duty = cooling
+        .load()?
+        .ok_or("Guardian needs a durable cooling checkpoint before readiness")?;
+    if duty.owner != request.owner
+        || duty.original_service.identity != request.identity
+        || duty.phase != omen_core::cooling_override::Phase::PendingMaximum
+        || !duty
+            .helper
+            .binary_sha256
+            .eq_ignore_ascii_case(&installation.sha256)
+    {
+        return Err("Guardian cooling readiness belongs to a different session/build".into());
+    }
+    super::super::fan_task::verify(&duty.helper.binary_sha256, false)?;
     let service = Service::open(READ_ACCESS | SERVICE_START)?
         .ok_or("Guardian cannot open the original HPOmenCap")?;
     let (snapshot, _, image) = audit(&service)?;
@@ -72,6 +130,7 @@ pub(super) fn run() -> Result<(), String> {
         identity: snapshot.identity,
         _image: image,
         guardian: None,
+        cooling_owner: None,
         start_requests: 0,
     };
     let mut target = ReturnTarget {
@@ -79,6 +138,10 @@ pub(super) fn run() -> Result<(), String> {
         backend,
         owner: request.owner.clone(),
         expected: request.identity.clone(),
+        cooling,
+        last_maintenance: None,
+        awaiting_cooling_after_lock: false,
+        cooling_error: None,
     };
     guardian::write_frame(&mut std::io::stdout(), &guardian::ready(&request)?)?;
     let result = guardian::monitor(&request, &parent, &input, &mut target);
@@ -90,6 +153,14 @@ pub(super) fn run() -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |t| t.as_secs()),
         start_requested: target.backend.start_requests != 0,
+        cooling_phase: target
+            .cooling
+            .load()
+            .ok()
+            .flatten()
+            .filter(|r| r.owner == target.owner)
+            .map(|r| r.phase),
+        cooling_error: target.cooling_error,
         result,
     };
     crate::profile_store::atomic_json(&directory.join("controller-guardian-last.json"), &report)?;

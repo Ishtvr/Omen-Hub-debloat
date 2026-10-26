@@ -1,6 +1,28 @@
 # Kontrollierte HP-Steuerung
 
-## Stand vom 25. Oktober 2026
+## Stand vom 26. Oktober 2026
+
+**Ziel bleibt der Betrieb ohne die ursprünglichen HP-/OMEN-Dienste.** Die Dienst-Rückgabe ist ausschließlich die Absicherung einer begrenzten Entwicklungs-/Migrationsprobe. Sie ist keine Runtime-Abhängigkeit der eigenen Hardwareadapter. Ein fehlender HPOmenCap wird für normale CPU-Profile akzeptiert; die App installiert oder startet ihn dort nicht. Die vollständige Unabhängigkeit aller Funktionen, insbesondere Beleuchtungs-/Hotkey- und Power-Lifecycle, ist noch nicht am Gerät nachgewiesen.
+
+### Gekoppelte Kühlungszuständigkeit
+
+Die native Qualifikationsroute speichert vor der ersten Änderung der Lüfterauswahl ein getrenntes, geschütztes `controller-cooling.json`. Es enthält die unveränderten Originalbytes, dieselbe Besitzer-/Dienstidentität wie das Dienstjournal und Hash/PID/Kernel-Erzeugungszeit des eigenen Lüfterhelfers. Beschädigte oder fremde aktive Datensätze sperren eine neue Sitzung; abgeschlossene Originale werden archiviert. Eigene UI- und Recovery-Schreiber serialisieren Vergleich und Austausch der Lüfterdatei über eine kurze Dateisperre.
+
+Der eigene Helfer muss bereits als **Kurve oder Max** laufen. Die Route übernimmt keine unbestätigte BIOS-Automatik. Der unabhängige Wächter bestätigt seine Bereitschaft vor dem Umschalten auf Maximum. Danach sind eine frische Max-Meldung, ein seit dieser Vorbereitung gesendeter Heartbeat und physisch mindestens **4000 RPM beider Lüfter** erforderlich. Die Kühlung wird für den Dienstaufruf nicht angehalten. Ihre Schreibpakete benutzen die Hardware-Sperre; bei belegter Sperre meldet der Helfer `waiting_for_control`, bleibt aktiv und erneuert danach Heartbeat/Maximum. Ein blockierter Zyklus wird nicht als erfolgreiches Max-Readback ausgegeben.
+
+Statusmeldungen sind an den tatsächlich lebenden Prozess gebunden. Zusätzlich geprüft werden geschützte Datei und Installationsquittung, Benutzer/Sitzung, erhöhte Berechtigung, der exakte `fan-service`-Aufruf und die vorhandene Aufgabenaktion. Die Aufgabe muss IgnoreNew, unbegrenzte Laufzeit und Weiterbetrieb bei Akkuwechsel vorgeben. Veraltete Statusdateien, wiederverwendete PIDs, eine bloße Dashboard-Instanz oder ein unbestätigter BIOS-Status zählen nicht als aktive Kühlung.
+
+Die Rückgabe widerruft zuerst die weitere Übernahme unter derselben Sperre wie STOP. Anschließend wird der ursprüngliche Dienstzustand bestätigt und erst dann die vorherige Lüfterauswahl bytegenau zurückgeschrieben. Ein abgestürzter eigener Helfer darf nur über seine bereits vorhandene, erneut geprüfte Aufgabe gestartet werden; bei noch gewähltem Maximum muss er dieses vor dem Absenken frisch bestätigen. Eine externe gültige Auswahl bleibt erhalten und wird als `superseded` bezeichnet. Offene Hardware-/Dienstrücksetzung erlaubt kein automatisches Absenken. Der Wächter endet erst, wenn **beide** Zuständigkeiten abgeschlossen sind. Sein Bericht enthält Kühlungsphase und gegebenenfalls den Anlass eines Kühlungsfehlers.
+
+Die Installer sperren Update/Entfernung, solange die Übernahme aktiv oder eines der beiden Recovery-Journale offen/unklar ist. Der Lüfterinstaller verlangt reguläres Prozessende; der gewaltsame Upgrade-Fallback ist entfernt.
+
+### Begrenzter nativer Prüfablauf
+
+Der ausdrücklich optierte CLI-Einstieg `hp-control-qualify --confirm-service-test` verwendet eine identisch geschützte aktuelle App und einen eigenen Helfer desselben Builds. Original-Hub und andere bekannte Tuning-Controller müssen vorher geschlossen sein. Voraussetzung sind Netzbetrieb, frische CPU-Tctl unter 80 °C, GPU unter 75 °C, IR unter 50 °C und nach dem Hochlaufen die Mindestdrehzahlen. Er hält den exakt qualifizierten HPOmenCap einmal an, liest sechs Temperatur-/Lüfter-/Versorgungsaufnahmen bei eigener Kühlung und gibt anschließend die Ausgangszustände zurück. Er setzt keine CPU-/GPU-Leistungs- oder Spannungswerte und ändert keine Starttypen oder Treiber. Abbruch, fehlende Sensoren und ausstehende Rückgabe werden getrennt erfasst. Es gibt weiterhin keinen automatischen Dienststopp im Dashboard oder Anmeldestart.
+
+**Prüfgrenze dieses Builds:** 226 Rust-Tests, 14 echte Prozessszenarien mit ausschließlich dateisimuliertem Dienst/Kühlungszustand und 40 isolierte Installer-Guard-Fixtures. Die fünf neuen Prozessfälle betreffen Abbruch vor STOP, Abbruch nach Dienstrückkehr, misslungene Dienstrückkehr mit erhaltenem Maximum, Helferausfall und eine externe Auswahl. Diese Simulation belegt keine physische Drehzahl. Die neue native Route wurde noch nicht an HPOmenCap geschaltet. Messstand und Binary-Identität: [VALIDATION.md](VALIDATION.md).
+
+### Vorherige Grundlagen vom 25. Oktober
 
 Die eigene Übernahme-Engine ist als plattformunabhängige Zustandslogik, getrenntes Recovery-Journal und fester Windows-Adapter implementiert. Der unabhängige Rückkehrwächter ist inzwischen mit echten Prozess-Fixtures und ausschließlich simuliertem Dienst geprüft. **Die normale App hält HPOmenCap weiterhin nicht automatisch an.** Ein dauerhaft aktiver Übernahme-Schalter, automatischer Anmeldestart und die gekoppelte Kühlungs-/Power-Lifecycle-Abnahme sind noch offen. Die Bibliotheksschnittstelle dient der nächsten beaufsichtigten Qualifikation; sie ist keine Freigabe für unbeaufsichtigten Ersatzbetrieb.
 

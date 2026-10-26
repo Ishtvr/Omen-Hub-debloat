@@ -17,7 +17,7 @@ use windows::{
     core::{BSTR, Interface},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, LocalFree},
+    Foundation::{CloseHandle, HANDLE, LocalFree},
     Security::{
         Authentication::Identity::{GetUserNameExW, NameSamCompatible},
         Authorization::ConvertSidToStringSidW,
@@ -40,7 +40,7 @@ fn sam_name() -> Result<String, String> {
 
 /// COM normalizes UserId to a name; native task XML retains the principal SID.
 /// Comments, extra principals and SID text elsewhere must not satisfy this check.
-fn verify_principal_xml(xml: &str, sid: &str) -> Result<(), String> {
+pub(super) fn verify_principal_xml(xml: &str, sid: &str) -> Result<(), String> {
     use quick_xml::{Reader, events::Event};
     if xml.len() > 65536 {
         return Err("Task XML exceeds its inspection bound".into());
@@ -170,9 +170,14 @@ pub fn verify_startup_profile(
 }
 
 pub fn current_user_sid() -> Result<String, String> {
+    unsafe { process_user_sid(GetCurrentProcess()) }
+}
+/// # Safety
+/// The caller keeps a valid queryable process handle alive for this call.
+pub(super) unsafe fn process_user_sid(process: HANDLE) -> Result<String, String> {
     let mut token = ptr::null_mut();
     // SAFETY: Token output is initialized; query-only access to this process.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
     let result = (|| {
@@ -229,7 +234,7 @@ pub fn current_user_sid() -> Result<String, String> {
     result
 }
 
-fn file_hash(path: &std::path::Path) -> Result<String, String> {
+pub(super) fn file_hash(path: &std::path::Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let mut buffer = [0; 8192];
@@ -308,7 +313,7 @@ pub fn verify_startup_installation() -> Result<StartupInstallation, String> {
 }
 
 /// Fixed machine Known Folder, not a caller-controlled ProgramFiles variable.
-fn installation_root() -> Result<PathBuf, String> {
+pub(super) fn installation_root() -> Result<PathBuf, String> {
     use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath};
     let mut directory = ptr::null_mut();
     let result =

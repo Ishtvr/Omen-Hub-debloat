@@ -1,6 +1,6 @@
 //! Private same-image process protocol. No service/driver operations here.
 use omen_core::{
-    guardian::{Decision, Finish, LinkState, ParentState, Trigger, Watch},
+    guardian::{Decision, Finish, LinkState, Observation, ParentState, Trigger, Watch},
     ownership::{Identity, Owner, Phase, Record},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -371,6 +371,15 @@ pub enum Outcome {
 }
 pub trait Target {
     fn record(&mut self) -> Result<Option<Record>, String>;
+    fn observation(&mut self) -> Result<Option<Observation>, String> {
+        self.record()?
+            .as_ref()
+            .map(Observation::from_service)
+            .transpose()
+    }
+    fn maintain(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     fn recover(&mut self, trigger: Trigger, parent: ParentState) -> Result<Phase, String>;
 }
 /// The callback implementations define the fixed subject. This loop can only
@@ -384,10 +393,30 @@ pub fn monitor(
     let mut watch = Watch::new(request.owner.clone(), request.identity.clone())?;
     let began = Instant::now();
     loop {
-        let record = target.record()?;
+        let record = target.observation()?;
         let state = parent.state();
-        match watch.observe(began.elapsed(), state, link_state(input), record.as_ref())? {
-            Decision::Wait => std::thread::sleep(Duration::from_millis(100)),
+        match watch.observe_session(began.elapsed(), state, link_state(input), record.as_ref())? {
+            Decision::Wait => {
+                if record
+                    .as_ref()
+                    .is_some_and(|r| r.owner == request.owner && !r.complete)
+                    && target.maintain().is_err()
+                {
+                    if state == ParentState::Unknown {
+                        return Err(
+                            "Cooling failed while owner liveness is unknown; recovery retained"
+                                .into(),
+                        );
+                    }
+                    return target
+                        .recover(Trigger::CoolingUnavailable, state)
+                        .map(|phase| Outcome::Recovered {
+                            trigger: Trigger::CoolingUnavailable,
+                            phase,
+                        });
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             Decision::Finish(reason) => return Ok(Outcome::Finished { reason }),
             Decision::Recover(trigger) => {
                 return target

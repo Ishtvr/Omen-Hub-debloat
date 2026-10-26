@@ -1,7 +1,10 @@
 //! Fixed HPOmenCap inspection and explicit session backend. No driver/service
 //! configuration is changed. The dashboard never acquires this backend itself.
+mod cooling;
 mod guard;
+mod handoff;
 pub use guard::Report as GuardianReport;
+pub use handoff::{ScopedSession, qualify, recover_controller};
 use omen_core::{
     Inventory,
     ownership::{self, Identity, Owner, Snapshot, State, Subject},
@@ -375,6 +378,7 @@ struct ServiceController {
     identity: Identity,
     _image: std::fs::File,
     guardian: Option<super::guardian::GuardianProcess>,
+    cooling_owner: Option<Owner>,
     start_requests: u32,
 }
 impl ServiceController {
@@ -390,6 +394,7 @@ impl ServiceController {
             identity: snapshot.identity,
             _image: image,
             guardian: None,
+            cooling_owner: None,
             start_requests: 0,
         })
     }
@@ -420,6 +425,11 @@ impl ownership::Backend for ServiceController {
         Ok(snapshot)
     }
     fn stop(&mut self, expected: &Snapshot) -> Result<(), String> {
+        let owner = self
+            .cooling_owner
+            .as_ref()
+            .ok_or("Durable cooling responsibility is required before STOP")?;
+        cooling::Cooling::open(true)?.verify_maximum(owner, &expected.identity)?;
         self.guardian
             .as_mut()
             .ok_or("A ready independent guardian is required before STOP")?
@@ -464,6 +474,7 @@ pub struct Inspection {
     pub audit: Result<Option<(Snapshot, Configuration)>, String>,
     pub known_controller_processes: Result<Vec<String>, String>,
     pub recovery: Result<Option<ownership::Record>, String>,
+    pub cooling_recovery: Result<Option<omen_core::cooling_override::Checkpoint>, String>,
     pub last_guardian: Result<Option<GuardianReport>, String>,
     pub automatic_takeover_enabled: bool,
     pub services_changed: bool,
@@ -485,6 +496,7 @@ pub fn inspect(inventory: &Inventory) -> Inspection {
         audit,
         known_controller_processes: known_controllers(),
         recovery: recovery_record(),
+        cooling_recovery: cooling::Cooling::open(false).and_then(|c| c.load()),
         last_guardian: guard::last_report(),
         automatic_takeover_enabled: false,
         services_changed: false,
@@ -618,199 +630,26 @@ pub fn recovery_record() -> Result<Option<ownership::Record>, String> {
     .load()
 }
 
-/// Explicit repair only: never STOP, never repair a driver or change a start
-/// type. A running or inaccessible owner, another user and changed config block
-/// recovery. Normal dashboard/logon paths do not invoke this command.
-pub fn recover_controller() -> Result<ownership::Record, String> {
-    use ownership::Journal;
-    let _lifetime = super::ControlLease::hp_ownership()?;
-    let _hardware = super::ControlLease::acquire()?;
-    require_hardware_recovery_complete()?;
-    let mut journal = protected_journal()?;
-    let record = journal
-        .load()?
-        .ok_or("No interrupted HP controller session exists")?;
-    if record.owner.user != super::current_user_sid()? {
-        return Err("Controller recovery belongs to another user".into());
-    }
-    if record.phase.complete() {
-        return Ok(record);
-    }
-    let live = liveness(&record.owner);
-    if !matches!(live, ownership::OwnerLiveness::Dead) {
-        return Err(
-            "Controller owner is alive or inaccessible; no service command was sent".into(),
-        );
-    }
-    // Recovery opens START only. Even a faulty future caller cannot issue STOP
-    // through this handle; image/config verification still precedes START.
-    let service = Service::open(READ_ACCESS | SERVICE_START)?
-        .ok_or("HPOmenCap is absent; recovery retained")?;
-    let (snapshot, _, image) = audit(&service)?;
-    let mut backend = ServiceController {
-        service,
-        identity: snapshot.identity.clone(),
-        _image: image,
-        guardian: None,
-        start_requests: 0,
-    };
-    ownership::recover(&mut backend, &mut journal, &snapshot.identity, live)
-        .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))
-}
-
-/// Library-level handover for subsequent supervised qualification. Not exposed
-/// as an application acquire command yet: the independent lifetime guardian and
-/// cooling handoff must be qualified before enabling unattended use.
-/// Create it in a dedicated owner process, never the dashboard thread: failed
-/// acquisition must let that owner exit so interrupted recovery can proceed.
-///
-/// The native scope restores on normal return/unwind; fatal process exit leaves
-/// durable recovery for `hp-control-recover`, never a false restored record.
-pub struct ScopedSession {
-    backend: ServiceController,
-    journal: crate::ownership_store::OwnershipJournal,
-    record: ownership::Record,
-    finished: bool,
-    auto_restore: bool,
-    _lifetime: super::ControlLease,
-}
-impl ScopedSession {
-    pub fn acquire_for_qualification(
-        inventory: &Inventory,
-        consent: ownership::Consent,
-    ) -> Result<Self, String> {
-        let lifetime = super::ControlLease::hp_ownership()?;
-        let _hardware = super::ControlLease::acquire()?;
-        require_hardware_recovery_complete()?;
-        if !known_controllers()?.is_empty() {
-            return Err(
-                "Close the original Hub and other tuning controllers before handover".into(),
-            );
-        }
-        if super::power_status().ac_connected != Some(true) {
-            return Err("Supervised handover requires AC power".into());
-        }
-        let cooling = super::read_cooling_snapshot(inventory)?;
-        let cool = cooling.temperature_batch_valid
-            && cooling
-                .cpu
-                .result
-                .as_ref()
-                .ok()
-                .and_then(|v| v.temperature_c)
-                .is_some_and(|v| v.is_finite() && (1.0..80.0).contains(&v))
-            && cooling
-                .gpu
-                .result
-                .as_ref()
-                .ok()
-                .and_then(|v| v.temperature_c)
-                .is_some_and(|v| (1..75).contains(&v))
-            && cooling.fans.result.as_ref().is_ok_and(|v| {
-                v.speeds.cpu_rpm.is_some_and(|v| v >= 4000)
-                    && v.speeds.gpu_rpm.is_some_and(|v| v >= 4000)
-            });
-        if !cool {
-            return Err(
-                "Supervised handover requires fresh cool sensors and both fans >=4000 RPM".into(),
-            );
-        }
-        let mut journal = protected_journal()?;
-        if ownership::Journal::load(&journal)?.is_some_and(|r| !r.phase.complete()) {
-            return Err("Pending controller recovery blocks another qualification".into());
-        }
-        let mut backend = ServiceController::prepare_explicit_session(inventory)?;
-        let identity = backend.identity().clone();
-        let owner = current_owner_identity()?;
-        let request = super::guardian::Request {
-            schema: 1,
-            owner: owner.clone(),
-            identity: identity.clone(),
-        };
-        backend.guardian = Some(super::guardian::GuardianProcess::spawn_self(
-            &request,
-            &["hp-control-guardian".into()],
-        )?);
-        let record = ownership::acquire(&mut backend, &mut journal, owner, &identity, consent)
-            .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))?;
-        let mut scope = Self {
-            backend,
-            journal,
-            record,
-            finished: false,
-            auto_restore: true,
-            _lifetime: lifetime,
-        };
-        scope.verify()?;
-        Ok(scope)
-    }
-    pub fn verify(&mut self) -> Result<(), String> {
-        if self.finished {
-            return Err("Controller scope is already released".into());
-        }
-        self.backend
-            .guardian
-            .as_mut()
-            .ok_or("Controller guardian is absent")?
-            .ensure_running()?;
-        if !known_controllers()?.is_empty() {
-            return Err("Another tuning controller became active during handover".into());
-        }
-        ownership::verify_owned(
-            &mut self.backend,
-            &self.journal,
-            &self.record.owner,
-            &self.record.original.identity,
-        )
-        .map(|_| ())
-        .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error))
-    }
-    pub fn release(&mut self) -> Result<ownership::Record, String> {
-        // A failed explicit release leaves durable recovery. Drop must not
-        // silently retry a START whose actual result could be ambiguous.
-        let _hardware = super::ControlLease::acquire()?;
-        require_hardware_recovery_complete()?;
-        self.auto_restore = false;
-        let result = ownership::release(
-            &mut self.backend,
-            &mut self.journal,
-            &self.record.owner,
-            &self.record.original.identity,
-        )
-        .map_err(|e| serde_json::to_string(&e).unwrap_or(e.error));
-        self.finished = ownership::Journal::load(&self.journal)
-            .ok()
-            .flatten()
-            .is_some_and(|r| r.owner == self.record.owner && r.phase.complete());
-        if self.finished {
-            if let Some(guardian) = self.backend.guardian.as_mut() {
-                guardian.disconnect();
-                let _ = guardian.wait_for_exit(Duration::from_secs(2));
-            }
-        }
-        result
-    }
-}
 pub fn run_guardian_process() -> Result<(), String> {
     guard::run()
 }
-impl Drop for ScopedSession {
-    fn drop(&mut self) {
-        if !self.finished && self.auto_restore && require_hardware_recovery_complete().is_ok() {
-            if let Ok(_hardware) = super::ControlLease::acquire() {
-                // All failures retain the ledger. Explicit release is the path
-                // that reports the result to a future user-facing coordinator.
-                let _ = ownership::release(
-                    &mut self.backend,
-                    &mut self.journal,
-                    &self.record.owner,
-                    &self.record.original.identity,
-                );
+
+/// Retry only mutex acquisition, never an ambiguous service control request.
+fn hardware_lease(budget: Duration) -> Result<super::ControlLease, String> {
+    let deadline = Instant::now() + budget;
+    loop {
+        match super::ControlLease::acquire() {
+            Ok(lease) => return Ok(lease),
+            Err(error)
+                if error == "Another Omen Hub++ hardware transaction is running"
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
             }
+            Err(error) => return Err(error),
         }
     }
 }
-
 fn require_hardware_recovery_complete() -> Result<(), String> {
     hardware_recovery_gate(crate::profile_store::ProfileStore::user_data()?.pending())
 }

@@ -4,7 +4,7 @@
 //! no qualified GET; stopping alone is not proof of a BIOS handover.
 //! The same service pins the foreground program to the saved CCD selection.
 use super::{
-    CpuHardwareReader,
+    ControlLease, CpuHardwareReader,
     hp::{HpBios, Read},
     nvidia::GpuTemperature,
 };
@@ -19,7 +19,8 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_ABANDONED, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
     },
     System::{
         Diagnostics::ToolHelp::{
@@ -27,8 +28,8 @@ use windows_sys::Win32::{
             TH32CS_SNAPPROCESS,
         },
         Threading::{
-            CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, OpenEventW, ReleaseMutex, ResetEvent,
-            SetEvent, WaitForSingleObject,
+            CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentProcess, GetProcessTimes,
+            OpenEventW, ReleaseMutex, ResetEvent, SetEvent, WaitForSingleObject,
         },
     },
 };
@@ -36,6 +37,146 @@ use windows_sys::Win32::{
 const CYCLE: Duration = Duration::from_secs(2);
 /// The Hub sends its heartbeat every 30 s; stay well inside that window.
 const HEARTBEAT: Duration = Duration::from_secs(20);
+const LEASE_RETRY: Duration = Duration::from_millis(50);
+const CYCLE_LEASE_ATTEMPTS: usize = 6;
+const RELEASE_LEASE_ATTEMPTS: usize = 41;
+const HARDWARE_BUSY: &str = "Another Omen Hub++ hardware transaction is running";
+
+enum WriteAccess<T> {
+    Acquired(T),
+    Busy,
+    Stop,
+}
+/// Every acquisition is nonblocking. Bound only the explicit retry waits;
+/// failed access/handle creation remains an error, not presumed contention.
+fn acquire_write_access<T>(
+    attempts: usize,
+    mut acquire: impl FnMut() -> Result<T, String>,
+    mut wait: impl FnMut(Duration) -> Result<bool, String>,
+) -> Result<WriteAccess<T>, String> {
+    for attempt in 0..attempts {
+        match acquire() {
+            Ok(lease) => return Ok(WriteAccess::Acquired(lease)),
+            Err(error) if error == HARDWARE_BUSY => {
+                if attempt + 1 < attempts && wait(LEASE_RETRY)? {
+                    return Ok(WriteAccess::Stop);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(WriteAccess::Busy)
+}
+
+#[derive(Clone, Copy)]
+struct ProcessIdentity {
+    id: u32,
+    started: u64,
+}
+impl ProcessIdentity {
+    fn current() -> Result<Self, String> {
+        let mut created: FILETIME = unsafe { std::mem::zeroed() };
+        let mut exited = created;
+        let mut kernel = created;
+        let mut user = created;
+        // SAFETY: Current-process pseudo-handle and exact writable FILETIMEs.
+        if unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let started = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        if started == 0 {
+            return Err("Fan process creation identity is unavailable".into());
+        }
+        Ok(Self {
+            id: std::process::id(),
+            started,
+        })
+    }
+}
+fn heartbeat_needed(
+    previous: Option<FanMode>,
+    mode: FanMode,
+    elapsed: Option<Duration>,
+    blocked: bool,
+) -> bool {
+    (mode == FanMode::Max && previous != Some(FanMode::Max))
+        || blocked
+        || elapsed.is_none_or(|elapsed| elapsed >= HEARTBEAT)
+}
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|time| time.as_millis().try_into().ok())
+        .unwrap_or(0)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CoolingRelease {
+    NoWrite,
+    Maximum,
+    Vendor,
+}
+fn release_locked<T>(
+    control: &mut fan::SoftwareControl,
+    acquire: impl FnOnce() -> Result<T, String>,
+    vendor: impl FnOnce() -> Result<bool, String>,
+    maximum: impl FnOnce() -> Result<(), String>,
+) -> Result<CoolingRelease, String> {
+    let mut vendor_took_over = false;
+    let issued = control.release(|| {
+        let _lease = acquire()?;
+        if vendor()? {
+            vendor_took_over = true;
+            Ok(())
+        } else {
+            maximum()
+        }
+    })?;
+    if vendor_took_over {
+        control.vendor_active();
+        Ok(CoolingRelease::Vendor)
+    } else if issued {
+        Ok(CoolingRelease::Maximum)
+    } else {
+        Ok(CoolingRelease::NoWrite)
+    }
+}
+fn release_maximum(
+    control: &mut fan::SoftwareControl,
+    bios: &HpBios,
+) -> Result<CoolingRelease, String> {
+    release_locked(
+        control,
+        || match acquire_write_access(RELEASE_LEASE_ATTEMPTS, ControlLease::acquire, |delay| {
+            std::thread::sleep(delay);
+            Ok(false)
+        })? {
+            WriteAccess::Acquired(lease) => Ok(lease),
+            _ => Err(
+                "Hardware transaction stayed busy; maximum-cooling handover is unconfirmed".into(),
+            ),
+        },
+        || {
+            hub_running().ok_or(
+                "Controller ownership is unknown; safe cooling release cannot be dispatched".into(),
+            )
+        },
+        || {
+            bios.set_fan_levels(fan::MAX_LEVEL, fan::MAX_LEVEL)
+                .map_err(|e| e.to_string())
+        },
+    )
+}
 /// While the original Hub runs it owns the fans; the service waits.
 const HUB_PROCESSES: [&str; 2] = [
     "omencommandcenterbackground.exe",
@@ -142,6 +283,11 @@ pub fn request_stop() -> Result<bool, String> {
 #[derive(Debug, Serialize)]
 pub struct FanServiceStatus {
     pub schema: u32,
+    pub process_id: u32,
+    /// Kernel process creation FILETIME, paired with PID to reject stale files.
+    pub process_started: u64,
+    /// Last successful heartbeat in this process, never a status refresh time.
+    pub last_heartbeat_unix_ms: Option<u64>,
     pub state: &'static str,
     pub detail: String,
     pub cpu_c: Option<f64>,
@@ -153,6 +299,7 @@ pub struct FanServiceStatus {
     /// Programs currently pinned to the saved CCD selection.
     pub ccd_pinned: usize,
     pub updated_unix_s: u64,
+    pub updated_unix_ms: u64,
 }
 
 /// None means enumeration failed, not that a vendor actually took ownership.
@@ -259,12 +406,16 @@ pub fn run_until(
     if inventory.manufacturer != "HP" || inventory.board != "8E35" || inventory.bios != "F.13" {
         return Err("Fan control is qualified only for HP8E35/F.13".into());
     }
+    let instance = ProcessIdentity::current()?;
     let bios = HpBios::new(inventory).map_err(|e| e.to_string())?;
     // Idle BIOS/Hub-waiting states do not open a kernel reader or NVIDIA DLL.
     let mut cpu = None;
     let mut gpu: Option<GpuTemperature> = None;
     let mut smoother = (Smoother::default(), Smoother::default());
     let mut last_heartbeat: Option<Instant> = None;
+    let mut last_heartbeat_unix_ms = None;
+    let mut last_written_mode = None;
+    let mut write_was_blocked = false;
     let mut control = fan::SoftwareControl::default();
     let mut protection = 0u8;
     let ccd_masks = super::ccd::ccd_masks();
@@ -292,31 +443,37 @@ pub fn run_until(
             } = &mut pinning;
             enforcer.tick(processes, target);
             let ccd_pinned = enforcer.pinned();
-            let now = || {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs())
-            };
-            let idle = |state: &'static str, detail: String| FanServiceStatus {
-                schema: 1,
-                state,
-                detail,
-                cpu_c: None,
-                gpu_c: None,
-                ir_c: None,
-                protection: 0,
-                cpu_level: 0,
-                gpu_level: 0,
-                ccd_pinned,
-                updated_unix_s: now(),
+            let heartbeat_for_idle = last_heartbeat_unix_ms;
+            let idle = |state: &'static str, detail: String| {
+                let updated_unix_ms = unix_ms();
+                FanServiceStatus {
+                    schema: 1,
+                    process_id: instance.id,
+                    process_started: instance.started,
+                    last_heartbeat_unix_ms: heartbeat_for_idle,
+                    state,
+                    detail,
+                    cpu_c: None,
+                    gpu_c: None,
+                    ir_c: None,
+                    protection: 0,
+                    cpu_level: 0,
+                    gpu_level: 0,
+                    ccd_pinned,
+                    updated_unix_s: updated_unix_ms / 1000,
+                    updated_unix_ms,
+                }
             };
             let pause = |control: &mut fan::SoftwareControl,
                          detail: String|
              -> Result<FanServiceStatus, String> {
-                control.release(|| {
-                    bios.set_fan_levels(fan::MAX_LEVEL, fan::MAX_LEVEL)
-                        .map_err(|e| e.to_string())
-                })?;
+                let release = release_maximum(control, &bios)?;
+                if release == CoolingRelease::Vendor {
+                    return Ok(idle(
+                        "waiting_for_hub",
+                        omen_core::message::msg("fan.status.hub_running", &[]),
+                    ));
+                }
                 if control.handover_pending() {
                     Ok(FanServiceStatus {
                         cpu_level: fan::MAX_LEVEL,
@@ -337,6 +494,7 @@ pub fn run_until(
             if vendor {
                 control.vendor_active();
                 last_heartbeat = None;
+                last_written_mode = None;
                 cpu = None;
                 gpu = None;
                 report(&idle(
@@ -399,11 +557,6 @@ pub fn run_until(
                 // heartbeat/level SET, including a new arm after BIOS/Hub waiting.
                 super::cooling::FanControl::new(inventory)?.capture()?;
             }
-            if last_heartbeat.is_none_or(|t| t.elapsed() >= HEARTBEAT) {
-                control.arm();
-                protection = bios.heartbeat().map_err(|e| e.to_string())?;
-                last_heartbeat = Some(Instant::now());
-            }
             if max {
                 cpu = None;
                 gpu = None;
@@ -427,10 +580,61 @@ pub fn run_until(
                 .ok()
                 .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
                 .map(|t| t.celsius);
+            // All sensor/layout reads above happen without the hardware lease.
+            // A bounded busy cycle preserves responsibility and stays alive;
+            // it must not publish a fresh Max acknowledgement or renew OMCC.
+            let write_lease = match acquire_write_access(
+                CYCLE_LEASE_ATTEMPTS,
+                ControlLease::acquire,
+                &mut stop,
+            )? {
+                WriteAccess::Acquired(lease) => lease,
+                WriteAccess::Stop => return Ok(()),
+                WriteAccess::Busy => {
+                    write_was_blocked = true;
+                    report(&idle("waiting_for_control", "Hardware transaction is busy; cooling output is pending and maximum will be established when the lease returns".into()));
+                    if stop(CYCLE.saturating_sub(started.elapsed()))? {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
+            if stop(Duration::ZERO)? {
+                return Ok(());
+            }
+            if hub_running().ok_or("Original controller enumeration failed before fan write")? {
+                control.vendor_active();
+                last_heartbeat = None;
+                last_written_mode = None;
+                drop(write_lease);
+                report(&idle(
+                    "waiting_for_hub",
+                    omen_core::message::msg("fan.status.hub_running", &[]),
+                ));
+                if stop(CYCLE.saturating_sub(started.elapsed()))? {
+                    return Ok(());
+                }
+                continue;
+            }
+            if heartbeat_needed(
+                last_written_mode,
+                mode,
+                last_heartbeat.map(|time| time.elapsed()),
+                write_was_blocked,
+            ) {
+                control.arm();
+                protection = bios.heartbeat().map_err(|e| e.to_string())?;
+                last_heartbeat = Some(Instant::now());
+                last_heartbeat_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|time| time.as_millis().try_into().ok());
+            }
             // Maximum is unconditional and works without loading sensor drivers.
             // A curve may never lower cooling when its GPU reader is unavailable.
             let full = !max
-                && (gpu_c.is_none()
+                && (write_was_blocked
+                    || gpu_c.is_none()
                     || fan::emergency(
                         cpu_c.map(|t| t as f32),
                         gpu_c.map(|t| t as f32),
@@ -446,8 +650,15 @@ pub fn run_until(
             control.arm();
             bios.set_fan_levels(cpu_level, gpu_level)
                 .map_err(|e| e.to_string())?;
+            last_written_mode = Some(mode);
+            write_was_blocked = false;
+            drop(write_lease);
+            let updated_unix_ms = unix_ms();
             report(&FanServiceStatus {
                 schema: 1,
+                process_id: instance.id,
+                process_started: instance.started,
+                last_heartbeat_unix_ms,
                 state: if full {
                     "full_cooling"
                 } else if max {
@@ -463,7 +674,8 @@ pub fn run_until(
                 cpu_level,
                 gpu_level,
                 ccd_pinned,
-                updated_unix_s: now(),
+                updated_unix_s: updated_unix_ms / 1000,
+                updated_unix_ms,
             });
             if stop(CYCLE.saturating_sub(started.elapsed()))? {
                 return Ok(());
@@ -476,18 +688,19 @@ pub fn run_until(
     let release = match hub_running() {
         Some(true) => {
             control.vendor_active();
-            Ok(false)
+            Ok(CoolingRelease::Vendor)
         }
-        Some(false) => control.release(|| {
-            bios.set_fan_levels(fan::MAX_LEVEL, fan::MAX_LEVEL)
-                .map_err(|e| e.to_string())
-        }),
+        Some(false) => release_maximum(&mut control, &bios),
         None => Err("Controller ownership is unknown; safe release could not be dispatched".into()),
     };
     drop(pinning);
-    if control.handover_pending() {
+    let updated_unix_ms = unix_ms();
+    if control.handover_pending() && release.is_ok() {
         report(&FanServiceStatus {
             schema: 1,
+            process_id: instance.id,
+            process_started: instance.started,
+            last_heartbeat_unix_ms,
             state: "handover_pending",
             detail: omen_core::message::msg("fan.status.handover", &[]),
             cpu_c: None,
@@ -497,9 +710,26 @@ pub fn run_until(
             cpu_level: fan::MAX_LEVEL,
             gpu_level: fan::MAX_LEVEL,
             ccd_pinned: 0,
-            updated_unix_s: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
+            updated_unix_s: updated_unix_ms / 1000,
+            updated_unix_ms,
+        });
+    } else if let Err(error) = &release {
+        report(&FanServiceStatus {
+            schema: 1,
+            process_id: instance.id,
+            process_started: instance.started,
+            last_heartbeat_unix_ms,
+            state: "handover_failed",
+            detail: error.clone(),
+            cpu_c: None,
+            gpu_c: None,
+            ir_c: None,
+            protection: 0,
+            cpu_level: 0,
+            gpu_level: 0,
+            ccd_pinned: 0,
+            updated_unix_s: updated_unix_ms / 1000,
+            updated_unix_ms,
         });
     }
     match (result, release) {
@@ -579,6 +809,9 @@ mod tests {
     fn fan_service_status_serializes_with_schema() {
         let status = FanServiceStatus {
             schema: 1,
+            process_id: 42,
+            process_started: 1234,
+            last_heartbeat_unix_ms: Some(1234567889000),
             state: "curve",
             detail: String::new(),
             cpu_c: Some(65.5),
@@ -589,10 +822,171 @@ mod tests {
             gpu_level: 25,
             ccd_pinned: 1,
             updated_unix_s: 1234567890,
+            updated_unix_ms: 1234567890123,
         };
         let text = serde_json::to_string(&status).unwrap();
         assert!(text.contains(r#""schema":1"#));
         assert!(text.contains(r#""state":"curve""#));
         assert!(text.contains(r#""cpu_level":25"#));
+        assert!(text.contains(r#""process_id":42"#));
+        assert!(text.contains(r#""process_started":1234"#));
+        assert!(text.contains(r#""last_heartbeat_unix_ms":1234567889000"#));
+        assert!(text.contains(r#""updated_unix_ms":1234567890123"#));
+    }
+
+    #[test]
+    fn write_contention_has_bounded_wait_and_honors_stop() {
+        let mut calls = 0;
+        let mut waited = Duration::ZERO;
+        let access = acquire_write_access(
+            CYCLE_LEASE_ATTEMPTS,
+            || {
+                calls += 1;
+                Err::<(), _>(HARDWARE_BUSY.into())
+            },
+            |duration| {
+                waited += duration;
+                Ok(false)
+            },
+        )
+        .unwrap();
+        assert!(matches!(access, WriteAccess::Busy));
+        assert_eq!(calls, CYCLE_LEASE_ATTEMPTS);
+        assert_eq!(waited, Duration::from_millis(250));
+        let access = acquire_write_access(
+            CYCLE_LEASE_ATTEMPTS,
+            || Err::<(), _>(HARDWARE_BUSY.into()),
+            |_| Ok(true),
+        )
+        .unwrap();
+        assert!(matches!(access, WriteAccess::Stop));
+        assert!(
+            acquire_write_access(
+                CYCLE_LEASE_ATTEMPTS,
+                || Err::<(), _>("access denied".into()),
+                |_| panic!("permission failure must not retry")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cooling_release_holds_lease_and_rechecks_vendor_before_writing() {
+        use std::{cell::Cell, rc::Rc};
+        struct Lease(Rc<Cell<bool>>);
+        impl Drop for Lease {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let held = Rc::new(Cell::new(false));
+        let mut control = fan::SoftwareControl::default();
+        assert_eq!(
+            release_locked::<()>(
+                &mut control,
+                || panic!("idle must not acquire"),
+                || panic!("idle must not query"),
+                || panic!("idle must not write")
+            )
+            .unwrap(),
+            CoolingRelease::NoWrite
+        );
+        control.arm();
+        assert_eq!(
+            release_locked(
+                &mut control,
+                || {
+                    held.set(true);
+                    Ok(Lease(held.clone()))
+                },
+                || {
+                    assert!(held.get());
+                    Ok(false)
+                },
+                || {
+                    assert!(held.get());
+                    Ok(())
+                }
+            )
+            .unwrap(),
+            CoolingRelease::Maximum
+        );
+        assert!(!held.get());
+        control.arm();
+        assert_eq!(
+            release_locked(
+                &mut control,
+                || {
+                    held.set(true);
+                    Ok(Lease(held.clone()))
+                },
+                || {
+                    assert!(held.get());
+                    Ok(true)
+                },
+                || panic!("do not overwrite a newly active vendor")
+            )
+            .unwrap(),
+            CoolingRelease::Vendor
+        );
+        assert!(!held.get());
+        assert!(!control.handover_pending());
+    }
+
+    #[test]
+    fn failed_lease_does_not_acknowledge_maximum_or_drop_responsibility() {
+        let mut control = fan::SoftwareControl::default();
+        control.arm();
+        assert!(
+            release_locked::<()>(
+                &mut control,
+                || Err("busy".into()),
+                || panic!("no lease"),
+                || panic!("no lease")
+            )
+            .is_err()
+        );
+        assert!(!control.handover_pending());
+        assert_eq!(
+            release_locked(&mut control, || Ok(()), || Ok(false), || Ok(())).unwrap(),
+            CoolingRelease::Maximum
+        );
+        assert!(control.handover_pending());
+    }
+
+    #[test]
+    fn entering_max_and_resuming_after_contention_require_a_fresh_heartbeat() {
+        let recent = Some(Duration::from_secs(1));
+        assert!(heartbeat_needed(
+            Some(FanMode::Curve),
+            FanMode::Max,
+            recent,
+            false
+        ));
+        assert!(heartbeat_needed(None, FanMode::Max, recent, false));
+        assert!(!heartbeat_needed(
+            Some(FanMode::Max),
+            FanMode::Max,
+            recent,
+            false
+        ));
+        assert!(heartbeat_needed(
+            Some(FanMode::Max),
+            FanMode::Max,
+            Some(HEARTBEAT),
+            false
+        ));
+        assert!(heartbeat_needed(
+            Some(FanMode::Curve),
+            FanMode::Curve,
+            recent,
+            true
+        ));
+        assert!(heartbeat_needed(
+            Some(FanMode::Max),
+            FanMode::Max,
+            None,
+            false
+        ));
     }
 }

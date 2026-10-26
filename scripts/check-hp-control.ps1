@@ -21,7 +21,7 @@ $taskStore=Join-Path ([Environment]::GetFolderPath('UserProfile')) '.omen-hub-pp
 $taskFiles=@('startup.json','control-journal.json','fan-mode.json','active-fan-curve.json')|ForEach-Object{Join-Path $taskStore $_}
 if($ProfileId){$taskFiles+=Join-Path $taskStore ('profiles\'+$ProfileId+'.json')}
 $taskInstalled=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'OmenHubPlusPlus'
-foreach($taskName in @('Omen Hub++.exe','Omen Hub++ Fan.exe','installation.json','controller-ownership.json','controller-guardian-last.json')){$taskFiles+=Join-Path $taskInstalled $taskName}
+foreach($taskName in @('Omen Hub++.exe','Omen Hub++ Fan.exe','installation.json','controller-ownership.json','controller-cooling.json','controller-guardian-last.json')){$taskFiles+=Join-Path $taskInstalled $taskName}
 function File-Snapshot {
  @($taskFiles|ForEach-Object{
   $taskPresent=Test-Path -LiteralPath $_

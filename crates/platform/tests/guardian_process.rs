@@ -13,7 +13,11 @@ fn main() {
 #[cfg(windows)]
 mod fixture {
     use omen_core::{
-        guardian::{ParentState, Trigger},
+        cooling_override::{
+            Acknowledgement, Checkpoint, FORCED_MAXIMUM, HelperIdentity, Mode,
+            Phase as CoolingPhase, RecoveryReadiness, RestoreAction,
+        },
+        guardian::{Observation, ParentState, Trigger},
         ownership::{
             self, Backend, Consent, Identity, Journal, Owner, Phase, Record, Snapshot, State,
             Subject,
@@ -147,6 +151,46 @@ mod fixture {
         root: PathBuf,
         owner: Owner,
     }
+    fn cooling_record(root: &Path) -> Result<Option<Checkpoint>> {
+        if root.join("cooling.json").exists() {
+            read(&root.join("cooling.json")).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+    fn fixture_cooling_return(root: &Path, owner: &Owner) -> Result<()> {
+        let Some(mut record) = cooling_record(root)? else {
+            return Ok(());
+        };
+        let ready = RecoveryReadiness {
+            service_returned: read::<Service>(&root.join("service.json"))?.running,
+            hardware_recovery_clear: true,
+        };
+        record.begin_restore(owner, &identity(), ready, 2000)?;
+        save(&root.join("cooling.json"), &record)?;
+        let current: Vec<u8> = read(&root.join("preference.json"))?;
+        if let RestoreAction::WriteOriginal(Some(original)) =
+            record.restore_action(owner, &identity(), ready, Some(&current))?
+        {
+            save(&root.join("preference.json"), &original)?;
+        }
+        let current: Vec<u8> = read(&root.join("preference.json"))?;
+        let mode = omen_core::cooling_override::preference_mode(Some(&current))?;
+        record.confirm_restored(
+            owner,
+            &identity(),
+            ready,
+            Some(&current),
+            &Acknowledgement {
+                helper: record.helper.clone(),
+                mode,
+                updated_unix_ms: 2001,
+                last_heartbeat_unix_ms: Some(2000),
+            },
+            2001,
+        )?;
+        save(&root.join("cooling.json"), &record)
+    }
     impl Target for ReturnTarget {
         fn record(&mut self) -> Result<Option<Record>> {
             let record = Ledger(self.root.clone()).load()?;
@@ -158,15 +202,36 @@ mod fixture {
             }
             Ok(record)
         }
-        fn recover(&mut self, _trigger: Trigger, _parent: ParentState) -> Result<Phase> {
-            ownership::release(
-                &mut Device(self.root.clone()),
-                &mut Ledger(self.root.clone()),
+        fn observation(&mut self) -> Result<Option<Observation>> {
+            let service = self.record()?;
+            Observation::coupled(
                 &self.owner,
                 &identity(),
+                service.as_ref(),
+                cooling_record(&self.root)?.as_ref(),
             )
-            .map(|r| r.phase)
-            .map_err(|e| serde_json::to_string(&e).unwrap())
+        }
+        fn maintain(&mut self) -> Result<()> {
+            if self.root.join("helper-lost.json").exists() {
+                return Err("Simulated helper loss".into());
+            }
+            Ok(())
+        }
+        fn recover(&mut self, _trigger: Trigger, _parent: ParentState) -> Result<Phase> {
+            let phase = if Ledger(self.root.clone()).load()?.is_some() {
+                ownership::release(
+                    &mut Device(self.root.clone()),
+                    &mut Ledger(self.root.clone()),
+                    &self.owner,
+                    &identity(),
+                )
+                .map(|r| r.phase)
+                .map_err(|e| serde_json::to_string(&e).unwrap())?
+            } else {
+                Phase::Restored
+            };
+            fixture_cooling_return(&self.root, &self.owner)?;
+            Ok(phase)
         }
     }
     fn peer(root: &Path, bad: bool) -> Result<()> {
@@ -254,6 +319,22 @@ mod fixture {
             owner: owner.clone(),
             identity: identity(),
         };
+        if mode.starts_with("cooling-") {
+            let original = b"{\"schema\":1,\"mode\":\"curve\"}".to_vec();
+            let record = Checkpoint::new(
+                owner.clone(),
+                Device(root.into()).inspect()?,
+                HelperIdentity {
+                    binary_sha256: "f".repeat(64),
+                    process_id: 30,
+                    process_started: 300,
+                },
+                Some(original.clone()),
+                1000,
+            )?;
+            save(&root.join("cooling.json"), &record)?;
+            save(&root.join("preference.json"), &original)?;
+        }
         let args = vec![
             if mode == "bad-ready" {
                 "--bad-peer".into()
@@ -271,14 +352,41 @@ mod fixture {
             return Ok(());
         }
         let mut guard = result?;
-        ownership::acquire(
-            &mut Device(root.into()),
-            &mut Ledger(root.into()),
-            owner.clone(),
-            &identity(),
-            Consent::ExplicitSession,
-        )
-        .map_err(|e| serde_json::to_string(&e).unwrap())?;
+        if let Some(mut record) = cooling_record(root)? {
+            save(&root.join("preference.json"), &FORCED_MAXIMUM.to_vec())?;
+            record.confirm_maximum(
+                &owner,
+                &identity(),
+                Some(FORCED_MAXIMUM),
+                &Acknowledgement {
+                    helper: record.helper.clone(),
+                    mode: Mode::Max,
+                    updated_unix_ms: 1001,
+                    last_heartbeat_unix_ms: Some(1001),
+                },
+                1001,
+            )?;
+            save(&root.join("cooling.json"), &record)?;
+        }
+        if mode != "cooling-before-stop" {
+            ownership::acquire(
+                &mut Device(root.into()),
+                &mut Ledger(root.into()),
+                owner.clone(),
+                &identity(),
+                Consent::ExplicitSession,
+            )
+            .map_err(|e| serde_json::to_string(&e).unwrap())?;
+        }
+        if mode == "cooling-after-return" {
+            ownership::release(
+                &mut Device(root.into()),
+                &mut Ledger(root.into()),
+                &owner,
+                &identity(),
+            )
+            .map_err(|e| serde_json::to_string(&e).unwrap())?;
+        }
         let mut in_job = 0;
         unsafe {
             IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job);
@@ -303,6 +411,14 @@ mod fixture {
             },
         )?;
         match mode {
+            "cooling-helper-loss" => save(&root.join("helper-lost.json"), &true)?,
+            "cooling-external" => {
+                save(
+                    &root.join("preference.json"),
+                    &b"{ \"schema\": 1, \"mode\": \"curve\" }".to_vec(),
+                )?;
+                guard.disconnect();
+            }
             "normal" => {
                 ownership::release(
                     &mut Device(root.into()),
@@ -420,7 +536,7 @@ mod fixture {
                 running: true,
                 stops: 0,
                 starts: 0,
-                fail_start: mode == "restore-failure",
+                fail_start: matches!(mode, "restore-failure" | "cooling-restore-failure"),
             },
         )?;
         let mut child = spawn_owner(&root, mode)?;
@@ -430,7 +546,15 @@ mod fixture {
             assert!(!root.join("journal.json").exists());
         } else {
             let event: Event = guardian::read_frame(child.stdout.as_mut().unwrap())?;
-            if matches!(mode, "crash" | "job-crash" | "restore-failure") {
+            if matches!(
+                mode,
+                "crash"
+                    | "job-crash"
+                    | "restore-failure"
+                    | "cooling-before-stop"
+                    | "cooling-after-return"
+                    | "cooling-restore-failure"
+            ) {
                 child.kill().map_err(|e| e.to_string())?;
                 child.wait().map_err(|e| e.to_string())?;
                 wait_file(&root.join("guardian-result.json"))?;
@@ -444,11 +568,11 @@ mod fixture {
         }
         let service: Service = read(&root.join("service.json"))?;
         match mode {
-            "bad-ready" | "restricted-job" => {
+            "bad-ready" | "restricted-job" | "cooling-before-stop" => {
                 assert!(service.running && service.stops == 0 && service.starts == 0)
             }
             "foreign" => assert!(!service.running && service.stops == 1 && service.starts == 0),
-            "restore-failure" => {
+            "restore-failure" | "cooling-restore-failure" => {
                 let report: std::result::Result<Outcome, String> =
                     read(&root.join("guardian-result.json"))?;
                 assert!(report.is_err());
@@ -464,6 +588,23 @@ mod fixture {
                     "{mode}: {service:?}"
                 );
                 assert_eq!(Ledger(root.clone()).load()?.unwrap().phase, Phase::Restored);
+            }
+        }
+        if let Some(record) = cooling_record(&root)? {
+            let preference: Vec<u8> = read(&root.join("preference.json"))?;
+            match mode {
+                "cooling-restore-failure" => {
+                    assert_eq!(record.phase, CoolingPhase::MaximumConfirmed);
+                    assert_eq!(preference, FORCED_MAXIMUM);
+                }
+                "cooling-external" => {
+                    assert_eq!(record.phase, CoolingPhase::Superseded);
+                    assert_eq!(preference, b"{ \"schema\": 1, \"mode\": \"curve\" }");
+                }
+                _ => {
+                    assert_eq!(record.phase, CoolingPhase::Restored);
+                    assert_eq!(Some(preference), record.original_preference);
+                }
             }
         }
         // Flat, newly created fixture directory: individual files only, no
@@ -489,6 +630,11 @@ mod fixture {
             "bad-ready",
             "guard-loss",
             "restore-failure",
+            "cooling-before-stop",
+            "cooling-after-return",
+            "cooling-restore-failure",
+            "cooling-helper-loss",
+            "cooling-external",
         ] {
             scenario(base, mode)?;
         }
@@ -498,7 +644,7 @@ mod fixture {
         // Test harness only. Codex/CI may place cargo in a restrictive cleanup
         // job. The product never falls back from failed BREAKAWAY. WMI starts
         // only this same no-harness fixture executable, without elevation or
-        // shell, and its nine scenarios touch only this new temporary folder.
+        // shell, and its scenarios touch only this new temporary folder.
         #[derive(Serialize)]
         struct Input {
             #[serde(rename = "CommandLine")]
@@ -558,7 +704,7 @@ mod fixture {
         }
         result.map_err(|e| format!("{e}; fixture diagnostics: {}", base.display()))?;
         println!(
-            "9 guardian process scenarios passed outside the restrictive test job; real services/drivers were not addressed."
+            "14 guardian process scenarios passed outside the restrictive test job; real services/drivers were not addressed."
         );
         Ok(())
     }

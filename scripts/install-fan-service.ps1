@@ -32,6 +32,25 @@ if ($Mode -eq 'Inspect') {
 if (-not ([Security.Principal.WindowsPrincipal]::new($fanIdentity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this fixed installer elevated. It protects the executable and registers the fan task.'
 }
+# A pending coupled recovery must keep both protected binaries and tasks intact.
+# Serialize against the native qualification owner before any installer action.
+$recoveryGate = [Threading.Mutex]::new($false, 'Global\OmenHubPP.HpControllerOwner')
+$recoveryGateOwned = $false
+try {
+    try { $recoveryGateOwned = $recoveryGate.WaitOne(0) }
+    catch [Threading.AbandonedMutexException] { $recoveryGateOwned = $true }
+    if (-not $recoveryGateOwned) { throw 'An Omen Hub++ controller session is active; installation/removal was blocked.' }
+    foreach ($recoveryFile in @('controller-ownership.json','controller-cooling.json')) {
+        $recoveryPath = Join-Path $fanRoot $recoveryFile
+        if (Test-Path -LiteralPath $recoveryPath) {
+            $recoveryItem = Get-Item -LiteralPath $recoveryPath
+            if ($recoveryItem.Length -gt 16384 -or ($recoveryItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Controller recovery record is oversized or redirected; installation/removal was blocked.' }
+            $recoveryRecord = Get-Content -LiteralPath $recoveryPath -Raw | ConvertFrom-Json
+            if ($recoveryRecord.schema -ne 1 -or $recoveryRecord.phase -cnotin @('restored','superseded') -or $recoveryRecord.owner.session -cnotmatch '^[a-fA-F0-9]{64}$') {
+                throw 'Complete controller/cooling recovery before updating or removing either helper.'
+            }
+        }
+    }
 if ($null -ne $fanExisting) {
     Assert-FanTaskAction $fanExisting
     $fanSession = [Diagnostics.Process]::GetCurrentProcess().SessionId
@@ -54,17 +73,9 @@ if ($null -ne $fanExisting) {
         Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $fanStopDeadline)
     if ($fanRunning.Count -ne 0) {
-        # Legacy builds had no stop event. A forced upgrade is allowed only
-        # after the saved CCD selection is released and no pins are reported.
-        $fanUserRoot = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.omen-hub-pp'
-        $fanStatusPath = Join-Path $fanUserRoot 'fan-service-status.json'
-        $fanOldStatus = if (Test-Path -LiteralPath $fanStatusPath) { Get-Content -LiteralPath $fanStatusPath -Raw | ConvertFrom-Json } else { $null }
-        if ((Test-Path -LiteralPath (Join-Path $fanUserRoot 'ccd-affinity.json')) -or ($null -ne $fanOldStatus -and $fanOldStatus.ccd_pinned -gt 0)) {
-            throw 'The fan controller did not stop gracefully. Select all CCDs and retry; pinned programs were left unchanged.'
-        }
+        throw 'The fan controller did not stop gracefully. Installation/removal was blocked; the cooling process was left running.'
     }
     Stop-ScheduledTask -TaskName $fanTask -ErrorAction SilentlyContinue
-    $fanRunning | ForEach-Object { if (-not $_.HasExited) { Stop-Process -InputObject $_ -Force } }
 }
 if ((Test-Path -LiteralPath $fanRoot) -and ((Get-Item -LiteralPath $fanRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     throw 'The installation directory is a reparse point; installation was blocked.'
@@ -128,4 +139,9 @@ try {
 } catch {
     if ($fanRegistered) { Unregister-ScheduledTask -TaskName $fanTask -Confirm:$false -ErrorAction SilentlyContinue }
     throw
+}
+
+} finally {
+    if ($recoveryGateOwned) { $recoveryGate.ReleaseMutex() }
+    $recoveryGate.Dispose()
 }
