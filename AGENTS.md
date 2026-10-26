@@ -13,6 +13,7 @@ Omen Hub++ must eventually replace the original OMEN Hub and its hardware-contro
 - Keep proprietary DLLs, drivers, decompiled sources and local diagnostic dumps in ignored `.local/` or `.tools/`. Commit only original code and concise interface observations.
 - Do not stop/remove vendor services, install a kernel driver, flash firmware, or change power/voltage as part of ordinary verification.
 - Keep core policies independent of Windows. No network calls, telemetry, updater or embedded browser in runtime code.
+- The TGP experiment must satisfy the user's 26 October requirement: user-mode application processes (elevation allowed), with TPM and Secure Boot enabled. Test-signing or disabled driver-signature enforcement is not an acceptable product path.
 - Use public NVAPI/NVML contracts for telemetry. Optional FFI libraries must use exact ABI, validated lifetimes and explicit failure reporting.
 - Run `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` and a release build for implementation changes.
 - For hardware support changes, update the model evidence and measured validation record. No multi-agent delegation is required.
