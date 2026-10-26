@@ -1,6 +1,12 @@
 # Omen Hub++
 
-**Erste Vorabversion: [Beta 0.9.0 herunterladen](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.9.0-beta.1).** Installationshinweise und Einschränkungen: [Release Notes](docs/releases/0.9.0-beta.1.md).
+**Entwicklungsstand:** Die Veröffentlichung von Beta 0.9.0 wurde zurückgezogen. Ein neuer experimenteller Release wird für den erweiterten Funktionsumfang vorbereitet. Der Quellstand und die bisherigen Prüfnachweise bleiben nachvollziehbar erhalten.
+
+## Entwicklung, Nutzung und Haftung
+
+**Dieses Programm befindet sich in aktiver Entwicklung.** Funktionen können unvollständig, experimentell oder auf bestimmten Geräten nicht verfügbar sein. Die Anwendung greift auf Leistungs-, Spannungs-, Temperatur- und Lüftereinstellungen zu; ungeeignete Einstellungen oder Programmfehler können Instabilität, Datenverlust und Schäden an Hardware verursachen. Ein sichtbarer Regler ist keine Zusicherung, dass das jeweilige Gerät die Funktion unterstützt.
+
+**Die Nutzung erfolgt auf eigene Gefahr. Soweit gesetzlich zulässig, übernehmen der Autor und die Mitwirkenden keine Haftung für Schäden, Datenverlust oder sonstige Folgen aus der Nutzung der Software.** Die Software wird ohne Gewährleistung bereitgestellt. Maßgeblich sind die Gewährleistungs- und Haftungsbestimmungen der [MIT-Lizenz](LICENSE).
 
 Native Windows-Anwendung in Rust zur Steuerung unterstützter HP-OMEN-Laptops: Leistungsprofile, CPU-/GPU-Einstellungen, Lüfterkurven und Tastaturbeleuchtung. Das Ziel ist ein vollständiger Ersatz des ursprünglichen OMEN Gaming Hubs ohne dessen Hintergrunddienste, Werbung oder Telemetrie.
 
