@@ -1,31 +1,25 @@
-# Lokalisierung
+# Localization
 
-Alle sichtbaren Texte der App stehen in `crates/app/lang/<sprache>.json`; der Code verweist nur auf Schlüssel. Deutsch (`de.json`) ist die Referenzsprache, Englisch (`en.json`) die zweite.
+The app includes German (`de.json`, reference) and English (`en.json`) under `crates/app/lang/`. Repository documentation uses English for current guides; archived measurement records retain their original language. Documentation language does not change the app's language selection.
 
-## Sprache wählen
+## Selection and keys
 
-- Windows-Anzeigesprache Deutsch → Deutsch, sonst Englisch.
-- `OMEN_HUB_LANG=de` oder `OMEN_HUB_LANG=en` erzwingt eine Sprache (für Screenshots und Übersetzer).
-- Fehlt ein Schlüssel in der gewählten Sprache, gilt Deutsch; fehlt er überall, erscheint der Schlüssel selbst.
+German Windows display language selects German; other Windows display languages select English. `OMEN_HUB_LANG=de` or `OMEN_HUB_LANG=en` overrides the choice for a process. A missing selected-language key falls back to German, then to its literal key.
 
-## Schlüssel
+| Pattern | Purpose |
+| --- | --- |
+| `field.<Feature>`, `info.<Feature>` | Setting label and its explanation |
+| `choice.<Choice>` | Choice text |
+| `group.*`, `section.*` | Collapsible groups and GPU/CPU/Windows sections |
+| `dash.*`, `preset.*`, `curve.*`, `widget.*`, `lighting.*`, `mode.*` | Window/action/status copy |
+| `curve.err.*`, `cpu.err.*`, `windows.err.*` | User-facing lower-layer message keys |
 
-| Bereich | Muster | Beispiel |
-| --- | --- | --- |
-| Preset-Einstellung | `field.<Feature>` und `info.<Feature>` | `field.CpuStapmLimitMw`, `info.CpuStapmLimitMw` |
-| Auswahlwert | `choice.<Choice>` | `choice.BestPerformance` |
-| Gruppen/Abschnitte | `group.*`, `section.*` | `group.limits` |
-| Fenster | `dash.*`, `preset.*`, `curve.*`, `widget.*`, `lighting.*`, `mode.*` | `curve.fan_hint` |
-| Meldungen aus core/platform | `curve.err.*`, `cpu.err.*`, `windows.err.*`, … | `curve.err.max_points` |
+Numbered placeholders `{0}`, `{1}`, etc. may be reordered. Core/platform return bounded message markers `⟦key␟argument…⟧`; the app renders them through `i18n::message`. An argument starting `@key` is itself translated. Technical adapter diagnostics remain unchanged and separate from user-facing recovery copy.
 
-Platzhalter heißen `{0}`, `{1}`, … und dürfen in jeder Sprache anders angeordnet sein. `info.*` ist der Text hinter dem runden **i** neben jeder Einstellung: was sie ändert und was das bewirkt.
+## Adding a language
 
-## Meldungen ohne UI-Schicht
+1. Copy the reference JSON and translate values while retaining keys/placeholders.
+2. Embed it in `i18n.rs` and map the supported language selection.
+3. Run the workspace tests. Existing tests compare language keys, referenced keys and label/info coverage for preset fields.
 
-`core` und `platform` haben keine Oberfläche. Sie liefern nutzerrelevante Meldungen als Marker `⟦schlüssel␟arg…⟧` (`omen_core::message::msg`). Die App ersetzt jeden Marker beim Anzeigen (`i18n::message`, eingebaut in die Text-Helfer). Ein Argument `@schlüssel` wird selbst übersetzt, z. B. ein Feldname. Technische Diagnosedetails der Hardware-Adapter (englisch, für Logs und `cpu-sensor-status`) bleiben unverändert; die App zeigt dafür eigene übersetzte Meldungen.
-
-## Neue Sprache
-
-1. `de.json` nach `<code>.json` kopieren und alle Werte übersetzen.
-2. Datei in `i18n.rs` per `include_str!` einbinden und in `language()` der Windows-Sprach-ID zuordnen.
-3. `cargo test` prüft, dass alle Sprachdateien dieselben Schlüssel haben, jeder im Code verwendete Schlüssel existiert und jede Preset-Einstellung Name und Erklärung hat.
+New copy must distinguish measured state, selected preference, draft, unavailable, pending and confirmed application. Do not describe a watt limit as power draw, CO steps as exact mV, or metadata Save as hardware Apply. Current misleading fan quick-status copy is a tracked implementation issue in [Project review](PROJECT_REVIEW.md); this documentation change does not alter language files.

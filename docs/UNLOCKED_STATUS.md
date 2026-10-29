@@ -1,24 +1,17 @@
-# Erweiterter Funktionsumfang — Entwicklungsstand
+# Development and release status
 
-Stand: **26. Oktober 2026, `0.9.0-dev.2`**. Der Projektinhaber hat die Veröffentlichung der ersten Beta zurückziehen lassen und ausdrücklich die echte Umsetzung der fehlenden Hardwarefunktionen verlangt. Die README dokumentiert Entwicklung, Eigenverantwortung und den Haftungs-/Gewährleistungshinweis der MIT-Lizenz. Ein vollständig funktionsfähiger neuer „Unlocked“-Release ist noch nicht fertig und wurde nicht veröffentlicht.
+Reviewed **29 October 2026**, source version **`0.9.0-dev.2`**. The first beta release and assets were withdrawn; its source tag remains historical. No replacement release was present at the latest repository check.
 
-## Aktuelle Umsetzung und tatsächliche Grenzen
+The request for an “unlocked” release includes implementing missing hardware paths. Removing a UI check cannot supply a missing adapter, original-state query or restore contract. Use the [hardware matrix](HARDWARE_MATRIX.md) for current availability and the [roadmap](ROADMAP.md) for the work order.
 
-| Funktion | Stand |
-| --- | --- |
-| Öffentliches NVIDIA-Wattlimit | Neuer Rust-Adapter mit Treibergrenzen, Original-Capture, einmaligem SET, genauem Readback, dauerhaftem Journal und Rücksetzung implementiert. Presetfeld und Metadatenweg geprüft. Auf der vorhandenen RTX 5070 Laptop ist der konfigurierte Originalwert über diesen öffentlichen Pfad nicht lesbar; daher keine reale Schreibprobe. |
-| Direkte TGP-/Spannungs-/Clock-Lock-Erweiterungen | Keine vollständigen neuen Steuer-/Originalverträge vorhanden. Ein frei gewählter Wert oder ein sichtbares Eingabefeld ersetzt diese nicht. Dynamic Boost und die bisher qualifizierten Takt-/V/F-Pfade bleiben davon getrennt. |
-| Intel PL1/PL2/PL4 und weitere Intel-Optionen | Noch kein integrierter Intel-Hardwareadapter. Die öffentlichen MSR- und vorhandenen signierten Modulverträge sind Referenzen; sie erlauben nicht pauschal jeden Registerzugriff. Der verfügbare Rechner hat einen AMD Ryzen 9 8940HX. Der Benutzer hat bestätigt, dass kein Intel-Testgerät zur Verfügung steht. |
-| Dauerhafter eigenständiger Betrieb ohne HPOmenCap | Bisheriger nativer Dienst-/Kühlungs-Prüfablauf ist begrenzt. Dauerhafter App-/Anmeldestart mit vollständiger Zuständigkeitsübernahme und echte gemeinsame Geräteabnahme fehlen weiterhin. |
-| CPU-PPT/Slow bei laufendem HPOmenCap | Konfliktsperre weiter aktiv; ihr Ersatz braucht eine tatsächlich funktionierende eigene Zuständigkeitsübernahme. Neue CPU-Power-Startup-Freigaben bleiben bei weiterhin vorhandenem OEM-Dienst eingeschränkt. |
-| Lüfterkurven als Teil einer Gesamttransaktion | Eigener vorhandener Hintergrundhelfer und separate Kurvensteuerung sind nutzbar. Vollständiger Profiladapter sowie BIOS-Ownership-Rückgabe sind noch nicht fertig qualifiziert/integriert. |
-| iGPU-only/MUX, Reboot und Standby | Startvorgaben und Power-Ereignislogik sind vorhanden. Tatsächliche Hardwarewechsel und vollständige Wiederanwendung nach realen Übergängen bleiben offen. |
-| Beleuchtungs-/Hotkey-Lifecycle und zusätzliche Effekte | Vorhandene Vier-Zonen-Farben und statisch Ein/Aus sind getrennt qualifiziert. Die übrigen Fähigkeiten benötigen eigene Modell-/Transport- und Lifecycle-Verträge. |
+## Main unfinished work
 
-## GPU-Befund des vorhandenen Geräts
+- Shared recovery protection for HP-mode/MUX shortcuts and truthful fan-helper status confirmation.
+- Evidence-based CPU range policy; allowed protocol values exceed the measured test envelope.
+- Durable cooling/controller ownership without original HP services, then full profile lifecycle.
+- Real reboot, sleep/resume, AC/DC, failure recovery and longer stability/RAM acceptance.
+- A verified numeric GPU-TGP path. The public NVML adapter exists, but its configured original cannot be read on this laptop. The alternate [TGP investigation](plans/NVPWRCONTROL_TGP_FORK_PLAN.md) remains research only.
+- Physical MUX/iGPU-only operation and independent keyboard/hotkey lifecycle.
+- Intel backend and additional models, each with suitable hardware evidence.
 
-Auf der RTX 5070 Laptop/617.42 liefern die öffentlichen NVML-Abfragen 5…115 W als erlaubten Bereich und 80 W als Default. Das effektiv erzwungene Limit ist separat als 115 W lesbar; das ist keine gemessene Leistungsaufnahme. Sowohl der ursprüngliche konfigurierte Limit-GET als auch das Feld für einen angeforderten Grenzwert melden **nicht unterstützt**. Der Default und der effektive Wert wurden deshalb nicht als vermeintliches Original in das neue Rücksetzungsjournal übernommen. Es gab keinen Leistungs-/Spannungs-SET. Details und öffentliche Schnittstellen: [GPU_PROFILES.md](GPU_PROFILES.md).
-
-## Bereits geprüfter Entwicklungsstand
-
-233 Rust-Tests, 14 Prozess-/Dateiszenarien, Formatprüfung, Clippy und Release-Kompilierung bestanden. Native Metadatenprüfungen decken die neue Wattangabe, exakte Milliwatt-Speicherung, Abwählen und den bestehenden Preset→Chart-Pfad ab. Benötigte reale Intel-, Dienst-/Lüfter-, Power- und Langzeitprüfungen werden damit nicht behauptet. Der vollständige Prüfstand steht in [VALIDATION.md](VALIDATION.md).
+Qualified offsets/V/F, static lighting, short fan trials and CPU/Windows controls retain their documented scope. Intentionally removed voltage/FPS/APU controls are not pending accidental unlocks. Latest checks and their limits: [Validation](VALIDATION.md). Detailed code findings: [Project review](PROJECT_REVIEW.md).

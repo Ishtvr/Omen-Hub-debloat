@@ -1,37 +1,27 @@
-# Direkte Tastaturbeleuchtung
+# Keyboard lighting
 
-**Beleuchtung** im Dashboard oder `omen-hub-pp.exe keyboard-ui` öffnet die native Tastaturansicht. Sie enthält vier anklickbare Zonen einschließlich Nummernblock, einen **Ein/Aus**-Schalter und eine kurze Zustandszeile. Das Fenster fordert einmal Windows-UAC an; Dashboard und Tray bleiben uneleviert.
+Open **Lighting / Beleuchtung** or `omen-hub-pp.exe keyboard-ui`. This is a separate elevated native window; the dashboard/tray remain unelevated. It shows four clickable zones including the numpad, **On/Off**, and a short status line.
 
-1. **Ein** aktiviert die gespeicherten statischen Zonenfarben. **Aus** schaltet die Beleuchtung aus; die RGB-Werte bleiben erhalten.
-2. Bei eingeschalteter Beleuchtung eine Zone anklicken oder per Tab und Leertaste öffnen. Der Windows-Farbdialog startet mit ihrer gelesenen Farbe.
-3. Bestätigen überträgt die Farbe unmittelbar und prüft das vollständige Ergebnis. Abbrechen ändert nichts. Ein gesondertes Speichern/Anwenden ist nicht erforderlich.
+1. On enables the stored static zone colors. Off disables lighting while retaining RGB values.
+2. With lighting on, click a zone or reach it by keyboard to open the native Windows color picker, initialized from its read color.
+3. Confirm to apply and fully read back the change. Cancel writes nothing. No separate Save/Apply button is needed.
 
-Die native Tastaturzeichnung stellt die vier Farbbereiche dar; sie bietet keine Einzeltastensteuerung. Bei ausgeschalteter Beleuchtung sind die Zonen deaktiviert. Ohne gültigen Hardwarezustand bietet die Schalteraktion eine erneute Verbindung an, statt erfundene Farben als gelesen auszugeben. Ein zwischenzeitlich durch einen anderen Controller geänderter Zustand wird neu gelesen; die abgewiesene Benutzeraktion wird nicht still wiederholt.
+The keyboard picture represents four zones, not individual keys. Off disables zone editing. Invalid/external state requires a fresh read; a rejected action is not retried automatically.
 
-## Hardware und Wiederherstellung
+## Contract and recovery
 
-Freigegeben ist ausschließlich **HP 8E35 / BIOS F.13 / Capability [1,0,0,0] / FourZoneWithNumpad**. Der Provider verlangt auf diesem Gerät auch für GET Administratorzugriff. Der eigene Rust-Transport verwendet die vorhandene HP-BIOS-WMI-Schnittstelle; HP-RPC-/SDK-DLLs werden dafür nicht geladen.
+Writable support is **HP 8E35/F.13, capability `[1,0,0,0]`, FourZoneWithNumpad**. On this device, reading the BIOS provider also requires administrator access. The own Rust path uses Windows BIOS-WMI, without loading HP RPC/SDK wrappers.
 
-Die Farben ändern nur die zwölf qualifizierten RGB-Bytes im vollständigen 128-Byte-Bild. Der Modus verwendet genau die belegten Zustände **0xE4 = statisch ein** und **0x64 = aus**. Die frühere Beschreibung von 0x64 als „Firmware-Voreinstellung“ war für dieses Modell zu ungenau. Hersteller-Off-Pfad, gemessener Readback und die sichtbare Bestätigung des Benutzers am 15. Oktober belegen Ein/Aus. Der alte serialisierte Wert `firmware_default` bleibt als Alias für bestehende Profile und Recovery-Journale lesbar.
+Colors replace only bytes 25–36 of the complete 128-byte state. The supported mode bytes are **0xE4 = static On** and **0x64 = Off**. Legacy `firmware_default` is retained as a serialization alias for Off on this model, not a third mode or percentage brightness.
 
-`windows/lighting.rs::DirectLighting` nutzt dieselbe typisierte Transaktionsengine wie Performanceprofile, aber einen eigenen dauerhaften Speicher unter **`<Windows-Benutzerprofil>\.omen-hub-pp\keyboard-control`**. Vor jedem Schreiben müssen Gerätebindung, Capability und das komplette erwartete Steuerbild passen. Originale werden vor dem SET atomar gespeichert; Fehler lösen den geprüften Restore aus. Eine offene eigene Beleuchtungstransaktion kann beim erneuten Verbinden nur nach streng begrenzter Journalprüfung wiederhergestellt werden. Ein offenes Performancejournal sperrt neue Schreibaktionen; ein gemeinsamer Prozess-Mutex serialisiert beide Controllerwege.
+`DirectLighting` uses the typed transaction engine with its own `%USERPROFILE%\.omen-hub-pp\keyboard-control` store. Complete originals precede SET; capture/readback includes capability, colors, mode and reserved bytes. Fresh expected-state checks reject foreign changes. Pending performance recovery blocks new direct lighting writes; the shared lease serializes own writers only.
 
-Beleuchtungsaktionen ersetzen weder das Performancejournal noch dessen Startup-Auswahl. Fehlerdetails liegen getrennt im Beleuchtungsspeicher. Das Fenster wartet beim Schließen auf eine laufende Änderung; es beendet keinen aktiven Hardware-Worker gewaltsam. Der Mutex ist keine Exklusivgarantie gegenüber HP oder anderer RGB-Software.
+Reopening can recover a valid unresolved own lighting transaction before reading a new state. Closing waits for an in-flight hardware operation; it does not kill the writing worker. The direct window does not replace the performance journal or sign-in selection. [Recovery](RECOVERY.md), [protocol details](KEYBOARD_LIGHTING.md).
 
-## Gemessene Prüfung
+## Evidence and limits
 
-Am **15. Oktober 2026, 20:57 CEST**, prüfte `scripts/check-lighting-ui.ps1` die tatsächlichen nativen Controls: Ein/Aus, korrekt vorbelegten Farbdialog, Abbrechen ohne Änderung, rote linke Zone bei erhaltenen anderen Zonen und vollständigen Original-Restore. Nicht-Klick-Notifications starteten keine Aktion. GPU-Steuerbilder, HP-GPU-Status und das Performancejournal samt Startup-Datei blieben unverändert. Diese Farbprobe wurde vom Benutzer nicht beobachtet; ihre Evidenz ist der vollständige Firmware-Readback.
+On 15 October, the real UI check verified On/Off, prefilled picker, Cancel without SET, a red left-zone target with other zones preserved and complete original restore. Color evidence was full firmware readback, not observed visual color acceptance. A separate user-requested four-second **On → Off → On** probe was visibly confirmed and restored.
 
-Die ausdrücklich angeforderte Wiederholung um **21:08 CEST** hielt jeweils vier Sekunden **an → aus → an** und restaurierte anschließend den Ausgangszustand. Der Benutzer bestätigte **„Ja, an/aus/an war sichtbar“**. Das bestätigt die sichtbare Schaltwirkung auf diesem Gerät. Es ist keine Sichtabnahme der Farbe und kein Nachweis für Reboot/Resume oder dauerhafte Ownership.
+The current controller permits sign-in authorization for lighting settings in a supported applied profile. That permission does **not** qualify actual reboot/resume, Fn-F4, lock/unlock, lasting ownership or operation without HP writers. Brightness percentages, animations, per-key control and other keyboard variants remain unsupported.
 
-`scripts/smoke-keyboard-ui.ps1` rendert Ein/Aus in Standard- und Mindestgröße aus temporären, ausdrücklich synthetischen Profilwerten. Dieser Test fordert keine UAC an, liest keine Tastaturfirmware und schreibt keine Hardware. Tatsächliche Schaltproben sind davon getrennt und erfordern ein erhöhtes Terminal sowie eine ausdrücklich gewollte Hardwareprüfung:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-lighting-ui.ps1 -SwitchOnly -HoldSeconds 4
-```
-
-Beleuchtung bleibt **`startup_safe = false`**. Allgemeine Helligkeitsprozente, Animationen, weitere Tastaturtypen, Fn-F4-/Entsperr-/Power-Lifecycle und Betrieb ohne die noch laufenden HP-Controller sind nicht qualifiziert. Quellen und vollständige Build-Zuordnung: [KEYBOARD_LIGHTING.md](KEYBOARD_LIGHTING.md), [8e35.md](models/8e35.md), [VALIDATION.md](VALIDATION.md).
-
-## Native Darstellung
-
-Die Ansicht folgt dem vorhandenen dunklen Segoe-UI-System. Die Zonen sind echte benannte native Buttons mit Tastaturfokus; GDI zeichnet ihre Tastengeometrie und Datenfarben. Es werden keine Hersteller-Bitmaps, dekompilierten Quellen oder proprietären Bibliotheken ausgeliefert. Client-Renderings prüfen die vollständige Tastatur bei **984×551** und **744×441** Pixeln (96 DPI). Andere DPI, Titlebars, geöffneter Systemfarbdialog, umfassende Barrierefreiheit und dynamische High-Contrast-Wechsel sind dadurch nicht zertifiziert.
+Native synthetic renders test On/Off layouts without UAC or firmware reads; real `check-lighting-ui.ps1` tests deliberately write/restore lighting. The two are distinct. Recorded client sizes were 984×551 and 744×441 at 96 DPI; titlebars, color-dialog presentation, broader DPI/high contrast and assistive technology remain separate work. [Validation](VALIDATION.md), [hardware matrix](HARDWARE_MATRIX.md).

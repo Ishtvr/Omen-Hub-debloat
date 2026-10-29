@@ -1,11 +1,17 @@
-# Restore the required Dynamic Boost option
+# Dynamic Boost
 
-Mode: Operate. Restore the user's explicitly required Dynamic Boost field in the GPU preset group, preserving the existing native dark system. This is an exception to the preceding GPU-menu removal: voltage controls, FPS limiter and other removed GPU controls stay absent.
+Design intent reviewed **29 October 2026**. Native Windows x64 / Rust / Win32, code-first. This is a surface brief, not a hardware support or validation record. Earlier implementation directions are superseded by the current product/workflow decisions below.
 
-Use the existing compatible `gpu_unleashed` setting and Ein/Aus selector. Preserve both `gpu_unleashed` and `gpu_dynamic_boost` in old profiles instead of treating them as retired settings. Metadata save is not a hardware action. Keep the unsupported-adapter state and full Apply/startup preflight until coupled HP power, heartbeat and restore are qualified; 115 W is presently a reported driver constraint, not demonstrated sustained power or a successful limit write.
+## Direction
 
-Verify Include/Ein/Aus save/reload and old-key preservation using native controls without hardware writes. Inspect the real GPU preset view at its standard and minimum client sizes, preserving the existing fields, focus and action layout. No visual world or token changes, no HTML/CSS detector on Win32. Use the scoped fresh Impeccable finish handoffs.
+Retain the user's required Dynamic Boost option in GPU with a simple included On/Off instruction. Preserve legacy gpu_unleashed and gpu_dynamic_boost aliases as one logical setting, with conflict-aware merge.
 
-The final combined preset change is implemented in the **2,054,656-byte** release, SHA-256 **BF6088D99C1FC4BE446E43FDC818D51BFC6C29384246AF9B02E19CA770441180**. The 22:29 CEST native smokes on 15 October 2026 confirm Include/Ein/Aus/omission save/reload, both Boost keys retained through unrelated Save and legacy cleanup, and blocked whole-profile Apply/startup when Boost is included. Ten other removed GPU keys and 26 APU/iGPU keys retire only on explicit Save; full curve and lighting settings survive. Format check, 87 tests, Clippy with warnings denied and release build passed. GPU controls, recovery journals and startup metadata remain unchanged; no new hardware adapter, power-limit write or 115 W result is claimed.
+## State and functional boundary
 
-The final visual matrix and current CPU/Windows requirements are recorded in `cpu-windows-sections.md`. The four valid production clients there include the restored GPU field at **1084×861** and a Windows minimum at **904×681**, at 96 DPI; they do not constitute a new GPU-minimum capture. The fresh finish reviewer returned **ship**, with no material fixes, within those clients and sampled source/test evidence. The documenter compared the captures and shared native/preset source with DESIGN.md and `.impeccable/design.json` and preserved both files. Existing platform-enum and brief-resolution drift remains report-only. Titlebars, other DPI, lifecycle, comprehensive accessibility, hardware qualification and current-build memory measurement remain outside this finish scope. Earlier GPU-removal captures and memory results keep their original hashes; this brief supersedes their removal of the two Boost keys.
+The current PPAB flag has readback/restore and preserves cTGP. It is distinct from factory Unleashed and free TGP. A reported effective 115-W limit is not sustained measured draw. Sign-in and model checks still apply.
+
+## Visual and review contract
+
+Preserve the shared [design system](../../DESIGN.md), clear native labels, keyboard focus and explicit unavailable/pending/confirmed states. Use event-driven rendering without a browser runtime, copied vendor assets or decorative polling. Existing screenshots/native smokes cover their recorded builds and client geometry only; DPI/display/high-contrast/accessibility acceptance stays separate.
+
+Current behavior: [topic guide](../../docs/GPU_PROFILES.md). Current support: [hardware matrix](../../docs/HARDWARE_MATRIX.md). Evidence: [Validation](../../docs/VALIDATION.md). Product requirements: [PRODUCT.md](../../PRODUCT.md).

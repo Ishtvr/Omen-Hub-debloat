@@ -1,77 +1,53 @@
-# Sichere Steuerungsprüfung am Referenzgerät
+# CPU and Windows controls
 
-**Wächter-Software 25. Oktober, 15:49 CET:** Der vorbereitete native Übernahmepfad verlangt jetzt bestätigten unabhängigen Rückkehrwächter vor STOP. Besitzerabbruch, Kanalverlust und 60-Sekunden-Qualifikationsfrist erlauben nur die Rückkehr derselben Sitzung; der Helfer öffnet ausschließlich START auf den fest geprüften Benutzerdienst. Neun echte Prozessfälle mit Dateisimulation bestanden zusätzlich zu 209 Rust-Tests. Am Gerät wurden nur Status/Preflight gelesen. Neue automatische Übernahme und native Dienstschalt-/Kühlungsfreigabe bleiben offen. [HP_CONTROL.md](HP_CONTROL.md).
+Current adapter contracts for the reference **8E35/F.13 / Ryzen 9 8940HX**, SMU **0x546F00**, PM table **0x540208**. [Hardware matrix](HARDWARE_MATRIX.md) separates implementation from measured acceptance.
 
-**Software-Schutz 25. Oktober, 03:59 CET:** Neue Profile mit unabhängigem CPU-PPT/Slow werden bei aktivem, wechselndem oder nicht lesbarem HPOmenCap-Zustand vor Capture/SET vollständig gesperrt. Vor dem eigentlichen Limit-SET wird erneut geprüft; ein späterer Konflikt löst Fehler/Rollback aus. Neue PPT-/Slow-Startup-Freigaben werden bis zur Qualifikation des Anmelde-Übernahmepfads bei installiertem OEM-Dienst auch nach temporärem Stopp gesperrt. Hardware-Original-Recovery bleibt zugänglich und muss vor Rückgabe der Dienstzuständigkeit abgeschlossen sein. Dies verändert keine Treiber, Leistungswerte oder Dienste durch bloßes Öffnen/Prüfen. Die neue native Übernahme-Engine ist softwareseitig vorbereitet, aber noch ohne normale automatische Aktivierung oder Hardware-Abnahme ihres START/STOP-Pfads. [HP_CONTROL.md](HP_CONTROL.md).
+## CPU tuning
 
-**Ergänzung 25. Oktober:** Der Nutzer erlaubte gesondert eine einmalige **HPOmenCap**-Isolation. Bei angehaltenem Dienst, geschlossenem Original-Hub/UXTU und bestätigter voller Kühlung bestand das unveränderte 70/75-W-Profil das vollständige Apply; sechs nachfolgende CPU-GETs bis ungefähr zwölf Sekunden nach dem Apply bestätigten beide Limits. Vollständiger Original-Restore sowie Wiederherstellung von Dienst, Kühlung, Hub, Recovery-Journal und Startup-Auswahl sind abgeschlossen. Keine direkten Treiberaktionen, kein echter Schlaf-/Neustart. Der Vergleich zum Vortag stützt einen Diensteinfluss, beweist aber noch keine alleinige Ursache oder längerfristige Beständigkeit. Details: [VALIDATION.md](VALIDATION.md).
+The original Rust SMU transport uses the pinned signed **RyzenSMU 0.2.11** module through the already running verified PawnIO driver. Module SHA-256: **`301D9CA397108E09F31BFBD5AC4C9BB4F352A5DE68532C32DB3BA7DDCDE93450`**. It accepts fixed Raphael/Dragon Range messages, not caller-chosen opcodes.
 
-**Ergänzung 24. Oktober:** Das ausdrücklich freigegebene Nutzerprofil Slow **70 W** / Fast/PPT **75 W** bestand in einer späteren Trace-Probe den vollständigen unmittelbaren Readback, fiel danach jedoch auf **66/80 W** zurück. Andere Versuche scheiterten bereits während des Apply und wurden vollständig zurückgesetzt. Der Rücksetzer trat auch ohne laufendes UXTU/Original-Hub-Hintergrundprogramm und bei pausierter eigener Lüfterregelung auf; Herstellerdienste liefen weiter. UXTUs gespeicherte automatische Wiederanwendung alle 15 s ist kein Beweis als Ursache dieser isolierten Proben. Der zusätzliche Fuse-GET lieferte 85000 und begründet keine automatisch gültige Schreibgrenze. Frühere kleinere Proben werden nicht als beständige 70/75-W-Freigabe umgedeutet. Vollständiger alter Recovery-Checkpoint und Startup-Auswahl bleiben erhalten; echte Power-Lifecycle-Abnahme ist offen. Details: [POWER_LIFECYCLE.md](POWER_LIFECYCLE.md).
-
-**Ergänzung 23. Oktober:** Die Freigabe des Lüfterdienstes fordert nach eigener Regelung zunächst einmal 48/48 an und stoppt anschließend Heartbeat/Level. Ein realer Firmware-Rückfall nach ungefähr zwei Minuten ist beobachtet. Der direkte HPCM/FAMC-Payload wurde in einer kurzen Probe an der konservativen Temperaturgrenze abgebrochen und bleibt außerhalb der Runtime. Befund und Grenzen: [FAN_HANDOVER.md](FAN_HANDOVER.md). Die folgenden Proben gehören zu ihrem datierten Stand vom 22. Oktober.
-
-Stand: **22. Oktober 2026**. HP **8E35 / F.13**, Ryzen 9 **8940HX**, SMU **0x546F00**, PM-Tabelle **0x540208**, RTX 5070 Laptop mit NVIDIA **617.42**. Die Prüfungen sind kurze Funktionsproben mit Rücklesen und Wiederherstellung. Sie sind keine Freigabe beliebiger OC-Werte oder ein Laststabilitätstest.
-
-Der Benutzer erlaubte ausdrücklich kleine, sichere Schreibproben sowie das vorübergehende Schließen von OMEN Hub und UXTU. Er legte **Unleashed** als Anfangs-/Endzustand der HP-Modustests fest. Der CPU-GET bestätigte **−20 Curve-Optimizer-Schritte auf allen 16 physischen Kernen**. Geprüft wird −19 und anschließend die vollständige Rückkehr zu −20; Schritte sind keine Millivolt.
-
-## Korrigierte CPU-Verträge
-
-Die ursprüngliche Rohprobe vom 16. Oktober und die neue Probe liefern beide dezimal **5505544**, also **0x540208**. Der bisher im Adapter verwendete Wert 0x540108 war ein Übertragungsfehler. Er hatte reguläre Limit-Captures vor dem ersten SET blockiert; die alten direkten Kalibrierungsproben sind davon zu unterscheiden.
-
-| CPU-Vorgabe | Fester RSMU-Befehl | Readback |
+| Setting | Fixed RSMU message | Readback |
 | --- | --- | --- |
-| Fast/PPT | 0x56 | PM-Tabelle, Zelle 2, mW |
-| Slow/PPT | 0xCB | PM-Tabelle, Zelle 4, mW |
-| TDC | 0x57 | PM-Tabelle, Zelle 8, mA |
-| EDC | 0x58 | PM-Tabelle, Zelle 62, mA |
-| Tctl-Limit | 0x59 | PM-Tabelle, Zelle 10, °C |
-| CO gemeinsam/einzeln | 0x07 / 0x06 | 0xD5 für jeden Kern |
-| PBO-Scalar | 0x5B | 0x6D, vollständiger f32-Wert |
+| PPT | 0x56 | PM-table cell 2 |
+| Slow PPT | 0xCB | Cell 4 |
+| TDC | 0x57 | Cell 8 |
+| EDC | 0x58 | Cell 62 |
+| Tctl ceiling | 0x59 | Cell 10 |
+| PBO scalar | SET 0x5B / GET 0x6D | Full scalar bit image |
+| Curve Optimizer | All-core 0x07 / per-core 0x06 / GET 0xD5 | Full 16-core margin image |
 
-Der direkte Slow-Vertrag und die Skalierung sind in den primären Quellen [ZenStates-Core: Zen4Settings](https://github.com/irusanov/ZenStates-Core/blob/master/Hardware/Smu/Settings/Zen4Settings.cs) und [SetSmuLimit](https://github.com/irusanov/ZenStates-Core/blob/master/Hardware/Smu/Commands/SetSmuLimit.cs) beschrieben. Diese Interface-Beobachtungen ersetzen keine Board-Probe. Am **05:17 CEST** bestand Build **6FF1F7A145532F7FE392ABAF3B741B29D350070A7B7B7581907B5C4052A42E8F** die feste Folge **55 → 54 → 55 W**; ein neuer Adapter verglich danach alle sieben unabhängigen CPU-Steuerbilder sowie die vollständigen GPU-Steuerwerte. Journal und Startup-Datei blieben erhalten.
+CO margins are signed 16-bit steps, with CCD/core masks from the exact module contract. All-core and per-core instructions cannot coexist in a preset. Their step size is not a fixed mV conversion.
 
-Der vorherige Versuch, unabhängig STAPM und Slow über den gemeinsamen HP-Befehl 0x29 zu steuern, war nicht zuverlässig. Beispielsweise wurde für das gewünschte Paar 79/54 W tatsächlich 80/54 W zurückgelesen. Die Transaktion schlug fehl und stellte ihre Originale wieder her. **Der einzelne STAPM-Regler ist deshalb entfernt und gesperrt.** Slow verwendet jetzt ausschließlich 0xCB. Die festen HP-Modi verwenden weiter die separat belegten Hersteller-Payloads für ihren gemeinsamen PL1.
+Independent STAPM was removed after the HP path could not preserve the paired limits independently. New limit journals use `rsmu_limit` plus the exact table version. Old HP limit images remain decodable but cannot select the new transport or invent a restore. The corrected PM-table version is **0x540208**, not the earlier erroneous 0x540108.
 
-Neue CPU-Limit-Journale tragen den eigenen Typ `rsmu_limit` und die gemessene Tabellenversion. Alte HP-Limitbilder werden weiter dekodiert, aber nicht als Beleg für einen neuen Transport übernommen. Die Rücksicherung verweigert außerdem falsche Feature-/Bildkombinationen, unvollständige Kernlisten, ungültige PBO-Bitmuster und andere Firmwareversionen. Ein Profil darf CO für alle Kerne oder einzelne Kerne enthalten; beides gemeinsam wird vor dem Schreiben abgewiesen.
+After a limit SET, bounded fixed GETs must agree for at least 100 ms within two seconds. A successful API return alone is insufficient; the SET is not repeatedly forced. Each original and the whole final profile are checked, including coupled control images.
 
-Die PM-Tabellenauflösung, Aktualisierung und Kopie halten jetzt dieselbe gemeinsame PCI-Sperre. Nur diese beobachtende Lesesequenz darf dreimal mit kurzem Abstand wiederholt werden; Tuning-SETs werden nicht blind wiederholt.
+### Accepted values are not a measured stability envelope
 
-## Windows-Zustände und vollständige Originale
+Current constants allow PPT/Slow **15–160 W**, TDC **30–108 A**, EDC **30–160 A**, Tctl **60–95 °C**, CO **−50…+30** and PBO **1–10×**. Recorded trials used small decreases, CO around −20 and PBO 1×. They do not prove the complete allowed range stable or suitable. Raw fuse GETs are diagnostics, not currently a dynamic verified cap. This remains a [high-priority review finding](PROJECT_REVIEW.md).
 
-Die Windows-Prozessorrichtlinien schreiben beide Stromquellen. Ein bereits passender AC-Wert darf einen abweichenden DC-Wert nicht verdecken. Readback und Recovery vergleichen daher beide Werte. Eine fehlgeschlagene Teiländerung darf nur Original-/eigene Zielwerte restaurieren; fremde Werte bleiben gesperrt.
+New PPT/Slow applications are blocked before capture/SET while HPOmenCap runs or its state is unknown. Writes recheck this condition. Startup needs the OEM service absent until own startup handover is qualified; a temporary stop is insufficient. Existing original recovery remains possible. [HP control](HP_CONTROL.md).
 
-Ein Profil mit Energiesparplan und Prozessorrichtlinien erfasst die Originale der **Zielplan-Richtlinien**, aktiviert den Zielplan zuerst und schreibt erst danach die Richtlinien. Beim Restore werden auch die ursprünglichen Werte eines wieder inaktiven Zielplans geprüft. Die Wiederherstellung eines inaktiven Plans aktiviert diesen nicht nebenbei.
+Intel PL1/PL2/PL4 and related preset fields have no integrated backend. There is no available Intel test device. Fixed CPU clock/voltage and the removed APU controls are outside the present UI.
 
-Windows-Energiemodus und Energiesparplan sind unterschiedliche Einstellungen. Für den Modus wird der Plan **Ausbalanciert** benötigt; eine unpassende Kombination wird vor dem ersten SET mit einer konkreten Meldung blockiert. Der Benutzer kann beide Einstellungen im selben Preset auswählen. Diese Bedingung entspricht der [Microsoft-Beschreibung des Performance-Sliders](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/customize-power-slider).
+## Windows settings
 
-Das Original des Modus stammt jetzt aus `PowerGetActualOverlayScheme`. `PowerGetEffectiveOverlayScheme` ist ein zusätzlicher Apply-Readback, weil der wirksame Zustand durch den Plan oder Energy Saver abweichen kann. Ein altes Journal mit ausschließlich dem effektiven Overlay wird nicht als konfigurierter Originalzustand ausgegeben. Die verwendeten Export-Signaturen sind unter anderem in der primären Implementierung [G-Helper PowerNative](https://github.com/seerge/g-helper/blob/main/app/Mode/PowerNative.cs) nachvollziehbar.
+Windows processor boost, min/max, EPP and core parking preserve and verify **both AC and DC**. An already correct AC value must not hide a different DC value.
 
-## Lüfter und CCDs
+When a preset includes a power plan and processor policies, the controller captures policies of the target plan, activates that plan first and then writes policies. Restore verifies even an inactive plan's original policies without activating it as a side effect.
 
-Der Max-Schalter ignoriert jetzt eine gespeicherte leisere Kurve und setzt beide Ziellevel auf **48**. Fehlende CPU-/IR-Werte, ungültige GPU-Temperaturen und Schutzanforderungen führen zu voller Kühlung. Der Lüfterpfad liest nur die benötigte CPU-Temperatur; optionale Effektivtakt-Warnungen verwerfen diesen gültigen Tctl-Wert nicht mehr.
+Power plan and Windows energy/overlay mode are separate. The energy mode requires Balanced, which can be requested in the same preset; incompatible combinations fail before SET. Configured original overlay comes from `PowerGetActualOverlayScheme`; the effective overlay is an additional observation. A legacy effective-only image cannot restore a user's configured selection.
 
-Der Dienst prüft vor dem ersten Heartbeat/Level-SET die vollständige bekannte Lüftertabelle und Zuordnung. Bei pausierter Regelung oder laufendem Original-Hub lädt er keine CPU-/NVIDIA-Sensorleser. Ein eigener Stop-Event beendet die Schleife regulär, damit die CCD-Zuordnungen freigegeben werden können. Der Installer verwendet diesen Weg und verhindert einen erzwungenen Austausch bei gespeicherter CCD-Einschränkung.
+Display refresh uses supported Windows modes with readback/restore. The MUX setting is an HP BIOS boot preference, not an immediately observed display-routing change. [Power lifecycle](POWER_LIFECYCLE.md).
 
-Ein isolierter Proof mit denselben Core-/Platform-Quellen, SHA-256 **06724712D49A36B28510A8BFD55CADEACB68C9727373F42493EF585427E5FE30**, führte am **05:02 CEST** eine konservative Kurve und anschließend Max aus. Die gehaltenen Max-Statuswerte waren **48/48**, die gemessenen Firmware-Drehzahlen stiegen bis **4800/4800 RPM**. Beide abschließenden HP-Limitfelder waren wieder 80/80 W, die GPU-Steuerwerte unverändert. Das ist eine kurze reale Funktionsprobe, keine Zertifizierung des gesamten thermischen Regelvertrags.
+## CCD and cooling helpers
 
-Nach dem Stop wurden 36 Sekunden lang keine weiteren Software-Level gesendet; die RPM blieben in dieser Stichprobe bei 4800. Daraus wird **keine bestätigte Übergabe an die BIOS-Automatik** abgeleitet. Der Status „Auto“ beschreibt wahrheitsgemäß die pausierte eigene Regelung. Ein Modus-/Ownership-GET, reale Standby-/AC-Übergänge und der unabhängige Dauerbetrieb bleiben offen.
+CCD selection is a Windows process-affinity preference consumed by the own helper, not a firmware switch. An owned-process probe verified masks 0xFFFF, 0xFFFF0000 and exact original 0xFFFFFFFF return. This did not rearrange other user programs. The helper releases original masks when appropriate or on normal shutdown.
 
-Die CCD-Probe veränderte ausschließlich einen eigens gestarteten, schlafenden Kindprozess. Derselbe produktive Enforcer und die Windows-Prozess-APIs setzten **0xFFFF**, **0xFFFF0000** und anschließend wieder dessen ursprüngliche Maske **0xFFFFFFFF**. Auch `release` stellte die Originalmaske wieder her. Andere Benutzerprogramme wurden dabei nicht umgeordnet.
+Own fan curves and helper Max use separate control, temperature-only GPU telemetry and fixed model checks. A short conservative probe reached 4800/4800 firmware RPM; it does not establish BIOS handover or durable HP independence. [Fan control](FAN_CONTROL.md).
 
-## Speicher und eindeutige Anzeige
+## Verification scope
 
-Der Lüfterdienst verwendet nur den öffentlichen [NVAPI-Thermalvertrag](https://docs.nvidia.com/nvapi/group__gputhermal.html), v2-Struktur mit höchstens drei Sensoren und GPU-Ziel 1. Mehrere NVIDIA-Geräte oder fehlende/ungültige Kurvensensorwerte führen nicht zu einem geratenen Temperaturmix, sondern zu voller Kühlung. Die allgemeine NVAPI-/NVML-Dashboard-Telemetrie bleibt im kurzlebigen Leseprozess. Max fordert bedingungslos 48/48 an und benötigt dafür keine CPU-/GPU-Lesebibliothek. Bei fehlender oder ungültiger Kurve werden die Leser ebenso freigegeben wie bei expliziter Pause und Original-Hub-Wartezustand.
+`scripts/check-system-controls.ps1` is an **explicit hardware-writing developer qualification**, not routine diagnosis. It requires an expected binary hash and suitable conditions, checks for competing tuners and performs small writes with full original restore. Optional `-CoolCpu` changes/restores Windows boost too. Do not invoke it as an ordinary documentation or build check.
 
-Die vollständige aktive Tray-Stichprobe liegt bei **47,60 MB**, die Pause nach Sensoraktivierung bei **44,88 MB**, jeweils einschließlich Dashboard, pausiertem CPU-Reader und eigenem Lüfterhelfer. Vorherige aktive Versuche mit allgemeiner Telemetrie bzw. NVML-only lagen über 50 MB und wurden ersetzt. Es wurde kein Working-Set-Trimming eingesetzt. Genaue Build-/Zeit-/Prozessabgrenzung: [VALIDATION.md](VALIDATION.md).
-
-Strukturelle Dateivalidierung und Anwendungs-Preflight sind getrennt: ältere widersprüchliche Presets bleiben zum Korrigieren lesbar, dürfen aber keine Hardwareänderung starten. Die beiden gespeicherten Dynamic-Boost-Namen werden in der UI als eine Vorgabe angezeigt; explizite Änderung/Abwahl erfasst vorhandene Aliase zusammen und respektiert parallele Änderungen. Speichern einer Lüfterkurve meldet die Speicherung und den nötigen Kurvenmodus, keine unbestätigte aktive Regelung.
-
-## Wiederholbare Prüfungen
-
-`scripts/check-system-controls.ps1` verlangt Administratorrechte und den ausdrücklich angegebenen SHA-256 der geprüften Binary. Es verweigert laufende konkurrierende Tuning-Anwendungen. `-CoolCpu` kann den Windows-Boost des aktiven Plans vorübergehend abschalten; AC/DC-Originale werden vorab in der ignorierten Prüfablage gesichert und abschließend exakt zurückgelesen. Eine zu heiße CPU bleibt ein Blocker; die Temperaturgrenze wird für einen Test nicht gelockert.
-
-Die festen CPU-Proben senken Grenzen um 1 W, 1 A oder 1 °C. PBO wird bei unverändertem 1× tatsächlich geschrieben und zurückgelesen. Nach jeder CPU-Probe liest eine neue Sitzung alle sieben unabhängigen CPU-Steuerbilder; alle Proben prüfen zusätzlich die vollständige GPU-Kurve und globalen Offsets. Jede abgeschlossene Probe darf nur ihr eigenes vollständig restauriertes Journal durch den vorherigen Checkpoint ersetzen. Ein unvollständiges Recovery bleibt sichtbar.
-
-Die weiteren Proben betreffen Windows-Boost, Min/Max, EPP, Core-Parking, Modus/Plan, Bildwiederholrate, gespeicherte CCD-Auswahl, Dynamic Boost, die MUX-Startvorgabe, Max-Fan und klassische Beleuchtung. **MUX-Readback ist kein physisch getesteter GPU-Wechsel.** Die tatsächliche Verdrahtung und automatische Profilaktivierung nach einem echten Neustart verlangen eine eigene reale Neustartprobe.
-
-Rohdaten, fremde Binärdateien und lokale Proof-Artefakte liegen ausschließlich in ignorierten Verzeichnissen. Buildbezogene Endergebnisse stehen in [VALIDATION.md](VALIDATION.md); die Zusammenfassung des aktuellen Supports in [HARDWARE_MATRIX.md](HARDWARE_MATRIX.md).
+Exact dated results and old memory samples are preserved in [history](history/VALIDATION_THROUGH_2026-10-26.md). Latest software checks and unfinished physical work: [Validation](VALIDATION.md), [Roadmap](ROADMAP.md).

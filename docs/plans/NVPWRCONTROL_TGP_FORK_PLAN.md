@@ -1,165 +1,102 @@
-# NvpwrControl-Experiment: einstellbare GPU-TGP in Omen Hub++
+# GPU-TGP investigation plan
 
-Stand: **26. Oktober 2026, fortgeschriebene Untersuchung**. Auf ausdrücklichen Nutzerwunsch bleibt die aktuelle Phase bei der Untersuchung verschiedener Ansätze und der Überarbeitung dieses Plans. App-Code und Hardware-Schreibpfade werden nicht implementiert. Eine leere Codex-Worktree wurde vorbereitet; dort gibt es keine App-Codeänderung und noch keinen GitHub-Referenzfork. Programme, Installationsskripte oder Treibermodule aus NvpwrControl wurden nicht ausgeführt.
+Documentation reviewed **29 October 2026**. Technical observations below come from the **26 October** read-only investigation, Omen Hub++ source through `251fff6`. **Current scope is investigation and planning.** No new backend, hardware SET or reference GitHub fork has been produced. A local research worktree exists; it is not an upstream fork or implemented writer.
 
-## Ziel und feste Vorgaben
+## Objective and hard requirements
 
-Ein isolierter Entwicklungs-Fork soll untersuchen, ob sich die GPU-TGP über einen nachvollziehbaren NvpwrControl-ähnlichen Pfad in Watt einstellen und vollständig zurücksetzen lässt. Zielgerät ist zunächst unser eigener OMEN, nicht pauschal jede RTX-50-GPU.
+Investigate whether an original, coherent and fully restorable GPU-TGP control can be reached through existing NVIDIA/OEM interfaces on **our HP OMEN**. Do not assume that a method for a 5070 Ti applies to the non-Ti GPU.
 
-- **TPM und Secure Boot bleiben aktiviert.** Die Anwendungsprozesse laufen im Usermode; Administratorrechte/UAC sind bei Bedarf erlaubt.
-- Der untersuchte Produktpfad benötigt weder Testsignierung noch abgeschaltete Treibersignaturprüfung, eine zusätzliche Testzertifikat-Vertrauensstellung oder einen Sicherheits-Bypass.
-- Bevorzugt wird ein User-Mode-Steuerpfad über die bereits vorhandenen NVIDIA-Treiber. Der öffentliche alte Nvpwr-Kerneltreiber ist damit keine direkt verwendbare Produktlösung.
-- Rust hat Vorrang. C/C++ kommt nur als eng begrenzte, lizenzrechtlich geklärte User-Mode-Implementierung hinter einer festen C-ABI infrage. Eine Sprachänderung macht einen Kernel-Patcher nicht zu Usermode.
-- Native/offline, bestehende Tray-Budgetvorgabe und vollständige Original-/Zielnachweise bleiben Produktziele. Die normale Installation erhält durch die Analyse keine zusätzlichen Treiber oder Dienste.
+- App processes must run in user mode; UAC/admin is allowed. **TPM and Secure Boot remain enabled.**
+- No test-signing, disabled signature enforcement, added test-certificate trust or security bypass as the product path.
+- Prefer original Rust over an existing supported driver interface. A narrowly scoped licensed C/C++ user-mode shim is a fallback, not a way to turn kernel patching into user mode.
+- Preserve offline/native runtime, resource budget, exact model/build binding and complete original/target/restore evidence.
+- Do not install/start foreign driver modules, execute upstream tuners or issue guessed control packets during this investigation.
 
-## Geprüfte Referenzen
+## Pinned upstream reference
 
-Repository: [LevinAi-arch/rtx-5070ti-laptop-160w-power-limit](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit).
+[LevinAi-arch/rtx-5070ti-laptop-160w-power-limit](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit) was inspected at the following identities. These statements describe that inspection, not a fresh upstream check on every documentation edit.
 
-| Referenz | Ergebnis |
+| Reference | Observed result |
 | --- | --- |
-| `main` und Tag `v2.3.0` | Beide verweisen bei der Prüfung auf Commit `93f55e954e4dc3db1aefe5fb3bd4f0a1f8d283c3`. |
-| [Release v2.3.0](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit/releases/tag/v2.3.0) | Autor beschreibt eine User-Mode-TGP-Steuerung ohne eigenen unsignierten Nvpwr-Treiber. Der Release hat keine GitHub-Download-Assets und verweist auf eine kostenpflichtige Pro-Ausgabe. Als eigene Referenz nennt der Autor einen Lenovo Legion Pro 5 mit RTX 5070 Ti Laptop. |
-| Öffentlich nachvollziehbarer Code | Im geprüften Baum liegen C/C++-Quellen des v1.8.0-Zweigs mit eigenem Kernel-Treiber. Ein separater v2.3.0-User-Mode-TGP-Backendquelltext ist dort nicht erkennbar. Die root-EXE ist blobgleich zur EXE im mitgelieferten v1.8.0-Verzeichnis. |
-| [Release v1.8.0](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit/releases/tag/v1.8.0) | Öffentliches ZIP mit Quelltexten und vorgefertigten Dateien; SHA-256 `DB42DD704B5DF477CB309BFAAFB27CFA0A691D0747509D93FD6C1D183D82BA37` geprüft. Der Tag verweist auf `ab8d6d0a3b05245dd6ad87afa29943337f06f2d5`. |
-| Root-ZIP „v1.8.0 RTX 40/50“ | Separates Binärpaket ohne C/C++-Quellen; SHA-256 `3CB163D54ADEB314A2EDFC5C2277CBFE21A473CE5070CE369C54FA3EB15095DD`, zusätzlich mit dem gepinnten Git-Blob verglichen. |
-| Versionszuordnung | Release-ZIP und aktueller Repository-Stand sind bei `driver.c`, `nvpwr_ioctl.h` und `main.cpp` nach normalisiertem Textvergleich nicht identisch. Vorhandene SYS-Kopien haben außerdem unterschiedliche Git-Blobs. Quellen, Paket und Binärdatei dürfen daher nicht als ein einheitlich reproduzierbarer Build behandelt werden. |
-| Lizenz | Repository-Metadaten: `license: null`. Im vollständigen Baum, den beiden ZIP-Inventaren und den geprüften Quell-/Dokumentdateien wurde keine ausdrückliche Nutzungslizenz gefunden. Der README-Abschnitt „License & Disclaimer“ enthält keine erkennbare Codefreigabe. |
+| `main` and `v2.3.0` | Commit **93f55e954e4dc3db1aefe5fb3bd4f0a1f8d283c3** |
+| `v1.8.0` | Commit **ab8d6d0a3b05245dd6ad87afa29943337f06f2d5** |
+| [v2.3.0 release](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit/releases/tag/v2.3.0) | Author claims user-mode control without their custom unsigned kernel driver, using a Lenovo/5070 Ti reference. No GitHub assets; refers to paid Pro. The examined public tree did not expose a separate new user-mode TGP backend. |
+| Public v1.8 unified ZIP | SHA-256 **DB42DD704B5DF477CB309BFAAFB27CFA0A691D0747509D93FD6C1D183D82BA37**, includes source and prebuilt files |
+| Root “v1.8.0 RTX 40/50” ZIP | SHA-256 **3CB163D54ADEB314A2EDFC5C2277CBFE21A473CE5070CE369C54FA3EB15095DD**, binary package without source |
+| Version consistency | Release/archive/current source files differ; SYS blobs also differ. Do not assume every included binary is a reproducible build of one source set. |
+| Reuse status | No explicit reuse license was found in the inspected tree/archive/source headers; repository metadata reported null license. A public fork does not by itself establish permission to copy/port code into this MIT runtime. |
 
-Fremdquellen und Archive liegen ausschließlich unter ignorierter `.local/research/nvpwrcontrol/`. In Git gelangen dieser eigene Plan und knappe Schnittstellenbeobachtungen, keine fremden Binärdateien oder Quellkopien.
+The recent author claim is a research lead, not proof of compatibility. Access to Pro source is **not a prerequisite** for independent investigation. No purchase/contact/private download occurred. Reference source/archive copies stay ignored in `.local/research/nvpwrcontrol/`; only original concise observations belong in Git.
 
-## Technischer Befund des öffentlichen alten Pfads
+## What the old kernel path actually does
 
-Der gelesene [C-Treiber](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit/blob/93f55e954e4dc3db1aefe5fb3bd4f0a1f8d283c3/NvpwrControl_61692_v1_8_0_unified_blackwell_tuner/NvpwrControl_61692_v1_8_0_unified_blackwell_tuner/driver/driver.c) arbeitet an laufenden NVIDIA-Power-Policy-Objekten. Zusammengehörige Basis-/Boost-/Obergrenzen werden geändert und danach intern zurückgelesen. Dieser Ansatz liegt unterhalb unseres bisherigen öffentlichen NVML-Wattlimit-Adapters und ist grundsätzlich ein anderer Ansatzpunkt für dessen fehlenden Original-GET.
+The examined v1.8 driver binds NVIDIA **616.92**, specific image signatures/layouts and kernel objects. It changes coupled base/cTGP, boost amount, UPPER/MAX and invokes an internal generator to establish current policy. It uses a fixed **25-W** boost split and session-specific originals. Driver unload explicitly does **not** restore automatically.
 
-Wesentliche Abgrenzungen:
+The pinned low-power non-Ti 5070 branch expects a coherent **115-W** baseline and accepts **120–140 W** in 5-W steps. The Ti branch has a different baseline/range; README tables conflict with parts of the pinned implementation. Neither range is our qualification. The separate XMG high-power contract is not our HP backend.
 
-1. Der alte Pfad prüft das Kernel-Image für **616.92**. Er enthält buildabhängige Adressen, Layoutannahmen und Code-Erkennung. Unser **617.42** ist damit nicht automatisch kompatibel.
-2. Für die normale **RTX 5070 Laptop** akzeptiert die untersuchte Funktion `IsSupportedTarget` bei kohärenter OEM-Basis 115 W Ziele von **120 bis 140 W** in 5-W-Schritten. Die 5070-Ti-Klasse hat einen anderen Bereich. Die Root-README-Tabelle stellt dies teilweise anders dar; für die Analyse ist die gepinnte Implementierung maßgeblich.
-3. Der Code verwendet ein festes 25-W-Boostmodell. Unsere tatsächlichen Policy-Komponenten sind damit noch nicht identifiziert. Die Differenz zwischen NVML-Default und effektivem Limit belegt kein identisches internes Modell.
-4. Die Rücksetzung nutzt einen während der Treibersitzung erfassten Zustand. `DriverUnload` stellt NVIDIA ausdrücklich **nicht** automatisch zurück. Ein Helfer-Neustart ist daher keine erwiesene Wiederherstellung.
-5. Die [gemeinsame Schnittstelle](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit/blob/93f55e954e4dc3db1aefe5fb3bd4f0a1f8d283c3/NvpwrControl_61692_v1_8_0_unified_blackwell_tuner/NvpwrControl_61692_v1_8_0_unified_blackwell_tuner/shared/nvpwr_ioctl.h) besitzt eigene Status-/Set-Versionen. Der zusätzliche XMG-v8-Vertrag ist ein anderer Geräte-/Nachrichtenvertrag und kein TGP-Backend für unseren HP.
+The shared `\\.\Nvpwr` interface has status v7 and SET v2, with status/set/restore operations and a 16-byte SET request. Its GUI ensures a kernel service, so running it for “status” is not assumed passive. The old driver was not loaded. Its addresses/pointers cannot be called directly from user mode or reused across driver sessions.
 
-Die Kernelmethode kann nicht durch einen Rust- oder C++-User-Mode-Wrapper direkt übernommen werden. Windows trennt den Adressraum einer Anwendung vom Kernel: [Microsoft-Dokumentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/gettingstarted/user-mode-and-kernel-mode). Die vom Autor angekündigte neuere User-Mode-Methode muss deshalb eigenständig nachvollzogen werden.
+## Target and observed public values
 
-## Unser Zielgerät
-
-Lesende Zuordnung während dieser Analyse:
-
-| Eigenschaft | Wert |
+| Property | Reference |
 | --- | --- |
-| Gerät | HP OMEN 16-ap0xxx, Board 8E35, BIOS F.13 |
-| GPU | RTX 5070 Laptop, **ohne Ti** |
-| PCI-ID | `10DE:2D18` |
-| Subsystem | `103C:8E35` |
-| NVIDIA-Treiber | `617.42` |
-| VBIOS | `98.06.2a.40.da` |
-| Öffentliche NVML-Werte | Default 80 W, Bereich 5…115 W; früher separat effektiv 115 W gelesen |
-| Fehlender Wert | Konfiguriertes/angefordertes Original-Limit ist im bisherigen öffentlichen Pfad nicht verfügbar |
+| Model | HP OMEN 16-ap0xxx, **8E35 / F.13** |
+| GPU | RTX **5070 Laptop**, non-Ti, **10DE:2D18**, subsystem **103C:8E35** |
+| NVIDIA / VBIOS | **617.42 / 98.06.2a.40.da** |
+| Public power values | Default **80 W**, allowed **5–115 W**, separately effective **115 W** |
+| Missing original | Configured/requested limit unavailable through current public queries |
 
-Diese Angaben rechtfertigen weder 160 W noch eine übernommene 5070-Ti-Freigabe. Technisches erstes Ziel ist ein nachgewiesener, veränderbarer und zurücksetzbarer Grenzwert unter Einhaltung der Boot-/User-Mode-Vorgaben.
+Effective/default values are not the configured original and do not prove draw, a 25-W internal split or a 160-W capability. Actual TPM/Secure-Boot state was not newly qualified during the research; retaining them enabled is a required future acceptance condition.
 
-## Vorgehen
+## Candidate approaches
 
-### Aktueller Untersuchungsschwerpunkt: eigene Nachbildung
-
-Der Nutzer möchte den technischen Weg vom alten Kernelansatz zu einem User-Mode-Programm selbst nachvollziehen. Der Zugriff auf v2.3.0-Quellen ist deshalb **keine Voraussetzung für unsere weitere Untersuchung**. Die Pro-Ausgabe bleibt eine mögliche Vergleichsreferenz. Es wird nach einem eigenständig belegbaren Steuerweg über vorhandene NVIDIA-/OEM-Schnittstellen gesucht. Die Lizenzprüfung bleibt Voraussetzung für eine direkte Übernahme fremder Implementierung, nicht für das Dokumentieren eigener Schnittstellenbeobachtungen.
-
-Ein Kernel-Funktionszeiger aus `Nvpwr.sys` ist kein im Usermode aufrufbarer Einstieg. Für jede Wirkung muss eine erreichbare, zugelassene Schnittstelle des vorhandenen Treibers gefunden werden. Eine Übersetzung der C-Syntax nach Rust allein löst diese Grenze nicht.
-
-### Vergleich der möglichen Wege
-
-| Weg | Vorhandene Belege | Offene Frage / nächster Nachweis | Einordnung |
+| Approach | Existing evidence | Next question | Position |
 | --- | --- | --- | --- |
-| **A: NVIDIA-Control-Transport rückwärts verfolgen** | Ghidra zeigt in der exakt gehashten 617.42-Implementierung eine Transportkette der Power-Policy-Funktionen mit einem administrativen Zweig zu `\\.\NvAdminDevice`. Der DOS-Geräteeintrag ist auf unserem Rechner sichtbar. | Welche der Nvpwr-Wirkungen sind über diesen bestehenden NVIDIA-Endpunkt tatsächlich als User-Mode-Control erreichbar? Paketvertrag, Zugriffsrechte, ausgewählter Transportzweig und zugehöriger Kernel-Handler müssen zugeordnet werden. | **Höchste Untersuchungpriorität.** Ein realer vorhandener Einstieg, aber noch kein nachgewiesener TGP-Writer. Es wurde kein manueller IOCTL an dieses Gerät gesendet. |
-| **B: Private NVAPI-Power-Policies** | `ClientPowerPoliciesGetInfo`, `GetStatus` und der Setter sind statisch vorhanden. Die Getter wurden über die passenden 617.42-Adressen und die belegten Versionsgrößen lesend untersucht. | Info v1/v2 und Status v1 liefern als normaler Benutzer Erfolg, aber keine gültigen Einträge. Privilegien-/Modellfilter, weitere Policy-Varianten und mögliche andere User-Mode-Einstiege untersuchen. Prozentwerte benötigen außerdem einen belegten Wattbezug. | **Direkt prüfbar, bisher keine nutzbare klassische Policy auf unserem Gerät.** Funktionspräsenz und Erfolgscode reichen nicht für eine Freigabe. |
-| **C: Modernes öffentliches NVML** | Der v2-Power-Setter ist exportiert. Grenzen, Default und effektiver Wert sind über öffentliche Abfragen/Felder teilweise lesbar. | Scope-/Versionsunterschiede und einen tatsächlichen konfigurierten Originalwert klären. Der bisherige Limit-GET und das angeforderte Limit bleiben auf unserem Gerät nicht unterstützt; der GPU-Base-Scope wurde nicht akzeptiert. | **Sauberster API-Fallback, sofern vollständig verfügbar.** Ein vorhandener v2-Setter behebt nicht automatisch die fehlende Rücksetzungsinformation und beweist keine Erhöhung über OEM. |
-| **D: HP-/NVPCF-Budgetsteuerung** | Eigene HP-WMI-Aufrufe für Leistungsmodi, cTGP-/PPAB-Vorgaben und gemeinsame Budgetsteuerung sind bereits untersucht. Das ist grundsätzlich aus dem Usermode erreichbar. | Existiert auf 8E35 ein tatsächlich numerischer GPU-Budget- oder TGP-Vertrag, oder werden nur feste Modi und Boost-Vorgaben angeboten? NVIDIA- und HP-Schreiberzuständigkeit abgleichen. | **OEM-nahe Ergänzung oder Fallback.** Ein Moduswechsel, CPU-Limit oder AC-/P-State-Schalter ist allein noch kein frei einstellbares GPU-Wattlimit. |
-| **E: Neuere NvpwrControl-User-Mode-Methode als Referenz** | v2.3.0 beschreibt nach Autorangabe User-Mode-TGP-Steuerung ohne eigenen unsignierten Nvpwr-Treiber. | Die Methode ist in den geprüften öffentlichen Quellen nicht nachvollziehbar. Nur rechtmäßig verfügbare Quellen, Schnittstellendokumentation oder ein erlaubter Vergleich können die Zuordnung bestätigen. | **Optionaler Informationsgewinn, keine harte Abhängigkeit und keine bestätigte Lösung für unseren HP.** |
-| **F: Regulär zugelassener signierter Kernel-Helper** | Eine User-Mode-App könnte technisch mit einem durch die aktuelle Windows-Treiberrichtlinie zugelassenen Kernel-Backend kommunizieren. Das wäre ein anderer Aufbau als die alte Testsignierungsvariante. | Erfordert eine zusätzliche Kernelkomponente, passende Zulassung/Signierung und eigene Geräte-/Lifetime-Nachweise. Ein selbstsigniertes Zertifikat oder Rust statt C genügt nicht. | **Architekturreserve, keine reine User-Mode-Nachbildung und nicht Teil der jetzigen Umsetzung.** TPM/Secure Boot und die aktuell geltende [Windows-Treiberrichtlinie](https://support.microsoft.com/en-us/windows/hardware/drivers/the-windows-driver-policy) müssten dabei erfüllt bleiben. |
+| **A. Trace existing NVIDIA control transport** | Exact 617.42 Ghidra path includes an administrative `\\.\NvAdminDevice` branch and `DeviceIoControl`; DOS device entry visible | Which policy operations select this branch, with what access rights, packet contract and matching handler? | Highest research priority; **not a proven TGP writer**. Device was not manually opened or sent a control packet. |
+| **B. Private NVAPI policies** | Info/Status interfaces and setter statically present; validated GET frames callable | Does privilege/model selection or another offered policy class provide actual originals/bounds? What is the watt relationship? | Classic non-elevated v1/v2 calls returned empty policy availability, despite status 0. |
+| **C. Modern public NVML** | v2 setter export present; some public limits/scopes readable | Is a correctly scoped configured original and full write/restore contract available? | Preferred documented API if complete; export presence alone does not solve missing original or extend OEM bounds. |
+| **D. HP WMI / NVPCF budgets** | Own mode/cTGP/PPAB/shared-budget calls exist | Is there an actual numeric GPU-budget contract on 8E35, beyond fixed modes/preferences? | OEM fallback/complement; CPU limit, boost preference or AC/P-state change is not free TGP. |
+| **E. New Nvpwr user-mode reference** | Author's v2.3 claim | Can legitimately available source/interface evidence explain its mechanism and applicability? | Optional comparison, no purchase/source dependency and no established HP support. |
+| **F. Normally Windows-accepted signed kernel helper** | A user-mode app can technically call an approved backend | Additional kernel component, current signing/admission policy and independent lifetime/device evidence needed | Architectural reserve; **not pure user-mode reproduction**, not current implementation. Self-signing or Rust syntax does not satisfy it. |
 
-A und B können am Ende denselben Herstellerpfad benutzen; sie sind unterschiedliche Untersuchungsrichtungen, keine bereits bewiesenen unabhängigen Lösungen. Die öffentlichen NVIDIA-Linux-Quellen dienen bei A als [Semantik-/Bezeichnungsreferenz](https://github.com/NVIDIA/open-gpu-kernel-modules), nicht als Beweis einer identischen Windows-ABI. Bisher gelesene öffentliche Power-/PMGR-/Perf-Header liefern für sich keinen vollständigen numerischen Windows-TGP-Schreibvertrag.
+A/B may converge on the same vendor path. Public [NVIDIA open kernel headers](https://github.com/NVIDIA/open-gpu-kernel-modules) are naming/semantic references, not proof of the Windows ABI. No examined public power header alone supplied our complete numeric TGP contract. [Microsoft user/kernel distinction](https://learn.microsoft.com/en-us/windows-hardware/drivers/gettingstarted/user-mode-and-kernel-mode); [Windows driver policy](https://support.microsoft.com/en-us/windows/hardware/drivers/the-windows-driver-policy).
 
-### Was inzwischen konkret untersucht wurde
+## Read-only results already obtained
 
-- Die tatsächlich aufgelösten privaten Power-Getter liegen in der erwarteten NVIDIA-Implementierung mit SHA-256 `C6A2014763C3662512B5D420DFC7632B777338881A13AEAB3F21D8033EAE6C71`. Die relativen Einstiegspunkte stimmen mit der statischen Interface-Tabelle überein.
-- Ghidra bestätigt für die untersuchten Getter Info v1 mit 184 Byte, Info v2 mit 2248 Byte und Status v1 mit 72 Byte. Die reinen GET-Proben verwenden begrenzte Frames mit zusätzlichen Kontrollbereichen; diese blieben unverändert.
-- Als **nicht erhöhter Benutzer**: Info v1 liefert Status 0, Valid 0 und Count 0; Status v1 liefert Status 0 und Count 0. Die zusätzliche Info-v2-Abfrage liefert ebenfalls Status 0 mit leerem gültigem Policy-Angebot. Diese Antworten enthalten keinen konfigurierten Originalwert und kein freigegebenes Regelintervall.
-- Statisch verfolgt wurde der Weg der Power-Policy-Wrapper in einen NVIDIA-Control-Dispatcher. In einem Zweig sind ein administrativer Gerätezugang und `DeviceIoControl` belegt. Daraus folgt noch nicht, dass genau dieser Zweig bei unseren Getteraufrufen gewählt wurde oder dass die alten Kernel-Direktänderungen darüber erreichbar sind.
-- Die Sichtbarkeit von `NvAdminDevice` wurde nur über den DOS-Gerätenamensraum geprüft. Der Endpunkt wurde in dieser Probe nicht geöffnet und es wurde kein eigener Control-Puffer an ihn übergeben.
-- Für NVML wurde lediglich die Präsenz des v2-Setter-Exports festgestellt. **Kein Setter wurde aufgerufen.** Ebenso wurden keine Nvpwr-Module geladen, keine Dienste gestoppt und keine Boot-/Signaturoptionen geändert.
-- Der tatsächliche aktuelle TPM-/Secure-Boot-Zustand wurde in dieser Untersuchungsrunde nicht neu abgenommen. Dass die zukünftige Lösung diese Funktionen aktiviert lassen muss, bleibt eine feste Vorgabe.
+- Resolved private power GETs belonged to implementation SHA-256 **C6A2014763C3662512B5D420DFC7632B777338881A13AEAB3F21D8033EAE6C71**. Live entrypoints matched the analyzed interface mapping.
+- Info ID **0x34206D86**: v1 **184 bytes / 0x100B8**; v2 **2248 bytes / 0x208C8**. Status ID **0x70916171**: v1 **72 bytes / 0x10048**. Guard regions remained intact.
+- As a **non-elevated user**, Info v1/v2 returned status 0 with no valid policy entries; Status v1 returned status 0/count 0. This supplied no original or usable target interval. Percent-mille fields cannot be relabeled watts.
+- Setter ID **0xAD95F5ED** was analyzed statically, never invoked. Privilege/filter meanings are not inferred merely from a helper flag.
+- Tracing showed a dispatcher/administrative transport branch, but did not prove our GET probes selected it or that old direct kernel effects are exposed through it.
+- `NvAdminDevice` visibility was checked through the DOS device namespace only. The public NVML v2 setter was checked for export presence only. **No SET** was performed; no services or boot security settings were changed.
 
-Rohbelege liegen ignoriert in `.local/research/nvpwrcontrol/`; zusätzliche Ghidra-Decompilationen bleiben in `.local/research/native/mcp-evidence/`. Die App-Implementierung wurde dafür nicht verändert.
+Raw GET evidence and native decompilation remain ignored locally. App hardware implementation was unchanged.
 
-### Zuordnungsbuch: Kernelwirkung zu möglichem User-Mode-Vertrag
+## Map effects to actual contracts
 
-| Wirkung des alten Backends | Was für eine User-Mode-Nachbildung gefunden werden muss |
+| Old kernel effect | Required user-mode evidence |
 | --- | --- |
-| Basis und dynamischen Anteil verändern | Lesbarer Originalzustand und ein typisierter Hersteller-Control mit belegten Einheiten und Modellgrenzen; keine pauschale Übernahme des 25-W-Modells. |
-| MAX und obere Sättigungsgrenze konsistent anpassen | Ein Vertrag, der die zusammengehörigen Begrenzungen gültig aktualisiert. Direktes Schreiben an Kerneladressen ist keine User-Mode-Alternative. |
-| NVIDIA-Generator auslösen | Belegter Commit-/Eligibility-/Policy-Aufruf, der die neue Vorgabe tatsächlich übernimmt; reine Anzeige- oder Cacheänderung reicht nicht. |
-| Aktuellen Zustand prüfen | Angeforderte, effektive und weitere begrenzende Werte unterscheiden. Leere Policy-Listen und Defaultwerte sind keine Original-Snapshots. |
-| Original vollständig zurückgeben | Gleiche GPU-/Treibersitzung, sämtliche eigenen Änderungen und ein eigener Restore-Vertrag. Prozessende oder Helferentladen dürfen nicht als Restore angenommen werden. |
+| Change base and dynamic amount | Actual originals, units, offered model bounds; no assumed fixed 25-W split |
+| Change upper/MAX coherently | Valid coupled operation through an allowed interface, not direct kernel addresses |
+| Commit/generate current policy | Proven eligibility/commit effect, not cached UI state |
+| Verify current state | Distinguish configured/requested/effective/limiting components; empty lists/defaults are not snapshots |
+| Restore completely | Same GPU/session identity and all own modified components; process exit/unload is not restore |
 
-### Unmittelbar nächste Untersuchungsschritte
+## Immediate next research
 
-1. **Transport- und Rechtezuordnung vervollständigen:** Administrative NVIDIA-Transportzweige den Power-Operationen zuordnen; lesenden Standard-/Administratorvergleich planen und nur belegte Frames verwenden. Keine Control-Code-Suche durch blindes Ausprobieren.
-2. **Weitere erreichbare Policy-Klassen prüfen:** Die klassische v1/v2-Familie hat bisher keine Daten geliefert. Prüfen, ob das eine Modell-/Rechteauswahl ist oder ob ein anderer angebotener Power-/NVPCF-Vertrag benötigt wird.
-3. **NVML v2 und OEM-Verträge abgrenzen:** Verfügbare Scopes, Einheiten und Originalwerte mit den bestehenden Ergebnissen vergleichen. Nur belegte Grenzwertsteuerung als TGP-Ansatz einstufen; reine Performance-/Boost-Präferenzen gesondert halten.
-4. **Für jeden Kandidaten ein Ergebnisblatt erstellen:** Einstieg, Datenrichtung, erforderliche Rechte, Geräte-/Buildbindung, Snapshot, Wiederherstellung, Boot-Kompatibilität sowie belegte und weiterhin unbekannte Punkte.
-5. **Go/No-Go für einen späteren Prototyp:** Erst wenn wenigstens ein Kandidat einen lesbaren Originalzustand und einen plausibel zugehörigen zugelassenen Schreib-/Rücksetzungsvertrag bietet, wird ein separater Implementierungsschritt geplant. Fehlt das, wird der Befund dokumentiert statt ein funktionierender User-Mode-Regler behauptet.
+1. Finish transport/rights/handler attribution. Plan a standard-user versus administrator **read-only** comparison using only proven frames. No blind IOCTL fuzzing.
+2. Examine offered policy classes and model/privilege filtering; the classic v1/v2 family is currently empty.
+3. Resolve NVML scopes/units/original values and separate numeric GPU control from OEM performance preferences.
+4. For each candidate record entrypoint, direction, privileges, device/build binding, snapshot, restore, boot compatibility and unknowns.
+5. Decide on a prototype only after a readable original and plausibly corresponding allowed write/restore contract exist. Otherwise record a negative result without claiming a working slider.
 
-## Spätere Umsetzung — erst nach einem tragfähigen Untersuchungsbefund
+## Later implementation, after that decision
 
-### 1. Gefundenen User-Mode-Pfad und Wiederverwendungsrechte festhalten
+1. Pin the independently evidenced contract and any required reuse permission. A fork and an available binary are not a code-integration license. [GitHub licensing guidance](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository).
+2. If useful, create the authorized reference fork, preserve provenance and isolate actual integration in a `codex/` branch/worktree based on then-current app source. No upstream binaries go into normal packages.
+3. Build a read-only Rust diagnostic for exact GPU/driver/session identity and all available original components. Verify with TPM/Secure Boot enabled before planning a write.
+4. Keep core GPU-policy snapshot/validation separate from the narrow Windows transport/FFI. Use a small licensed C-ABI shim only if necessary. Keep the existing public NVML adapter separate. Never accept arbitrary raw driver commands from UI/profiles.
+5. Test ABI/state fixtures first: bad versions, mixed state, lost replies, foreign changes and restore failure. Plan the first physical change **within the OEM envelope**, preferably a small decrease, with full immediate restore. The old above-115-W writer is unsuitable for that trial. Even an unchanged total is not a no-op if its base/boost split changes.
+6. Only after successful full restore, integrate presets, sign-in, crash, sleep/resume and GPU/driver loss. Consider any above-OEM scope separately with supply/thermal/load evidence; missing VRM/VRAM/hotspot data must stay unknown. Repeat whole-helper tray acceptance and normal Cargo checks.
 
-- Den durch unsere Untersuchung belegten Herstellervertrag und dessen Geräte-/Buildgrenzen als Grundlage wählen. Ein Zugriff auf Pro-Quellcode ist dafür nicht zwingend nötig; deren mögliche Methode bleibt unbestätigt.
-- Für jede direkte Übernahme fremder C/C++-Implementierung oder deren Portierung vorher Lizenz/Freigabe klären. Ein öffentlicher GitHub-Fork ersetzt diese Prüfung nicht: [GitHub-Lizenzhinweise](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository).
-- **Ergebnis:** eigenständig nachvollziehbare Backend-/Rechteentscheidung. Der alte Testsignierungs-Kernelweg wird nicht stillschweigend als User-Mode-Lösung eingesetzt.
-
-### 2. Experiment isolieren
-
-- Nach Abschluss der Untersuchung gegebenenfalls einen Referenz-Fork des verlinkten Repositories unter dem eigenen GitHub-Konto anlegen; Ursprung und Rechtehinweise erhalten.
-- Für die eigentliche Omen-Hub++-Integration einen eigenen Zweig **`codex/nvpwrcontrol-tdp`** mit getrennter Worktree verwenden. Basis ist der aktuelle Omen-Hub++-Stand `ca79bf3db1b0dd5b73ad95a6c56a39cdd020308a`.
-- Keine binären Upstream-Artefakte in normale Release-Pakete kopieren. Abhängigkeiten und Nachweise getrennt erfassen.
-
-### 3. Diagnose zunächst ohne SET
-
-- Einen kleinen Rust-Prototyp für den nachgewiesenen User-Mode-Zugang schreiben. Er darf keinen eigenen Treiber automatisch installieren oder starten.
-- Aktive GPU, Subsystem, VBIOS, geladene Treiber-/Bibliotheksidentität und die Epochengültigkeit des zurückgegebenen Zustands erfassen.
-- Basis, Boostanteil, Obergrenzen, angeforderten und effektiven Zustand getrennt lesen. Nur verfügbare Werte interpretieren; Default und effektives Limit bleiben andere Größen als ein konfiguriertes Original.
-- Private Schnittstellen müssen für **617.42** belegt sein. Die alten Kernel-Adressen oder der feste 25-W-Anteil werden nicht lediglich umetikettiert.
-- **Ergebnis:** reproduzierbarer lesender Nachweis für unser Gerät mit TPM/Secure Boot aktiv. Noch keine Zusage eines schreibbaren TGP-Reglers.
-
-### 4. Rust-Module und feste Verträge umsetzen
-
-| Modul | Aufgabe | Sprache |
-| --- | --- | --- |
-| `omen-core::gpu_policy` | Semantischer Snapshot, Zustandsmodell, Zielprüfung und Rücksetzungsregeln | Rust, ohne Windows-Abhängigkeit |
-| `platform::windows::nvpwr_user` | Fester User-Mode-Treiber-/API-Vertrag, Lebensdauer, Privilegien, Parser | Rust mit enger FFI-Grenze |
-| Optionaler Backend-Shim | Nur belegte, lizenzierte Aufrufe, falls ein verfügbarer User-Mode-Teil nicht sinnvoll direkt portiert werden kann | Kleine C/C++-Bibliothek mit C-ABI |
-| Bestehender Profilcontroller | Original-Capture, Journal, einmaliger SET, unabhängiger Readback und Restore | Rust |
-| Vorhandenes Presetfeld | Wattvorgabe sowie klarer Original-/Ziel-/Effektivstatus | Bestehende native Rust-Oberfläche |
-
-Das bestehende öffentliche NVML-Backend bleibt ein eigener Adapter. Der neue Adapter wird erst bei einem belegten Vertrag angeboten. Fremde interne Adressen oder beliebige IOCTL-Kommandos dürfen nicht aus Profilen oder der UI stammen. Rücksetzungsdaten binden GPU und Treibersitzung; alte Kernelzeiger sind keine über Neustart gültigen Wiederherstellungsdaten.
-
-### 5. Erst Rücksetzung, dann kleine echte Änderung
-
-- Zuerst gespeicherte Nachrichten-/Zustandsfälle und ABI-Tests prüfen: falsche Version, gemischter Zustand, geänderte Sitzung, verlorene Antwort, fremde Änderungen und misslungene Rückgabe.
-- Den ersten echten Versuch innerhalb der ursprünglichen Gerätehülle planen, vorzugsweise mit einer kleinen Senkung und unmittelbarer vollständiger Rücksetzung.
-- Der unveränderte alte 5070-Writer ist dafür ungeeignet: Er erlaubt erst Werte oberhalb 115 W. Außerdem ist ein gleiches Gesamtlimit kein No-op, wenn sich Basis oder Boostaufteilung ändern. Ein neuer User-Mode-Pfad braucht dafür einen eigenständig nachgewiesenen Vertrag.
-- AC-/Temperaturdaten, unveränderte Core-/VRAM-/V/F-Steuerbilder, konkurrierende HP-/Tuning-Writer und alle zusammengehörenden Power-Werte prüfen.
-- **Ergebnis:** echter SET/Readback/Original-Restore auf unserem OMEN; keine Verwechslung einer Limitanzeige mit tatsächlicher Leistungsaufnahme.
-
-### 6. Profile, Lebenszyklus und optional erweiterter Bereich
-
-- Danach Presets, Windows-Anmeldung, App-Abbruch, Standby/Resume und Treiber-/GPU-Neustart separat integrieren und prüfen.
-- Vollständige Rückgabe muss vor Helfer-Neustart oder Aufgabe der eigenen Zuständigkeit bestätigt sein. Eine unklare Rücksetzung bleibt sichtbar.
-- Erst nach dem Grundpfad getrennt über Werte oberhalb des OEM-Bereichs entscheiden und dafür passende Geräte-, Versorgungs-, Temperatur- und Lastnachweise erheben. Fehlende Hotspot-/VRAM-/VRM-Daten werden nicht erfunden.
-- Kontrollieren, dass TPM und Secure Boot in der Zielkonfiguration weiterhin aktiviert sind und keine Signatur-/Boot-Sicherheitsoption für den Betrieb geändert werden muss.
-- Normale Cargo-Prüfungen, Release-Build und die gesamten residenten Tray-Prozesse gehören zur abschließenden Abnahme. Die heutige Analyse ersetzt keinen dieser Nachweise.
-
-## Entscheidung nach der Analyse
-
-**Der Ansatz ist untersuchenswert, aber noch kein nachgewiesen kompatibles schreibbares Backend für unseren OMEN.** Die Untersuchung wird unabhängig von der Verfügbarkeit einer Pro-Ausgabe fortgeführt. Vorrang haben die Zuordnung vorhandener NVIDIA-Control-Transporte und die Suche nach einem tatsächlich angebotenen Policy-Vertrag. Die klassischen privaten Getter sind aufrufbar, haben in unseren nicht erhöhten Proben jedoch keine nutzbaren Policies geliefert. Ein administrativer Gerätezugang ist statisch und als Geräteobjekt sichtbar, aber noch nicht als TGP-Writer belegt. Rust-/C++-Implementierung und Hardware-Schreibtests bleiben nach der letzten Nutzeranweisung zurückgestellt. TPM und Secure Boot bleiben feste Anforderungen.
+**Conclusion:** a useful research lead exists, but no compatible alternate writable backend has been established. Continue investigation; Rust/C++ implementation and new hardware writes remain deferred under the current user instruction.

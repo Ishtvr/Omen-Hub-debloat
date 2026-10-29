@@ -1,41 +1,43 @@
-# Leistungsprofile und Custom Presets
+# Custom presets
 
-**Leistungsprofile** öffnet den nativen Tab **Custom Presets**, alternativ `presets-ui [id]`. `gpu-ui` bleibt ein kompatibler Einstieg. Der Editor bündelt gespeicherte Vorgaben; er ist kein Nachweis, dass alle angebotenen Parameter auf dem Gerät schreibbar sind.
+Open **Performance profiles / Leistungsprofile** or run `omen-hub-pp.exe presets-ui [id]`. `gpu-ui` remains an alias. The editor groups settings; it does not make every catalog entry writable. Current availability: [Hardware matrix](HARDWARE_MATRIX.md).
 
-**Entwicklung `0.9.0-dev.2`:** Das öffentliche **GPU-Leistungslimit (W)** ist wieder vorhanden. Der native Feld-/Speicherweg erhält exakte Milliwattwerte; 90,125 W wurden als 90125 mW gespeichert und beim ausdrücklichen Abwählen entfernt, ohne Hardwareanwendung. Anwendbarkeit hängt von einem lesbaren Original, aktuellen Treibergrenzen und dem öffentlichen NVML-Setter ab. Auf dem Referenzlaptop fehlt der konfigurierte Originalwert in dieser Schnittstelle; der Wert bleibt deshalb nicht anwendbar. Native Kontroll-IDs sind jetzt von der Reihenfolge der Felder getrennt, damit neue Felder den bestehenden V/F-Editor und Automationszugriffe nicht verschieben. Aktueller Nachweis: [GPU_PROFILES.md](GPU_PROFILES.md).
+## Workflow
 
-## Bedienung
+1. Select a saved preset or create a new one and enter its name.
+2. Expand GPU, CPU or Windows groups. Only checked settings belong to the preset. Omitting a setting does not reset an existing hardware override.
+3. **Save** persists the draft. **Apply** uses a fixed elevated child and complete preflight of a saved preset. Unsupported or conflicting instructions block the whole Apply.
+4. **Activate at Windows start** requires the exact successfully applied revision, live verification and protected installation/approval. An explicit startup choice during Save may request Apply followed by authorization; ordinary Save alone does not do so.
+5. **Delete** archives the original JSON bytes and hash, removes the preset from selection and disables a matching sign-in selection. It keeps hardware recovery data; deletion is not restoration.
 
-1. Ein gespeichertes Preset auswählen oder **Neu** wählen und einen Namen eingeben.
-2. Gewünschte Gruppen aufklappen. **GPU**, **CPU** und **Windows** besitzen eigene Abschnittsüberschriften. Nur angehakte Einstellungen gehören zum Preset; ein nicht enthaltener Wert verändert diese Hardwarefunktion beim späteren Apply nicht.
-3. **Speichern** sichert ausschließlich Metadaten. **Anwenden** wird erst für ein gespeichertes, vollständig unterstütztes Preset verfügbar und fordert gezielt Windows-UAC an. Ein einziges unqualifiziertes Setting sperrt das gesamte Apply, statt einen Teil anzuwenden.
-4. **Bei Windows-Start aktivieren** ist erst nach erfolgreichem Apply genau dieser Revision und vollständiger Startup-Prüfung freigegeben. Die Aktion richtet bei Bedarf den festen geschützten Anmeldungseinstieg ein. Ein veralteter ausgewählter Eintrag erscheint ausdrücklich mit ungültiger Freigabe; er gilt nicht als aktiv validiert.
-5. **Löschen** entfernt das Preset aus den Auswahllisten und archiviert seine exakten JSON-Bytes mit Hash unter `deleted-profiles`. Eine zugehörige Startup-Auswahl wird deaktiviert. Das Hardware-Recoveryjournal bleibt erhalten; Löschen ist kein Restore.
+Declining to discard unsaved edits keeps the previous selection, draft and save target. Saves merge against fresh stored data and report conflicts instead of silently overwriting another editor.
 
-Wird ein Presetwechsel mit ungespeicherten Änderungen abgelehnt, bleiben Auswahl, Entwurf und Speicherziel beim bisher geladenen Preset. Eine angenommene Verwerfung lädt das gewählte Preset neu.
+## Groups
 
-## Einstellungsgruppen
-
-| Bereich | Gruppen und gespeicherte Optionen |
+| Section | Current fields |
 | --- | --- |
-| GPU | GPU-/VRAM-Takt-Offsets, vollständige GPU-Leistungskurve, manuelles Max-Fan und die ausdrücklich gewünschte Dynamic-Boost-Vorgabe (Hardwareadapter noch ungeprüft); ein globaler Core-Offset ist bei aktiver individueller V/F-Kurve ausdrücklich gesperrt |
-| CPU | CPU-Temperatur, Slow- und Fast-Limit (PPT), TDC/EDC, PBO, gemeinsamer oder einzelner Curve Optimizer sowie Intel-Leistungsgrenzen. Einzelnes STAPM, feste CPU-Takte und direkte Spannungen sind entfernt. |
-| Windows | Eigener Abschnitt mit Prozessor-Boost, Min/Max, EPP, Core Parking und CCD-Affinität (der Hintergrunddienst pinnt das Vordergrundprogramm) sowie Energie-/Anzeigevorgaben |
+| GPU | Core/VRAM offsets, public numeric power limit, full V/F curve, Max-Fan, Dynamic Boost |
+| CPU | Tctl limit, Slow/PPT, TDC/EDC, PBO, all-core or per-core Curve Optimizer; Intel power fields remain unsupported |
+| Windows | Processor boost, min/max, EPP, core parking, CCD preference, power plan/mode, refresh rate and graphics boot preference |
 
-Super Resolution und Radeon Graphics Options erscheinen wie gewünscht nicht im Editor. Das versionierte Datenformat behält ältere Feature-Schlüssel, damit bereits vorhandene Profile beim Bearbeiten nicht gekürzt werden. Der Katalog umfasst jetzt **91 typisierte Schlüssel**; das ist eine Formatbreite und keine Zahl funktionsfähiger Hardwareadapter.
+Dynamic Boost uses the qualified HP PPAB flag and preserves cTGP. Both legacy names `gpu_unleashed` and `gpu_dynamic_boost` represent the same instruction; conflicting values block Apply. It is separate from the factory Unleashed mode and a numeric GPU watt limit.
 
-**GPU-Leistungskurve → Bearbeiten …** öffnet den bestehenden nativen Chart auch für ein neues Preset ohne Namen und bei ungespeicherten Änderungen. Der eigene Chart bekommt ein validiertes vollständiges Kurvenmodell aus dem zuvor gelesenen GPU-Zustand und bearbeitet es im Speicher. **Übernehmen** kehrt mit dem Kurvenentwurf zurück; Name, VRAM- und andere ungespeicherte Werte bleiben erhalten. **Abbrechen** verwirft nur Änderungen dieses Chart-Aufrufs. Beide Aktionen schreiben keine Profil-Datei und keine Hardware. Erst **Speichern** im Preset persistiert die Kurve. Während der Chart offen ist, ist sein Besitzerfenster gegen parallele Bearbeitung gesperrt; danach kehrt der Fokus zurück. `gpu-curve-ui` bleibt als separater gespeicherter Kurveneditor verfügbar; **Lüfterkurve** öffnet weiterhin nur CPU-/GPU-Lüfterentwürfe.
+The public power field stores exact milliwatts: **90.125 W → 90125 mW**, without floating-point rounding. It needs actual configured-original readback, live constraints and a setter. Those requirements currently fail on the reference laptop; storing its field is not a successful GPU-power write.
 
-Im GPU-Bereich fehlen direkte GPU-/VRAM-Spannungen und FPS-Limiter. Dynamic Boost ist als HP-PPAB-Vorgabe verfügbar; cTGP bleibt dabei erhalten. Der globale Core-Offset ist bei einer aktiven individuellen V/F-Kurve gesperrt. Legacy-Daten werden nur beim ausdrücklichen Speichern bereinigt: zehn entfernte GPU- und 25 APU-/iGPU-Schlüssel, einschließlich des nicht zuverlässig steuerbaren einzelnen STAPM-Reglers. Vollständige GPU-Kurven und andere versteckte Einstellungen bleiben erhalten. Aktuelle Steuerungsverträge und Nachweise: [SYSTEM_CONTROLS.md](SYSTEM_CONTROLS.md).
+APU/iGPU menus, direct GPU/VRAM voltage, FPS limiting and fixed CPU clock/voltage were intentionally removed. Legacy data remains readable; explicit Save retires the removed instructions. Other hidden settings and complete curves survive unrelated edits. The 91-key schema is a compatibility catalog, not a list of implemented adapters.
 
-## Daten und Grenzen
+## Curve editing
 
-Felddefinitionen und Layout sind getrennt: `app/preset_fields.rs` beschreibt Gruppen, Typen, Einheiten und Vorgaben; `app/preset_ui.rs` enthält native Interaktion und Hintergrundarbeit. `core/preset.rs` konvertiert Werte ohne Gleitkommarundung, zum Beispiel **45,125 W → 45125 mW**. Er führt unabhängig bearbeitete Felder mit der frisch gelesenen Profilrevision zusammen und weist gleichzeitige Konflikte zurück. Unveränderte vollständige GPU-Kurven und nicht sichtbare Settings bleiben erhalten. Geräte-/Treiberbindungen werden nicht blind auf eine andere GPU übertragen.
+**GPU performance curve → Edit** opens the native in-memory chart for a new unnamed preset or an unsaved draft. Accept returns the full curve; Cancel discards only that chart session. Name, VRAM and other draft values remain intact. Neither action writes a profile or hardware; Save in the parent persists it.
 
-Eingabefelder zeigen Entwurfsvorgaben, keine Messwerte. Nicht unterstützte Einstellungen blockieren das gesamte Apply. Qualifizierte privilegierte Funktionen können im unelevierten Editor gewählt werden; erst der feste erhöhte Prozess erfasst und prüft sämtliche vollständigen Originale vor dem ersten SET. Allein Speichern autorisiert keinen Anmeldestart. Windows-Energiemodus benötigt den Plan Ausbalanciert, der im selben Preset gewählt werden kann. Bei der Anmeldung gelten weiterhin Geräte-/Treiberbindung und die exakt autorisierte Profilrevision; ein realer Neustartnachweis steht aus.
+An individual V/F curve and global core offset cannot control the same domain together. Memory/Graphics coupling is handled during Apply, not by destroying the saved curve. [Curve controls](CURVE_EDITOR.md), [GPU contracts](GPU_PROFILES.md).
 
-Anwendung und Original-Restore verwenden die vorhandene atomare Transaktionsengine, keinen frei programmierbaren Kernel-/Kommandoweg. Ein offenes Journal schaltet den Apply-Button auf **Wiederherstellen**. Die geschützte Anmeldeaufgabe wird nur nach ausdrücklicher Freigabe eingerichtet; sie startet ausschließlich die feste eigene Binary mit `profile-startup-apply`. Sie enthält weder Netzwerkaktion noch Hintergrund-Updater. Reale Neustart- und Power-Lifecycle-Proben bleiben offen.
+The separate **Fan curve** editor saves `active-fan-curve.json` for the cooling helper. Full fan-curve instructions remain unsupported in performance-profile transactions. A Max-Fan boolean is a different, supported override.
 
-Die Settings-Ansicht unterstützt Mausrad, Seiten-/Anfang-/Ende-Nachrichten, Ziehen des dunklen Scrollgriffs und automatisches Nachscrollen fokussierter nativer Felder. Name, Auswahl und untere Aktionen bleiben außerhalb des scrollbaren Bereichs. Die Checkboxen behalten ihren nativen Typ, Namen, Auto-Toggle und Tastaturverhalten; die Zeichnung folgt dem dunklen System. Geprüft sind Clientgrößen **1084×861** und **904×681** bei 96 DPI, keine umfassende DPI-/Assistive-Tech-Zertifizierung.
+## Authorization, recovery and validation
 
-Bedien- und Speicherprüfungen: `scripts/smoke-presets-ui.ps1`, `scripts/smoke-controls-navigation.ps1` und `scripts/smoke-preset-curve-ui.ps1`. Letzterer öffnet den Chart über das echte Preset-Control, prüft neue/dirty Presets, Cancel/Übernehmen/Reopen und Save sowie zehn entfernte GPU- und 26 APU/iGPU-Schlüssel ohne Hardwareänderung und mit Erhalt beider Boost-Schlüssel. Hardwareverträge und tatsächliche Messergebnisse: [GPU_PROFILES.md](GPU_PROFILES.md), [FAN_CONTROL.md](FAN_CONTROL.md), [VALIDATION.md](VALIDATION.md).
+Sign-in permission is tied to the applied revision and installed binary hash. Editing/replacing either invalidates approval. Lighting/Max-Fan can currently be authorized, but real lifecycle qualification is pending. CPU PPT/Slow has the additional HPOmenCap ownership/startup gate. See [HP control](HP_CONTROL.md).
+
+An unresolved transaction changes the preset action to **Restore**. Preset writes journal complete originals and verify full targets; interrupted recovery stays visible. The dashboard factory-mode/MUX shortcuts currently have separate recovery gaps. [Recovery](RECOVERY.md).
+
+The native layout has a fixed name/selection/footer and a scrollable settings area. Fields/checkboxes retain native keyboard roles and focus scrolling. Recorded client checks at 96 DPI do not establish comprehensive DPI/accessibility support. Metadata/chart checks are separate from hardware probes: [Validation](VALIDATION.md).

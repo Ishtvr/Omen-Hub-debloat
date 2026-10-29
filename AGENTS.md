@@ -17,3 +17,5 @@ Omen Hub++ must eventually replace the original OMEN Hub and its hardware-contro
 - Use public NVAPI/NVML contracts for telemetry. Optional FFI libraries must use exact ABI, validated lifetimes and explicit failure reporting.
 - Run `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` and a release build for implementation changes.
 - For hardware support changes, update the model evidence and measured validation record. No multi-agent delegation is required.
+
+Documentation entry point: [docs/README.md](docs/README.md). Keep the public README concise and in English. The hardware matrix owns current support, VALIDATION.md owns the current check summary, ROADMAP.md owns pending work, and docs/history/ preserves dated observations. Startup permission is distinct from measured lifecycle qualification; documentation edits must not silently change runtime permissions.

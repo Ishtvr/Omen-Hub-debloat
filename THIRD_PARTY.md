@@ -1,23 +1,42 @@
-# Third-party references and dependencies
+# Third-party components and references
 
-Omen Hub++ contains original Rust code licensed under MIT. An optional embedded CPU sensor module is a separately licensed LGPL-2.1-or-later component. OmenMon/OmenHwCtl are references; their implementations have not been copied or linked.
+Omen Hub++'s original Rust code and icon are [MIT licensed](LICENSE). Optional embedded signed CPU modules retain their separate **LGPL-2.1-or-later** license. Proprietary HP/AMD/NVIDIA binaries, kernel installers and decompiled source are not bundled as project code.
 
-Direct Rust dependencies are `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. The exact dependency graph is locked in `Cargo.lock`. All crates linked into the Windows executable are permissively licensed (MIT, Apache-2.0, ISC, Unlicense and Unicode-3.0 terms). `scripts/build-release.ps1` reads the locked graph with `cargo metadata`, excludes build- and dev-only crates, and copies every crate's own license files into `dist/third-party/rust/` with a summary in `dist/third-party/RUST-DEPENDENCIES.md`. Distribute these files with release packages.
+## Rust dependencies
 
-[UXTU](https://github.com/JamesCJ60/Universal-x86-Tuning-Utility) and [NvAPIWrapper](https://github.com/falahati/NvAPIWrapper) are local research references for feature scope and private-contract investigation. Their code is not copied or linked into this Rust runtime. Private control tables still require exact driver evidence and full restore validation; a matching structure size alone is insufficient.
+Direct dependencies include `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. Exact versions/transitives are locked in `Cargo.lock`.
 
-The NVIDIA FFI uses public ABI definitions and function identifiers from [NVIDIA/nvapi](https://github.com/NVIDIA/nvapi) and the [NVML documentation](https://docs.nvidia.com/deploy/nvml-api/latest/index.html). NVIDIA's SDK header repository uses MIT; driver DLLs are loaded from the installed Windows driver and are not bundled here.
+`scripts/build-release.ps1` resolves the Windows executable's locked dependency graph with `cargo metadata`, excludes build/dev-only edges and copies available license/notice files from each crate source into `third-party/rust/`, with `third-party/RUST-DEPENDENCIES.md`. Compile-time procedural macro dependencies reached by that graph are documented too. Preserve these notices when distributing packages; the dependency manifest and shipped texts are the version-specific record.
 
-NVAPI header attribution: Copyright (c) 2019–2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: MIT. The MIT permission and warranty text is provided in `LICENSE`.
+## NVIDIA interfaces
 
-The optional CPU reader uses the public [PawnIO device protocol](https://github.com/namazso/PawnIO/blob/9d52965895588b0ffa3703b72eec75ba19f4ccc0/PawnIO/include/pawnio_um.h). Its fixed read packets, lifetimes and original Rust energy/Tctl conversions are implemented in this repository. The runtime requires an already installed and running **PawnIO 2.2.0** driver with SHA-256 `FCA6E7D58B0CF38DBB913A2B9E532F48629145D395F454B16A9F58E97B8D3940`. No PawnIO driver binary or installer is bundled; Omen Hub++ does not install, start or stop it.
+Public ABI/function identifiers come from [NVIDIA/nvapi](https://github.com/NVIDIA/nvapi) and the [NVML documentation](https://docs.nvidia.com/deploy/nvml-api/latest/index.html). NVAPI header attribution: **Copyright (c) 2019–2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: MIT.** Preserve the corresponding MIT terms when distributing derived definitions; the permission/warranty text is in [LICENSE](LICENSE).
 
-When staged at build time, the binary embeds the unmodified signed **AMDFamily17.bin**, 10652 bytes, from [PawnIO.Modules 0.2.11](https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11), SHA-256 `DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91`. Module attribution: Copyright (C) 2025 namazso. SPDX-License-Identifier: **LGPL-2.1-or-later**. The corresponding source is [commit 52a7e536dff3e53c96917a28caac5e0fa6510696](https://github.com/namazso/PawnIO.Modules/tree/52a7e536dff3e53c96917a28caac5e0fa6510696); its `AMDFamily17.p` header and `COPYING` supply the license. This module retains its own license alongside the MIT application.
+Driver DLLs are loaded from the installed Windows driver and are not redistributed. Private V/F contracts use original model/build-bound observations; matching structure size alone does not establish compatibility.
 
-`scripts/prepare-cpu-module.ps1` downloads the pinned signed release and corresponding source/license only during explicit build preparation into ignored `.tools/pawnio/`. `crates/platform/build.rs` checks module size and SHA-256 before embedding. `scripts/build-release.ps1` includes `AMDFamily17.p`, the complete `source-0.2.11.zip`, `COPYING` and CPU integration notes under `dist/third-party/PawnIO.Modules/`. Distribute these files with builds containing the module. The published Rust source includes the integration/build logic so it can be modified and rebuilt; the installed driver independently enforces module signatures. Builds without the staged module leave CPU hardware values unavailable. See [CPU_SENSORS.md](docs/CPU_SENSORS.md) for the exact runtime contract and qualification boundary.
+## PawnIO and embedded modules
 
-The installed AMD Ryzen Master SDK, proprietary HP modules and diagnostic driver probes are local research sources only. None is loaded or copied into the CPU runtime. Linux [RAPL](https://github.com/torvalds/linux/blob/master/arch/x86/events/rapl.c) and [k10temp](https://github.com/torvalds/linux/blob/master/drivers/hwmon/k10temp.c) are public register/units references; the Rust calculation code is original.
+The own integration uses the public [PawnIO device protocol](https://github.com/namazso/PawnIO/blob/9d52965895588b0ffa3703b72eec75ba19f4ccc0/PawnIO/include/pawnio_um.h). Runtime access requires the already installed/running **PawnIO 2.2.0** driver, hash **FCA6E7D58B0CF38DBB913A2B9E532F48629145D395F454B16A9F58E97B8D3940**. The app does not distribute/install/start/stop that driver.
 
-[RyzenAdj](https://github.com/FlyGoat/RyzenAdj) is a planned optional native dependency, not included in this build. Its LGPL-3.0 terms, driver requirements and CPU-family support must be reviewed before integration or redistribution. No HP assemblies, HP drivers, WinRing0 binaries or decompiled code are distributed.
+| Optional signed module | Version | SHA-256 | Purpose |
+| --- | --- | --- | --- |
+| AMDFamily17.bin | 0.2.11 | DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91 | Fixed CPU energy/Tctl/effective-clock reads |
+| RyzenSMU.bin | 0.2.11 | 301D9CA397108E09F31BFBD5AC4C9BB4F352A5DE68532C32DB3BA7DDCDE93450 | Fixed CPU SMU control/readback |
 
-The application icon (`crates/app/assets/omen-hub-pp.ico`) is original artwork drawn by `scripts/generate-icon.py` from geometric primitives. It uses no HP, OMEN or third-party logo and is covered by the project's MIT license.
+Modules are from [PawnIO.Modules 0.2.11](https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11), corresponding source commit **52a7e536dff3e53c96917a28caac5e0fa6510696**. Attribution: **Copyright (C) 2025 namazso. SPDX-License-Identifier: LGPL-2.1-or-later.** They retain their own license alongside the MIT app.
+
+`scripts/prepare-cpu-module.ps1` stages release, source and license in ignored `.tools/` for explicit build preparation only. `platform/build.rs` checks the exact identities before embedding. Packages containing modules must retain corresponding `AMDFamily17.p` / applicable `RyzenSMU.p`, the complete `source-0.2.11.zip`, `COPYING` and CPU integration notes under `third-party/PawnIO.Modules/`. Do not strip the corresponding source/license from those packages. [CPU integration](docs/CPU_SENSORS.md), [Building](docs/BUILDING.md).
+
+The published original Rust integration/build logic can be modified and rebuilt; the installed driver independently enforces module signatures. A build without staged modules leaves the corresponding hardware functions unavailable. There is no runtime module download.
+
+## Research-only references
+
+[UXTU](https://github.com/JamesCJ60/Universal-x86-Tuning-Utility), [NvAPIWrapper](https://github.com/falahati/NvAPIWrapper), OmenMon/OmenHwCtl and public Linux RAPL/k10temp/hp-wmi sources informed feature/interface investigation. Their implementations are not copied or linked as the own Rust engine. Installed HP modules and AMD Ryzen Master SDK remain proprietary local analysis sources; the app does not load their RPC/SDK wrappers.
+
+[NvpwrControl reference](https://github.com/LevinAi-arch/rtx-5070ti-laptop-160w-power-limit) is research-only. The pinned analysis found no explicit reuse license in the examined public source/archive; no implementation or binary has been incorporated. See [TGP plan](docs/plans/NVPWRCONTROL_TGP_FORK_PLAN.md) for pins and limitations. No code-porting right is assumed from public visibility or a potential fork.
+
+[RyzenAdj](https://github.com/FlyGoat/RyzenAdj) is not included. Any future integration needs separate dependency/license/driver/CPU-support review; the present CPU backend uses its own fixed PawnIO module integration.
+
+## Artwork
+
+The application icon is original geometric artwork generated by `scripts/generate-icon.py`, not an HP/OMEN/MSI logo. It and the native drawn UI are covered by the project's MIT license. User reference screenshots establish design intent, not bundled third-party assets.

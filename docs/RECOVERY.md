@@ -1,94 +1,85 @@
-# Wiederherstellung und Deinstallation
+# Recovery and removal
 
-Diese Anleitung beschreibt, was Omen Hub++ auf einem Gerät verändern kann, wie der vor einer Änderung gespeicherte Originalzustand zurückkommt und wie die Anwendung vollständig entfernt wird. Sie gilt für den aktuellen Stand und das qualifizierte Referenzgerät **HP 8E35 / BIOS F.13**; auf anderen Geräten werden Schreibaktionen bereits vor dem ersten SET blockiert.
+This guide describes current behavior, including its gaps. Support is model/build-specific; use [Hardware support](HARDWARE_MATRIX.md). **Preserve the journals until actual recovery is complete.** Reboot, process exit, deleting a preset and stopping software commands are not proven substitutes for restoration.
 
-## Neue und ältere Zustandsbilder
+## What has a durable original
 
-Seit dem 26. Oktober hält die begrenzte native HP-Migrationsprobe zusätzlich `controller-cooling.json` in der geschützten Installation vor. Dienst-Restore und Rückgabe der vorherigen Lüfterauswahl müssen beide bestätigt sein; ein wieder laufender HP-Dienst allein bedeutet keinen vollständigen Abschluss. `hp-control-status` liest beide Journale und den letzten Wächterbericht. `hp-control-recover` bleibt eine ausdrückliche Reparatur für einen beendeten Besitzer und kann nun auch eine noch offene Kühlungsrückgabe nach bereits erfolgtem Dienst-Restore abschließen. Bei fremder Identität oder offenem Hardware-Recovery bleibt die Verantwortung gespeichert. Die Installer blockieren dann Update/Entfernung beider Helfer. Ein laufender Lüfterhelfer wird beim Update nicht mehr gewaltsam beendet. Diese Rückgabe betrifft ausschließlich die abgesicherte Entwicklungsprobe; der geplante eigenständige Betrieb benötigt keinen Original-Hub-Dienst.
+| Path | Current recovery coverage |
+| --- | --- |
+| Supported custom-preset settings | Complete original images are saved before SET, then targets/restore are verified; unresolved failures retain the journal |
+| Direct keyboard window | Separate lighting transaction store; complete RGB/mode recovery on reconnect |
+| Controlled migration qualification | Separate protected service/cooling responsibility records plus return guardian |
+| Dashboard HP default-mode shortcut | No full mode-original journal; thermal mode lacks GET; a failed non-Balanced mode attempts Balanced |
+| Dashboard MUX shortcut | Reads/writes the boot preference, but saves its own record after the BIOS write; preset-equivalent recovery remains unfinished |
+| Fan Auto/Curve/Max preference | Saved intent for the helper; after own regulation normal pause/stop requests maximum once and retains handover-pending status |
 
-Seit 22. Oktober tragen CPU-Limitbilder den eigenen RSMU-Vertrag und die Tabellenversion. Ein altes HP-Limitbild wird nicht als Beleg für den neuen Transport übernommen. Auch ein alter ausschließlich effektiver Windows-Overlay-Wert ist kein vollständiger Originalzustand der konfigurierten Benutzerauswahl. Solche Bilder blockieren die automatische Rücksicherung, statt unbekannte Werte zu schreiben. Das vorhandene Journal bleibt erhalten; die technische Ursache und der aktuelle [Steuerungsnachweis](SYSTEM_CONTROLS.md) helfen beim gezielten Wiederherstellen. Nicht durch Löschen eines offenen Journals eine erfolgreiche Rücksicherung vortäuschen.
+The shortcut gaps are open work, not fixed by this guide. A shared mutex serializes own writes but does not block a foreign tuner or supply a missing original.
 
-Alte widersprüchliche Presets bleiben im Editor lesbar. Das ist keine Schreibfreigabe: erst der eigene Anwendungs-Preflight prüft CO-/Dynamic-Boost-Konflikte und Windows-Modus/Plan. Ein Profil kann daher zum Korrigieren geöffnet werden, während Anwenden weiter blockiert ist.
+## Data locations
 
-## Was Omen Hub++ verändert
+User data follows the Windows token's actual user profile, normally `%USERPROFILE%\.omen-hub-pp`:
 
-| Bereich | Wann geschrieben wird | Originalzustand |
-| --- | --- | --- |
-| Preset-Einstellungen: NVIDIA-Offsets/V/F-Kurve, Max-Fan, Dynamic Boost, CPU-Limits/Curve Optimizer/PBO (SMU), Windows-Richtlinien, Bildwiederholrate, CCD-Affinität, Grafikmodus (MUX) | Nur bei ausdrücklichem **Anwenden** eines gespeicherten Custom Presets (UAC) oder beim freigegebenen Anmeldestart | Vor jedem SET in `control-journal.json` gespeichert; Readback nach dem Schreiben, Rollback bei Teilfehlern |
-| HP-Leistungsmodus Quiet/Balanced/Performance/Unleashed samt PL1 | Auswahl im Dashboard (UAC) | Kein Journal: Der Thermalmodus hat keinen GET; zurück geht es durch Auswahl von **Balanced** |
-| Lüfterkurve, Lüfterschalter Auto/Kurve/Max, CCD-Affinität im Betrieb | Lüfterdienst (Anmeldeaufgabe `OmenHubPP-Fan-<SID>`) | Ohne gespeicherte Kurve sendet er nichts; Entfernen gibt die Lüfter an das BIOS zurück |
-| Tastaturfarben und Ein/Aus | Nur durch Klick im Fenster **Beleuchtung** (UAC) | Eigenes Journal unter `keyboard-control\` |
-| Profile und Entwürfe | **Speichern** im Editor | Reine Metadaten, keine Hardwarewirkung |
-| Windows-Anmeldestart | Nur nach ausdrücklicher Freigabe eines bereits angewendeten, unterstützten Presets | Geplante Aufgabe `OmenHubPP-Profile-<SID>` |
+- `profiles/`, `deleted-profiles/`, `control-journal.json`, `control-history/`, `startup.json`, `last-*.json`;
+- `keyboard-control/` for direct lighting;
+- `active-fan-curve.json`, `fan-mode.json`, `ccd-affinity.json`, `graphics-mode.json` for preferences/status-related state.
 
-Omen Hub++ stoppt oder entfernt keine HP-Dienste, installiert keinen Treiber und flasht keine Firmware. Leistungsgrenzen (PL1, STAPM, PPT, TDC/EDC) und der Curve Optimizer werden nur über die oben genannten, ausdrücklich ausgelösten Wege geändert; feste CPU-Spannungen oder direkte GPU-Spannungen werden nie gesetzt. Ein geänderter Grafikmodus wirkt erst nach einem Neustart.
+The protected `%ProgramFiles%\OmenHubPlusPlus` installation contains the app, optional own `Omen Hub++ Fan.exe`, receipts and exact-revision/binary sign-in approval. Migration adds `controller-ownership.json`, `controller-cooling.json` and a separate last-guardian report. Task names are `OmenHubPP-Profile-<SID>` and `OmenHubPP-Fan-<SID>`.
 
-## Speicherorte
+The current original is the state before the relevant Apply, not necessarily factory defaults. Historical completed checkpoints are not automatically applied. Removing the data directory can destroy the only original-state record.
 
-- **Benutzerdaten:** `%USERPROFILE%\.omen-hub-pp\` – `profiles\`, `deleted-profiles\` (archivierte Originalbytes), `control-journal.json` (Originalbild des letzten Apply), `control-history\` (Sicherungen früherer abgeschlossener Journale aus Qualifikationsläufen), `startup.json`, `last-*.json`, `keyboard-control\` (Beleuchtungsjournal).
-- **Lüfterdienst und CCD-Affinität:** `active-fan-curve.json`, `fan-mode.json` und `ccd-affinity.json` im selben Ordner; der Grafikschalter merkt sich seine letzte Auswahl in `graphics-mode.json`.
-- **Installation:** `%ProgramFiles%\OmenHubPlusPlus\` – `Omen Hub++.exe`, `installation.json` (Startup-Beleg), `startup-authorized-<SID>.json` sowie für den Lüfterdienst `Omen Hub++ Fan.exe` und `fan-service-<SID>.json`.
-- **Verknüpfungen:** `Omen Hub++.lnk` im Startmenü (Programme) und auf dem Desktop des installierenden Benutzers.
+## Restore a custom preset
 
-Die Journale sind die einzige Quelle für den gespeicherten Originalzustand. **Löschen Sie `.omen-hub-pp` nicht, bevor Sie wiederhergestellt haben.**
+If the preset UI offers **Restore / Wiederherstellen** after an unresolved transaction, use it to recover the recorded original. Alternatively, in an elevated Windows PowerShell for the same user and matching installation:
 
-## Originalzustand zurückholen
+```powershell
+& "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" profile-restore
+```
 
-### Preset-Einstellungen (GPU, CPU, Windows, Max-Fan, MUX)
+This explicitly changes hardware back to recorded originals and disables the profile's automatic sign-in selection first. Identity changes, foreign values, invalid originals or incomplete recovery remain errors. Do not delete the record to bypass them.
 
-1. Ist eine Transaktion unvollständig (z. B. Absturz während **Anwenden**), zeigt **Leistungsprofile** statt **Anwenden** die Aktion **Wiederherstellen**. Sie stellt das gespeicherte Original nach UAC wieder her.
-2. Unabhängig davon stellt die Befehlszeile den vor dem letzten Apply gespeicherten Zustand wieder her. Die Funktion deaktiviert zuerst eine automatische Anmeldeauswahl:
+New CPU limit images use the measured RSMU/table contract. Old HP limit images cannot select it. An old effective-only Windows overlay record cannot restore the user's configured overlay. Such legacy failures retain the journal for diagnosis rather than guessing values. [System controls](SYSTEM_CONTROLS.md).
 
-   ```powershell
-   & "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" profile-restore
-   ```
+## HP modes, MUX and cooling
 
-   In einer **als Administrator** geöffneten PowerShell ausführen. Ein anderes Board, BIOS oder ein anderer NVIDIA-Treiber blockiert die Wiederherstellung ausdrücklich, statt fremde Werte zu schreiben.
-3. Max-Fan lässt sich zusätzlich über ein Preset mit **Max-Fan: Aus** freigeben. **Aus** gibt nur den Override frei und wählt keinen bestimmten BIOS-Lüftermodus.
+Choosing Balanced writes a known factory-style state; it does **not** reconstruct an unreadable previous thermal mode. Choosing another known mode is a new hardware action. The dashboard HP/MUX paths currently lack complete preset-journal protection.
 
-### HP-Leistungsmodus
+A MUX boot-preference change takes effect only after restart. To return, choose the **known original** preference and coordinate the restart; Hybrid is not assumed to have been every user's original. BIOS preference readback alone does not prove actual GPU routing or dGPU-off state.
 
-Im Dashboard **Balanced (Default)** wählen. Das schreibt den ausgelieferten Balanced-Zustand samt PL1 und liest GPU-Bits sowie, mit SMU-Modul, STAPM/Slow zurück. Ein fehlgeschlagener Moduswechsel fällt selbst auf Balanced zurück.
+Max-Fan Off releases the independent override only. Auto in the own cooling helper pauses own regulation after the conservative one-time maximum request; neither confirms immediate BIOS ownership. Removing a helper likewise does not certify safe BIOS takeover. Resolve cooling responsibility before treating removal as complete. [Fan handover](FAN_HANDOVER.md).
 
-### Lüfter
+## Lighting and owned migration recovery
 
-Der Lüfterschalter auf der Startseite auf **Auto** stellen: Der Dienst sendet dann nichts mehr und das BIOS regelt mit seiner Standardkurve. Um den Dienst ganz zu entfernen, siehe Deinstallation, Schritt 2.
+The lighting window checks its own pending transaction when reconnecting and restores only valid matching own originals before a fresh read. Resolve pending performance recovery first when it blocks lighting. On/Off retains RGB; there is no separate arbitrary firmware-reset command.
 
-### Grafikmodus (MUX)
+For an interrupted explicitly owned HP migration, inspect first:
 
-Der Grafikschalter auf der Startseite schreibt **Hybrid** oder **GPU only** nach Windows-Freigabe ins BIOS und liest den Wert zurück; aktiv wird er erst nach einem Neustart. Zurück geht es mit **Hybrid** und einem weiteren Neustart. Die letzte Auswahl steht in `graphics-mode.json`.
+```powershell
+& "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" hp-control-status
+```
 
-### Tastaturbeleuchtung
+Only an actually pending own session calls for elevated `hp-control-recover`. It requires a dead matching owner, valid protected same-build installation and clear hardware-recovery ordering. It can complete cooling return after the service has returned. A running original service alone does not close both journals. [HP control](HP_CONTROL.md).
 
-Das Fenster **Beleuchtung** prüft beim Öffnen sein eigenes Journal und stellt eine offene, eigene Beleuchtungstransaktion wieder her, bevor es neue Werte liest. Gewünschte Farben lassen sich danach direkt wieder einstellen. Ein offenes Performancejournal muss zuerst über die Schritte oben abgeschlossen werden.
-
-### Anmeldestart abschalten
+## Disable automatic launches
 
 ```powershell
 & "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" profile-startup-disable
 & "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" profile-startup-status
 ```
 
-Alternativ das Häkchen **Bei Windows-Start aktivieren** in **Leistungsprofile** entfernen.
+The preset's startup checkbox controls hardware-profile sign-in. The separate dashboard **Start with Windows** setting controls the unelevated tray Run entry; turn it off too when removing the app. Disabling sign-in does not restore current hardware values.
 
-## Deinstallation
+## Remove or update
 
-In einer **als Administrator** geöffneten Windows PowerShell 5.1 im entpackten Paket oder im Repository:
+First complete hardware and controller/cooling recovery. The installers refuse changes while protected ownership/cooling records or an active session remain unresolved. They do not forcibly kill a responsible cooling helper to make an update succeed.
+
+From the repository in Windows PowerShell as the intended user, elevated where required:
 
 ```powershell
-# 1. Originalzustand wiederherstellen (siehe oben).
-# 2. Lüfterdienst entfernen; die Lüfter regelt danach wieder das BIOS:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-fan-service.ps1 -Mode Remove
-# 3. Geplante Anmeldeaufgabe, Startup-Beleg und Freigabe entfernen:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-startup.ps1 -Mode Remove
-# 4. Programmdatei und eigene Verknüpfungen entfernen:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-app.ps1 -Mode Remove
 ```
 
-Im Release-Paket liegen alle drei Skripte direkt neben der EXE; dort den Ordner `scripts\` weglassen. Ohne vorher entfernte Anmeldeaufgabe entfernt `install-app.ps1` nur die Verknüpfungen und lässt die von der Aufgabe benutzte Programmdatei stehen. Beide Skripte löschen nie Profile, Journale oder den Ordner `.omen-hub-pp`. Diesen Ordner erst nach erfolgreicher Wiederherstellung von Hand löschen.
+In an extracted package the scripts sit beside the EXE, so omit `scripts\`. This removes own task/approval/helper/app components as permitted by their guards. App removal can retain the executable if a profile task still uses it. Profiles/journals are preserved; inspect any failure instead of bypassing the guards.
 
-## Grenzen
-
-- Ob NVIDIA-Offsets, CPU-Limits, Tastaturfarben oder Max-Fan einen echten Neustart, Standby/Resume oder einen Netzteilwechsel überdauern, ist nicht gemessen. Verlassen Sie sich nicht auf einen Neustart als Rücksetzung.
-- Das Originalbild beschreibt den Zustand **vor dem letzten Apply**. Sicherungen in `control-history\` werden nie automatisch angewendet.
-- Andere RGB- oder Tuningprogramme, auch der weiterhin installierte OMEN Gaming Hub, können Zustände unabhängig ändern. Der eigene Prozess-Mutex schließt nur Omen Hub++ selbst aus.
+Replacing the installed binary invalidates old protected sign-in approval. A successfully compiled newer file is not an installed update. Real sleep/reboot and full independent lifetime remain pending; [Validation](VALIDATION.md) identifies what was measured.

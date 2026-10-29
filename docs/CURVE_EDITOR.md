@@ -1,88 +1,71 @@
-# Native GPU- und Lüfterkurven
+# Curve editor
 
-Der Dashboard-Einstieg **Lüfterkurve** öffnet nur CPU-/GPU-Lüfterkurven (`fan-ui [profil-id]`). **Leistungsprofile → GPU → GPU-Leistungskurve → Bearbeiten …** öffnet einen eigenen Chart auf dem aktuellen Preset-Entwurf, auch ohne Namen oder vorheriges Save. Übernehmen gibt die Kurve an das Preset zurück; Abbrechen verwirft diese Bearbeitung. Beide schreiben weder Profil-Datei noch Hardware. Dieser Preset-Chart zeigt nur **Abbrechen**, **Übernehmen**, **Rückgängig** und **Tastenkürzel**; Wiederholen, Zoom und die ganze Kurve bleiben über Tastatur und Mausrad erreichbar, Enter öffnet weiterhin die Zahlenfelder. Der eigenständige gespeicherte GPU-Editor (`gpu-curve-ui [profil-id]`) und der kombinierte CLI-Einstieg (`curve-ui [profil-id]`) bleiben kompatibel. Alle Ansichten nutzen denselben nativen GDI-Canvas und dieselben Bearbeitungsregeln, ohne WebView oder zusätzliche UI-Laufzeit.
+The native GDI editor shares editing rules across GPU V/F and fan curves. It contains no hardware SET action. The user-provided MSI Afterburner view is an interaction reference; no MSI executable, driver, source or artwork is used by the runtime.
 
-Standardmäßig öffnet sich die dunkle **Diagrammansicht** mit großer Kurve, Kurvenauswahl, Speichern, Rückgängig/Wiederholen, Hilfe und Zoom. **Profil / Werte …** öffnet Profilauswahl, Namen, Punktauswahl und Zahlenfelder; **Diagrammansicht** wechselt zurück. Enter im Diagramm öffnet diese Ansicht und fokussiert den Y-Wert des ausgewählten Punkts.
+## Entry points and saving
 
-Die vom Benutzer vorgegebene MSI-Afterburner-Ansicht dient als visuelle Referenz für das V/F-Diagramm. Seine Bedienidee ist zusätzlich im [offiziellen MSI-Leitfaden](https://www.msi.com/blog/msi-afterburner-overclocking-undervolting-guide) beschrieben. Omen Hub++ implementiert den Editor mit eigenem Rust-/Win32-Code; dafür werden keine MSI-Binärdateien, Treiber oder Assets übernommen oder benötigt. Diese Referenz legt die Kurvenansicht fest, keine neue globale Produktidentität.
+- **Performance profiles → GPU → GPU performance curve → Edit** opens an in-memory chart, including new unnamed or unsaved presets. Accept returns the draft; Cancel discards only that chart session. Save in the parent persists it. Other unsaved fields stay intact.
+- `gpu-curve-ui [id]` opens the standalone saved GPU editor; `curve-ui [id]` remains the combined legacy entry.
+- **Fan curve** / `fan-ui` edits the active CPU/GPU curve for the separate helper. Saving a fan curve does not prove the helper has applied it.
 
-## Diagramm lesen
+The preset chart shows a compact Cancel/Accept/Undo/Shortcuts action row; numeric editing, redo and zoom remain accessible from keyboard/mouse. Other views offer chart and profile/value layouts.
 
-**Quadrate: Entwurf** bezeichnet die bearbeitete Kurve; **Gepunktet: beim Laden** bezeichnet ihren geladenen Ausgangsentwurf. Bei einem gespeicherten GPU-Kurvenprofil ist dies die geladene Profilkurve, ansonsten die beim Laden gelesene GPU-Kurve. Lüftervorlagen sind gespeicherte oder vorgegebene Entwürfe und kein ausgelesener Hardwarezustand.
+Square nodes are the draft; the dotted line is the draft loaded at the start of this editing session. It can be a saved profile, not necessarily current firmware. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
 
-Der ausgewählte Punkt ist als größeres blaues Quadrat mit horizontaler und vertikaler Hilfslinie markiert. **Ausgewählt** nennt Spannung und Frequenz beziehungsweise Temperatur und Lüfterwert. Diese Linien folgen der Punktauswahl; sie zeigen keinen aktuellen GPU-Betriebspunkt. Ein markierter GPU-Spannungsbereich erhält ein durchgehendes farbiges Band und eine Punktzahl.
+## GPU rules and gestures
 
-Die Achsen sind mit mV/MHz beziehungsweise °C/% beschriftet. Rasterabstände passen sich an Fenstergröße und Zoom an. GPU-Kurven öffnen zwei Zoomstufen um den vorausgewählten Punkt nahe 950 mV; im Standardfenster ergibt das 25-mV-Beschriftungen. Lüfterkurven öffnen vollständig. **Ganze Kurve** beziehungsweise Strg + 0 berücksichtigt die geladenen und bearbeiteten Frequenzen. Zoomen oder Verschieben verändert nur den sichtbaren Ausschnitt; alle Kurvenpunkte bleiben im Entwurf und im gespeicherten Profil erhalten.
+On the reference device, all **127 actual Graphics voltage anchors** are fixed in count, voltage and order. Edit only frequency targets within the full driver bounds and nondecreasing frequency order. GPU anchors cannot be inserted, deleted or moved horizontally.
 
-## Bedienung
-
-Auf dem freigegebenen Referenzgerät enthält GPU V/F alle **127 tatsächlich gelesenen Graphics-Spannungsanker**. Spannung, Reihenfolge und Punktzahl bleiben fest; nur Frequenzziele sind bearbeitbar. Frequenzen müssen entlang steigender Spannung monoton nicht fallend sein und alle tatsächlichen Treibergrenzen einhalten. Das Spannungsfeld ist deshalb schreibgeschützt, GPU-Punkte lassen sich weder hinzufügen noch entfernen.
-
-| GPU-Mausaktion | Wirkung auf den Entwurf |
+| Gesture | Draft change |
 | --- | --- |
-| Punkt ziehen | Frequenz des Punkts vertikal ändern; bei einem Punkt im markierten Bereich den Bereich gemeinsam verschieben |
-| Shift + Punkt ziehen | Gesamte Kurve oder markierten Bereich auf Basis des **geladenen Ausgangsentwurfs** verschieben |
-| Alt + Punkt ziehen | Gesamte Kurve oder markierten Bereich auf Basis des **aktuellen Entwurfs** gleichmäßig verschieben |
-| Strg + Punkt ziehen | Alle Frequenzen um den gegenüberliegenden Randpunkt neigen; dieser Randpunkt bleibt fest |
-| Shift + Ziehen im freien Diagramm | Einen zusammenhängenden Spannungsbereich markieren |
-| Doppelklick | Bereichsauswahl aufheben |
+| Drag a point | Move its frequency vertically, or move its selected band together |
+| Shift + drag point | Offset the entire curve/band using the loaded reference shape |
+| Alt + drag point | Offset the entire curve/band while preserving the current draft shape |
+| Ctrl + drag point | Tilt around the opposite fixed edge anchor |
+| Shift + drag empty chart | Select a contiguous voltage range |
+| Double-click | Clear range selection |
+| Shift + Enter | Flatten selected range; otherwise plateau from the selected point |
 
-Shift verwendet dabei wieder die Form der geladenen Ausgangskurve. Alt erhält die Form des aktuellen Entwurfs. Ein gemeinsamer Offset wird für den gesamten betroffenen Bereich einheitlich an Treiber- und Nachbargrenzen begrenzt. Eine Neigung, die einen Punkt oder die Frequenzordnung verletzt, wird vollständig abgelehnt. Mausbewegungen werden vom festen Anfangszustand des Ziehens berechnet; ein abgeschlossener Drag zählt als ein Verlaufsschritt.
+A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state. The opposite tilt anchor remains fixed.
 
-**Ab hier Plateau** setzt den Wert aus dem Frequenzfeld für den ausgewählten Punkt und alle höheren Anker. Shift + Enter arbeitet direkt mit der ausgewählten Frequenz: Es flacht den markierten Bereich ab oder erzeugt ohne Bereichsauswahl ein Plateau ab dem Punkt. Die Änderung muss für sämtliche betroffenen Anker gültig sein.
+## Keyboard and viewport
 
-**CPU-Lüfter / GPU-Lüfter** behalten getrennte Entwürfe und Bearbeitungsverläufe beim Wechsel der Ansicht. Punkte lassen sich ziehen, numerisch bearbeiten, hinzufügen und entfernen. Temperaturen bleiben zwischen 0 und 110 °C streng geordnet, Lüfterwerte zwischen 0 und 100 % nicht fallend; mindestens zwei und höchstens 32 Punkte bleiben erhalten. Eine Vorlage ist ausdrücklich ein Entwurf.
+Commands apply with chart focus unless noted. Native numeric fields provide an alternative to dragging.
 
-**Kurve im Profil** legt fest, welche Kurven gespeichert werden. Eine Bearbeitung wählt die betreffende Kurve automatisch aus. **Zurücksetzen** oder Strg + D führt die aktive Kurve zum geladenen Ausgangsentwurf zurück und ist selbst rückgängig machbar. Es verändert keine Firmware.
-
-## Tastatur und Ansicht
-
-Die Kurvenbefehle gelten bei Fokus im Diagramm. Strg + S und F1 werden auch im gesamten Editor erkannt. F1 oder **Tastenkürzel** öffnet die native Hilfe. Rückgängig/Wiederholen und Zoom haben zusätzlich sichtbare Schaltflächen; die Punktauswahl und Zahlenfelder bieten eine weitere Alternative zur Maus.
-
-| Eingabe | Wirkung |
+| Input | Action |
 | --- | --- |
-| Links / Rechts, Pos1 / Ende | Punkt auswählen beziehungsweise zum ersten/letzten Punkt wechseln |
-| Oben / Unten | Frequenz um 1 MHz beziehungsweise Lüfterwert um 1 Prozentpunkt ändern; bei markiertem GPU-Bereich den Bereich gemeinsam verschieben |
-| Strg + Oben / Unten | Y-Wert um 10 Schritte ändern |
-| Shift + Oben / Unten bei GPU V/F | Gesamte Kurve oder markierten Bereich auf Basis des geladenen Ausgangsentwurfs verschieben; mit Strg in 10-MHz-Schritten |
-| Alt + Oben / Unten bei GPU V/F | Gesamte Kurve oder markierten Bereich auf Basis des aktuellen Entwurfs verschieben; mit Strg in 10-MHz-Schritten |
-| Shift + Links / Rechts, Shift + Pos1 / Ende | Zusammenhängende GPU-Auswahl erweitern |
-| Strg + A | Alle GPU-Punkte markieren |
-| Shift + Enter | GPU-Auswahl abflachen oder Plateau ab dem Punkt bilden |
-| Enter | Profil-/Werteansicht öffnen und Y-Zahlenfeld bearbeiten |
-| Strg + Z | Rückgängig |
-| Strg + Y oder Strg + Shift + Z | Wiederholen |
-| Esc | Aktives Ziehen abbrechen; sonst Bereichsauswahl aufheben |
-| Strg + D | Geladenen Entwurf der aktiven Kurve zurücksetzen |
-| Strg + S | Profil speichern, ohne Hardwareänderung |
-| Mausrad oder + / − | X-Achse um Mausposition beziehungsweise ausgewählten Punkt zoomen |
-| Strg + Mausrad oder Strg mit + / − | Y-Achse zoomen |
-| Shift + Mausrad | Sichtbaren Ausschnitt horizontal verschieben |
-| Strg + 0 oder **Ganze Kurve** | Vollständige Kurve einpassen |
-| Strg + Links / Rechts bei Lüftern | Temperatur um 1 °C ändern; mit Shift um 10 °C |
-| Shift + Oben / Unten bei Lüftern | Lüfterwert um 10 Prozentpunkte ändern |
-| Einfg / Entf bei Lüftern | Punkt hinzufügen beziehungsweise entfernen |
+| Left/Right, Home/End | Select point / first / last |
+| Up/Down | Change frequency by 1 MHz or fan value by 1 percentage point |
+| Ctrl + Up/Down | Change by 10 steps |
+| Shift or Alt + Up/Down, GPU | Same reference/current-curve offset as the corresponding drag; Ctrl uses 10-MHz steps |
+| Shift + Left/Right/Home/End | Extend contiguous GPU selection |
+| Ctrl + A | Select all GPU anchors |
+| Enter | Open numeric/profile view and focus the selected Y value |
+| Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z | Undo / redo |
+| Escape | Cancel drag, otherwise clear range |
+| Ctrl + D | Restore the active loaded draft, with undo support |
+| Ctrl + S | Save in the saved-profile editor; the in-memory preset chart returns through Accept |
+| F1 | Show native shortcut help |
+| Wheel or +/− | Zoom X around pointer/selection |
+| Ctrl + wheel or Ctrl with +/− | Zoom Y |
+| Shift + wheel | Pan horizontally |
+| Ctrl + 0 | Fit the complete curve |
+| Ctrl + Left/Right, fans | Move temperature 1 °C; Shift uses 10 °C |
+| Shift + Up/Down, fans | Change fan value 10 percentage points |
+| Insert/Delete, fans | Add/remove point |
 
-Jede Kurve besitzt bis zu **64 Rückgängig-Schritte**. Ein ganzer Drag belegt einen Schritt; Esc beim Ziehen stellt dessen Anfangszustand wieder her. Eine neue Änderung nach Rückgängig verwirft den Wiederholen-Zweig. Laden eines Profils beginnt mit dessen neuem Ausgangsentwurf und einem leeren Verlauf.
+Each curve keeps up to 64 undo entries. CPU/GPU fan histories remain independent. Viewport changes never drop points or alter data. GPU opens zoomed around the selected point near 950 mV; fan curves open fully fitted.
 
-## Speichern
+Fan curves retain 2–32 points, strictly ordered temperatures within 0–110 °C and nondecreasing 0–100% values. Metadata validity is not a complete thermal-safety proof.
 
-Ein vorhandenes Profil behält seine anderen Einstellungen, etwa den VRAM-Offset. Beim Speichern werden die übrigen Parameter frisch aus dem Profilspeicher gelesen und erhalten. Zwischenzeitlich in einem anderen Fenster geänderte Kurven werden nicht still überschrieben. GPU-V/F und globaler Core-Offset sind im selben Profil ausgeschlossen; beim Speichern einer aktiven GPU-V/F-Kurve entfernt der Editor den globalen Core-Offset aus diesem Profil.
+## Hardware boundary
 
-## Hardwarestatus
+GPU frequency-at-voltage Apply/restore is qualified for the exact 8E35/F.13 / RTX 5070 Laptop / VBIOS and **617.14 or 617.42** implementations. Memory writes preserve coupled Graphics controls. Direct mV, hard voltage lock, Afterburner L lock and OC Scanner are not supported. A plateau is not a physical voltage ceiling or a load-stability result.
 
-**Bearbeiten und Speichern verändern keine Hardware.** Der Editor enthält keine SET-/UAC-Aktion. Das Profilfenster mit **Anwenden & Startoptionen …** bietet die getrennte, geprüfte Anwendung freigegebener Parameter.
+Fan curves do run through the separate own helper. They remain unsupported as `CpuFanCurve`/`GpuFanCurve` instructions inside a complete performance-profile transaction, and BIOS ownership handover is not qualified. [GPU contracts](GPU_PROFILES.md), [fan control](FAN_CONTROL.md), [hardware matrix](HARDWARE_MATRIX.md).
 
-GPU-V/F-Frequenzsteuerung ist auf 8E35/F.13 / RTX 5070 Laptop / NVIDIA 617.14 / VBIOS 98.06.2a.40.da freigegeben. Die Spannungsanker werden nicht geschrieben. Es gibt kein hartes physisches Spannungslimit und noch keinen Last-Stabilitätsnachweis.
+## Implementation and validation
 
-**Lüfterkurven lassen sich bearbeiten und speichern, aber noch nicht auf die HP-Hardware anwenden.** Prozentwerte sind noch nicht in einen qualifizierten modellbezogenen Regelpfad übersetzt. Lüfterzuordnung, Firmwaretabelle und der separate Max-Fan-Override sind inzwischen mit Readback/Restore belegt; für eigene Kurven fehlen weiterhin vollständige Modusübernahme/-wiederherstellung und die koordinierte CPU-/GPU-/Zusatzsensor-Sicherheit. Ein Profil mit Kurven-Settings wird vollständig vor dem ersten Hardware-Schreibzugriff gesperrt. CPU-Temperatur und Package Power bleiben ohne geprüften Sensoradapter unbekannt. Einzelheiten: [FAN_CONTROL.md](FAN_CONTROL.md).
+`core/curve_editor.rs` owns editing/history, `curve_input.rs` abstract input and `curve_view.rs` viewport/grid rules. `app/curve_widget.rs` owns GDI/native input; `curve_ui.rs` owns load/save/merge. Full curves and unrelated settings survive merge; conflicting concurrent edits fail.
 
-Ein fester GPU-Spannungs-/Takt-Lock, die Afterburner-Taste L und OC Scanner sind noch nicht unterstützt. Die native Hilfe benennt diese Grenzen. Eine markierte Spannung oder ein Plateau bedeutet keine physisch erzwungene Spannungsobergrenze. Unleashed, direkte Spannungsänderungen und weitere ungeprüfte Hardwareparameter erhalten durch die neue Bedienung keine Schreibfreigabe.
-
-## Implementierung und Prüfung
-
-`core/curve_editor.rs` enthält plattformfreie Editing-/Grenzregeln, Bereichsauswahl, atomare Transformationen und Verlauf. `core/curve_input.rs` übersetzt abstrakte Tastaturbefehle in dieselben Editing-Regeln. `core/curve_view.rs` hält Zoom, Pan und adaptive Rasterabstände getrennt von Kurvendaten und Treibergrenzen. `app/curve_widget.rs` besitzt den wiederverwendbaren Canvas, native Eingabe, GDI-Zeichnung und Objekt-Lifetimes. `app/curve_ui.rs` verwaltet native Controls, Hintergrund-Laden, Profilzusammenführung und Speicherung. Der Renderer läuft ereignisgesteuert und zeichnet zwischen Benutzeraktionen nicht periodisch.
-
-`scripts/smoke-curves-ui.ps1` prüft ausschließlich einen eigenen Testprozess: gleichmäßiges Shift-Ziehen aller 127 GPU-Punkte, Bereichsauswahl und Abflachen, Strg + Z/Y, Zoom/Einpassen, Zahlenfelder, CPU-Lüfter-Drag, Hinzufügen/Entfernen, separate GPU-Lüfterkurve, Speichern/Neuladen und Erhalt der übrigen Parameter. GPU-/VRAM-Offsets und alle programmierten Graphics-Deltas bleiben unverändert. Der Test prüft außerdem, dass gespeicherte Lüfter-Entwürfe keine Hardware-Schreibfreigabe erhalten.
-
-Die visuelle Abschlussprüfung trägt **SHIP** für die Diagramme und die abgebildeten Client-Controls in der großen/kleinen GPU-Ansicht, der CPU-Lüfteransicht und einem ausdrücklich ungespeicherten/unangewendeten GPU-Beispiel. Die Bilder stammen aus der eigenen nativen Client-Zeichnung über GDI/`WM_PRINT`, ohne Desktopaufnahme. Der ausgelassene Render der vollständigen Zahlenansicht bildet versteckte EDIT-/COMBOBOX-Texte unvollständig ab und gehört nicht zu dieser Freigabe. Titelleiste, vollständige Zahlenansicht, mehrere DPI-Stufen und eine umfassende Barrierefreiheitsprüfung sind damit nicht abgenommen. Details, Test- und Build-Messungen: [VALIDATION.md](VALIDATION.md).
+Native smoke checks exercised chart opening from new/dirty presets, reference/current dragging, bands, flatten, undo/redo, fit, numeric alternatives and fan draft persistence without hardware Apply. Recorded client renders do not cover all DPI/titlebar/high-contrast/accessibility behavior. [Validation](VALIDATION.md).

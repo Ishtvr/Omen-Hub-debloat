@@ -1,46 +1,42 @@
-# NVIDIA 617.42 — Referenzgerät 8E35/F.13
+# NVIDIA 617.42 qualification
 
-Am 22. Oktober 2026 wurden auf der RTX 5070 Laptop, VBIOS `98.06.2a.40.da`, die vorhandenen GPU-Adapter erneut qualifiziert. Die Runtime akzeptiert getrennte feste Evidenzeinträge für 617.14 und 617.42; weitere Treiberversionen bleiben gesperrt. Ein lesbarer Vertrag allein erteilt keine Schreibfreigabe.
+Recorded **22 October 2026** on **HP 8E35/F.13**, RTX **5070 Laptop**, VBIOS **98.06.2a.40.da**. Reviewed during documentation cleanup on 29 October; no new GPU trial is claimed.
 
-## Feste Implementierung und statischer Abgleich
+## Exact implementation
 
-Die tatsächlich installierte und von den Funktionsadressen ermittelte `nvapi64_impl.dll` ist 5.688.768 Bytes groß, SHA-256 **C6A2014763C3662512B5D420DFC7632B777338881A13AEAB3F21D8033EAE6C71**. Der System32-Loader hat SHA-256 `912AC885975DA8D8DF80AA0D1C04704E7DD2CA42FA2A02D341AE70237890E9BB`. Die Runtime prüft die geladene Implementierung für alle vier Getter und vor jedem privaten SET gegen den zum gemeldeten Treiber gehörenden Hash.
+The installed implementation `nvapi64_impl.dll` was **5,688,768 bytes**, SHA-256 **`C6A2014763C3662512B5D420DFC7632B777338881A13AEAB3F21D8033EAE6C71`**. The System32 loader hash was **`912AC885975DA8D8DF80AA0D1C04704E7DD2CA42FA2A02D341AE70237890E9BB`**.
 
-Ghidra/PyGhidra analysierte die neue Implementierung ohne PDB-Download. Die fünf nachstehenden Funktionsbereiche und ihre alternativen RID-Einträge sind bytegleich zu 617.14; die gesamten `.text`-/`.rdata`-Abschnitte sind es nicht. Die Interface-Tabelle wurde zusätzlich über die PE-Daten und den dekompilierten QueryInterface-Pfad abgeglichen.
+The runtime checks resolved private function ownership against the version-specific implementation hash. Ghidra/PyGhidra compared the five function regions and alternate RID entries to 617.14; these regions were byte-identical, while whole sections were not. Interface-table/QueryInterface mapping was also checked. This is not a blanket compatibility claim for other versions.
 
-| Funktion | Interface-ID | Adresse im analysierten Image | v1-Vertrag |
+| Function | Interface ID | Analyzed image address | v1 contract |
 | --- | --- | --- | --- |
-| Punktmaske GET | `0x507B4B59` | `0x180206CC0` | 0x182C Bytes, 255 × 24 Bytes |
-| Frequenz/Spannungsanker GET | `0x21537AD4` | `0x1802075A0` | 0x1C28 Bytes, 255 × 28 Bytes |
-| Steuerdeltas GET | `0x23F1B133` | `0x1802062F0` | 0x2420 Bytes, 255 × 36 Bytes |
-| Domänengrenzen GET | `0x64B43A6A` | `0x180205C90` | 0x928 Bytes, 32 × 72 Bytes |
-| Frequenzdeltas SET | `0x0733E009` | `0x180208220` | Steuerblock, nur ausgewählte Graphics-Frequenzwörter |
+| Mask GET | 0x507B4B59 | 0x180206CC0 | 0x182C bytes, 255 × 24-byte entries |
+| Frequency/anchor GET | 0x21537AD4 | 0x1802075A0 | 0x1C28 bytes, 255 × 28 |
+| Delta control GET | 0x23F1B133 | 0x1802062F0 | 0x2420 bytes, 255 × 36 |
+| Domain ranges GET | 0x64B43A6A | 0x180205C90 | 0x928 bytes, 32 × 72 |
+| Frequency delta SET | 0x0733E009 | 0x180208220 | Selected Graphics frequency words in a fresh control template |
 
-Punktblöcke beginnen nach 68 Bytes. Der Frequenzdelta liegt bei `0x58 + Index × 36`. Die native Probe las 127 Graphics-Punkte mit unveränderten Ankern 450…1240 mV. Ein privater Buffer oder ein Opcode kann nicht vom Benutzer vorgegeben werden. Proprietäre Bilder, Decompilierungen und Rohdaten bleiben in ignorierter `.local/research/nvidia-61742/` bzw. dem dort referenzierten Ghidra-Projekt.
+Point blocks start after 68 bytes; the mutable control delta is at `0x58 + index × 36`. The native read found **127 Graphics anchors, 450–1240 mV**. The app accepts no caller-defined buffer, address or opcode. These addresses identify the analyzed image only.
 
-## Gemessene Schreib-/Restore-Proben
+## Measured trials and originals
 
-Der Benutzer erlaubte das vorübergehende Beenden von MSI Afterburner. Seine vorhandene individuelle Kurve mit 126 von null abweichenden Deltas wurde vollständig bewahrt. Die Proben verwenden das dauerhafte Transaktionsjournal und vergleichen vor jeder neuen Operation die ursprünglichen Steuerbilder. Der globale Offsettest darf innerhalb dieses festen Prüfpfads vorübergehend die Kurve ersetzen; normale Presets behalten ihre Sperre gegen globale Core-Offsets bei aktiver individueller Kurve.
+After user-authorized temporary closure of Afterburner, its original individual curve was preserved. Each fixed qualification used durable originals and full final comparison:
 
-| Probe | Ziel | Ergebnis |
+| Trial | Target | Result |
 | --- | --- | --- |
-| Vollständige V/F-Kurve | Alle Frequenzen 15 MHz unter dem gelesenen Zustand | Alle 127 Steuerdeltas geprüft und Original vollständig restauriert |
-| VRAM nach Kurvenänderung | Erster Graphics-Punkt −15 MHz, danach VRAM −24 MHz | Kurvenziel blieb erhalten; anschließender vollständiger Restore |
-| Globale Offsets, negativ | GPU −15 MHz, VRAM −24 MHz | Exakter Readback, komplette ursprüngliche Kurve und 0/0 restauriert |
-| Globale Offsets, positiv | GPU +15 MHz, VRAM +24 MHz | Exakter Readback, komplette ursprüngliche Kurve und 0/0 restauriert |
+| Full curve | All frequencies −15 MHz from captured state | All 127 deltas verified and restored |
+| Memory after curve | First Graphics point −15 MHz, then VRAM −24 MHz | Graphics target preserved, complete restore |
+| Negative offsets | Core −15 MHz / VRAM −24 MHz | Exact readback; original curve and offsets restored |
+| Positive offsets | Core +15 MHz / VRAM +24 MHz | Exact readback; original curve and offsets restored |
 
-Die freigegebene Binary **FB924A420FBF0211A2A24608C36579E5E685F08D69F4468087F2A9C074F2F80F**, **2.657.792 Bytes**, wiederholte alle drei CLI-Prüfpfade um **03:20:45…03:20:48 CEST** erfolgreich. Unabhängige Leseprozesse bestätigten nach jedem Pfad sämtliche Anker/Deltas und globalen Offsets. Vorhandenes Produktionsjournal, Startup-, Lüfter- und UI-Metadaten blieben hashgleich; nur das vollständig restaurierte eigene Prüfjournal darf zum zuvor archivierten Checkpoint zurückkehren. Ein unvollständiger Restore bleibt offen und blockiert weitere Schreibaktionen.
+The **2,657,792-byte** qualification binary, SHA-256 **`FB924A420FBF0211A2A24608C36579E5E685F08D69F4468087F2A9C074F2F80F`**, repeated its three CLI paths at **03:20:45–03:20:48 CEST**. Independent readers confirmed complete anchors/deltas and offsets. Prior user journal/startup/fan/UI data remained unchanged. An unresolved trial would keep its recovery barrier instead of replacing it with the earlier completed checkpoint.
 
-Afterburner wurde anschließend mit seinem ursprünglichen `/s`-Aufruf und Rechten wieder gestartet. Um **03:21:20 CEST** waren die ursprüngliche Kurve und 0/0-Offsets auch danach unverändert. Der echte Preset→Chart-Smoke bestand um **03:21:24 CEST**: neuer/ungespeicherter Entwurf, 127 Punkte, Abbrechen/Übernehmen/Wiederöffnen, Speichern und Erhalt anderer Felder ohne Hardwareänderung. Der Smoke berücksichtigt nun die 24 tatsächlich entfernten APU-Felder und erhält die zwischenzeitlich wieder unterstützten STAPM-/Slow-Felder.
+Afterburner was restarted and the original curve/offsets remained intact at 03:21:20. The native preset-to-chart metadata smoke passed at 03:21:24 without hardware Apply. Field-retirement counts in early logs describe earlier editors; current retired-option behavior is in [Custom presets](CUSTOM_PRESETS.md).
 
-Format, **156 Tests** (91 Core / 45 Platform / 20 App), Clippy mit verweigerten Warnungen und Release-Build bestanden. Neue Tests behandeln exakte Geräte-/Versionsbindung, getrennte Implementierungshashes und feste kleine Kurvenproben auf bereits individuellen Kurven einschließlich falscher Anker, geänderter Beobachtungen und fehlender Delta-Reserve.
+## Boundary and reproduction
 
-Reproduzierbarer, ausdrücklich erhöhter Entwicklercheck:
+These are control/readback/restore tests, not load-stability, direct voltage, hard voltage ceiling, real reboot/resume or sustained 115-W acceptance. Profiles remain bound to their saved driver; changing driver does not silently migrate or reauthorize them.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-gpu-driver.ps1 -ExpectedBinarySha256 '<SHA-256 der gebauten target/release/omen-hub-pp.exe>'
-```
+`scripts/check-gpu-driver.ps1 -ExpectedBinarySha256 '<exact-built-hash>'` is an elevated **hardware-writing** developer check with small offsets/curves and restore. It refuses competing Afterburner/global-offset conditions rather than closing programs or installing drivers itself. Do not run it as routine status verification.
 
-Der Check beendet keine fremden Programme und startet keine Treiber. Er verweigert die Taktproben bei laufendem Afterburner oder vorhandenen globalen Nichtnull-Offsets. Die alten individuellen Kurven werden gesichert und restauriert. Die öffentlichen Offset-Verträge bleiben [NVML GetClockOffsets](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html) und [SetClockOffsets](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceCommands.html); der private Vertrag ist ausschließlich durch diese konkrete Analyse/Messung begrenzt.
-
-Das qualifiziert die Steuer-/Restore-Pfade. Direkte GPU-/VRAM-Spannung, ein hartes Spannungslimit, Overclock-Stabilität unter Last, echter Neustart/Standby und dauerhaft erreichbare 115 W sind dadurch nicht nachgewiesen. Frühere Profile bleiben an ihre gespeicherte Treiberversion gebunden; es erfolgt keine stille Migration oder neue Startup-Freigabe.
+Current source accepts both exact **617.14 and 617.42** entries. Public telemetry/offset contracts: [NVML queries](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html), [commands](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceCommands.html). Private contracts are limited by this own image analysis and measured evidence. [GPU controls](GPU_PROFILES.md), [Validation](VALIDATION.md).

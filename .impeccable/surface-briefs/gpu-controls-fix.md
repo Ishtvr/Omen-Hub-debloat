@@ -1,39 +1,17 @@
-# Usable laptop GPU controls and an opening V/F chart
+# Usable laptop GPU controls
 
-Mode: Operate. Narrow correction within the approved native Win32 dark system; no new visual world, palette, type or raster assets. The user reports unusable laptop voltage fields and a GPU V/F action that opens no chart.
+Design intent reviewed **29 October 2026**. Native Windows x64 / Rust / Win32, code-first. This is a surface brief, not a hardware support or validation record. Earlier implementation directions are superseded by the current product/workflow decisions below.
 
-Keep qualified GPU core/VRAM clock offsets, the complete Graphics V/F curve and manual Max-Fan in the GPU group. A core offset is conditionally unavailable while an independent V/F curve is active, not universally unsupported. Remove direct GPU/VRAM voltage and voltage-limit controls, FPS limiter and other unqualified GPU power/temperature/locked-clock/cTGP/Dynamic-Boost/mode fields. Preserve schema compatibility; opening a legacy file does not rewrite it. Explicit Save removes those retired instructions and retains unrelated CPU/Windows/lighting/fan settings and their binding rules.
+## Direction
 
-The chart action must open from a new unnamed preset, a checked V/F setting and a dirty saved preset. Use the existing full native curve workbench as an owned in-memory editor, retaining gestures, immutable voltage anchors, undo/redo, zoom and numeric controls. Übernehmen returns the edited curve to the parent draft. Abbrechen discards chart edits. Neither action creates profile files or applies hardware; only the parent Speichern persists the preset. Keep other dirty fields and the loaded profile identity intact. The chart needs protected focus so the surrounding draft cannot change concurrently.
+Offer qualified core/VRAM offsets, full V/F editing, Max-Fan, Dynamic Boost and the conditional public GPU power field. The curve action must open from new unnamed and dirty presets without losing other draft fields. Keep native stable control IDs independent of layout.
 
-QUALITY BAR: no guessed hardware setters, voltage writes, service changes or fabricated curve nodes. Use the already read validated complete curve and report real errors. Preserve the incumbent theme and current keyboard behavior. Verify the actual button path, repeated open/cancel/accept, full curve persistence, retired-field cleanup and unchanged programmed GPU/journal/startup state. Batched production client captures at standard/minimum sizes, then the fresh Impeccable finish handoffs; no HTML/CSS detector on Win32.
+## State and functional boundary
 
-## Finished artifact and evidence
+Direct GPU/VRAM mV, FPS limiter and locked clocks stay absent. Public watt control needs a configured original, which is unavailable on the reference laptop. Earlier removal of Dynamic Boost/power fields is superseded by current product decisions.
 
-The GPU disclosure now contains four fields: **GPU-Takt-Offset**, **VRAM-Takt-Offset**, **GPU-Leistungskurve** and **Maximale Lüfterdrehzahl**. The currently nonuniform live V/F curve prevents a global core offset and displays **V/F-Kurve aktiv**. Core-offset qualification remains conditional on the existing measured device/driver contract; this state is not a general lack of core clock control. CPU/Windows/system groups and the anchored preset actions retain their existing behavior.
+## Visual and review contract
 
-The twelve retired keys are `gpu_voltage_offset_mv`, `gpu_memory_voltage_offset_mv`, `gpu_voltage_limit_mv`, `gpu_power_limit_mw`, `gpu_temperature_limit_c`, `gpu_core_clock_limit_mhz`, `gpu_memory_clock_limit_mhz`, `gpu_frame_rate_limit`, `gpu_custom_tgp`, `gpu_unleashed`, `gpu_dynamic_boost` and `omen_performance_mode`. They remain readable in the schema. Opening a legacy profile leaves its bytes intact. A status message announces their presence; explicit **Speichern** removes these instructions with the existing conflict-aware merge, preserving unrelated CPU, Windows, lighting and fan settings plus device-binding rules. The roadmap still allows future qualified adapters; their absence here does not establish impossibility on every notebook.
+Preserve the shared [design system](../../DESIGN.md), clear native labels, keyboard focus and explicit unavailable/pending/confirmed states. Use event-driven rendering without a browser runtime, copied vendor assets or decorative polling. Existing screenshots/native smokes cover their recorded builds and client geometry only; DPI/display/high-contrast/accessibility acceptance stays separate.
 
-The chart path now uses `curve_ui::edit_gpu_draft` in the preset's process. It receives the existing validated complete GPU model and the current curve draft, with no file/hardware worker in this mode. The former saved-and-clean gate and ignored child-process launch are gone. The chart opens for an unnamed new preset, a checked dirty V/F field and a dirty saved preset. The owned editor disables its parent while open, starts with canvas focus and restores focus to the curve action on return. **Übernehmen** returns the full curve, selects V/F and deselects its mutually exclusive global core offset; **Abbrechen** discards only that chart invocation's edits. Other dirty fields and loaded preset identity survive. Only the parent **Speichern** writes the profile. Standalone `gpu-curve-ui` / `curve-ui` entry points remain available.
-
-The existing canvas retains all **127 immutable voltage anchors**, the loaded reference and editable frequency targets, range selection/flattening, Shift/Alt/Ctrl transformations, 64-step undo/redo, zoom/pan/fit and numeric editing. **Werte …** opens the draft editor's numeric view. Selection guides describe draft coordinates, with no physical voltage ceiling or new hardware qualification implied.
-
-This is an ordinary correction within the incumbent system. Comparison of `theme.rs`, `native_ui.rs`, `preset_fields.rs`, `preset_ui.rs`, `curve_ui.rs` and `curve_widget.rs`, DESIGN.md frontmatter/prose and `.impeccable/design.json` confirms the same charcoal/mint/Segoe UI tokens, flat rectangular fields/actions, native control roles/focus and scoped pale-blue chart selection. Every required client capture was opened and checked. No palette, typography, asset or durable system change was made, so **DESIGN.md and its sidecar are preserved**. The prior controls-redesign brief remains a historical record; this brief owns the current GPU correction. Existing Impeccable platform-enum and surface-brief resolution drift is reported without repair; explicit native Windows/Win32 requirements remain binding.
-
-All five production own-client WM_PRINT captures under `.impeccable/review/gpu-controls-fix/` are valid, at 96 DPI:
-
-| Capture | Client size | Evidence |
-| --- | --- | --- |
-| `presets-gpu.png` | 1084×861 | Four GPU fields, conditional core status, separated CPU/system region and anchored actions |
-| `presets-min.png` | 904×681 | Same GPU controls and footer at the preset minimum |
-| `curve-draft.png` | 1364×901 | Owned GPU draft chart with Übernehmen/Abbrechen, reference/draft legend and selected coordinates |
-| `curve-min.png` | 944×671 | The chart and responsive two-row toolbar at its minimum |
-| `curve-values.png` | 1364×901 | Numeric point selector, read-only voltage anchor and frequency/plateau controls |
-
-The fresh finish reviewer returned disposition **ship**, with no material fixes, scoped to these five pictured clients and sampled source/test evidence. No HTML/CSS detector ran because this is Win32. The verdict does not independently validate hardware or certify titlebars, other DPI, dynamic high contrast, full accessibility or real lifecycle transitions.
-
-The final release is **2,055,168 bytes**, SHA-256 **`E55DB62F434ABD80259E1DFB6C20CB49404CFBB0511EC3EF94266748F2BB6567`**. Format check, **87 workspace tests** (66 core / 18 platform / 3 app), Clippy with warnings denied and the release build passed. Four native smokes passed on this hash: actual preset-to-chart, existing presets, curves and controls navigation. These are UI/metadata checks, with no hardware writes.
-
-The actual button-path record, `.local/preset-curve-ui-smoke.json` at **21:59:57 CEST on 15 October 2026**, confirms new/unnamed and checked/dirty chart opening, edit/cancel, accept/reopen, exact full-127-point parent Save, retained other dirty fields, no hidden autosave, dirty saved-preset editing and all twelve legacy keys removed only on explicit Save. The full curve and hidden lighting setting survived cleanup. Programmed GPU controls, recovery journals and startup metadata were unchanged.
-
-The current release's **30-second cold tray** record, `.local/tray-measurement.json` at **22:04:08 CEST**, reports **13.13 MiB** working set, **2.19 MiB** private memory, a hidden window and zero CPU delta after the first five seconds. It predates CPU-helper activation. The earlier **27.30 MB** combined parent/paused-helper result belongs to the preceding **505B721B…** binary and remains historical evidence only. No new combined-helper budget claim is made for this release. Detailed build/measurement bounds belong in `docs/VALIDATION.md`; local proof records stay ignored.
+Current behavior: [topic guide](../../docs/GPU_PROFILES.md). Current support: [hardware matrix](../../docs/HARDWARE_MATRIX.md). Evidence: [Validation](../../docs/VALIDATION.md). Product requirements: [PRODUCT.md](../../PRODUCT.md).

@@ -1,55 +1,41 @@
-# OMEN Hub 1101.2609.3.0: Leistungsmodi auf 8E35 (statische Analyse)
+# HP mode observations: 8E35
 
-Stand 16. Oktober 2026. Quelle: IL der installierten Assemblies (`HP.Omen.Core.Model.Device.dll`, `HP.Omen.Background.PerformanceControl.dll`, `HP.Omen.Core.Common.dll`, `AMDRyzenSDK.dll`), die eingebettete Gerätedatei `Khalilah_DRG_N22X4X6.json` und die Hub-Logs auf diesem PC (3.–13. Oktober). Nichts wurde ausgeführt oder an das BIOS gesendet. „Belegt“ heißt: im Code gelesen und im Log bestätigt; „Code“ heißt: nur im Code gelesen.
+Static source investigation of Hub **1101.2609.3.0**, recorded **16 October 2026**; current Rust behavior reviewed on 29 October. Sources: installed HP mode/common/background/AMD wrappers, `Khalilah_DRG_N22X4X6.json` and local vendor logs. Reading vendor IL/logs was not itself a hardware trial.
 
-## 1. 0x1A-Payload je Modus
+## Mode field
 
-`PerformanceControlHelper.SetFanMode(mode, doMap, biosFanOwner)` baut `[0xFF, (byte)mode, (byte)biosFanOwner, 0x00]` und sendet `0x20008/0x1A`. Notebooks rufen es aus `Entry.ApplySettings` mit `doMap = false` auf; das Mapping für ThermalPolicy v1 (Default→0x30, Performance→0x31, Cool→0x50) gilt also **nicht** für 8E35. Byte 1 ist der rohe `PerformanceMode`-Wert:
+The notebook `SetFanMode` path builds **`[0xFF, mode, biosFanOwner, 0]`** for `0x20008/0x1A` with `doMap=false`. Do not apply the separate generic thermal-policy remapping to this route.
 
-| Hub-Modus (UI) | PerformanceMode | Byte 1 | Beleg |
-|---|---|---|---|
-| Balanced (Slider-Mitte, Standard) | L2 | **0x30** | belegt (Log „mode = L2“, 9×) |
-| Balanced-Slider 0 / 25 / 75 / 100 % | L0 / L1 / L3 / L4 | 0x10 / 0x20 / 0x40 / 0x50 | Code (`GetMappedMode`, Slider `[0,25,50,75,100]`) |
-| Performance (Standard = Slider 100 %) | L7 | **0x31** | belegt (Log „mode = L7“, 13×; `CurrentMappedDefaultValue` → 49) |
-| Performance-Slider 50 / 75 % | L5 / L6 | 0x11 / 0x21 | Code (Slider `[50,75,100]` bei SwFanControl, sonst `[0,50,100]`) |
-| Unleashed | L8 = Extreme | **0x04** | belegt (Log „mode = L8“, 27×; deckt sich mit unserem Unleashed-Test) |
-| Eco (automatisch, siehe unten) | 256 | **0x00** (`(byte)256`) | Code |
-| Cool (2), Quiet (3) | — | — | Code: `GetMappedMode` bildet beide auf L2 ab; im V2-UI gibt es keinen eigenen Knopf |
+| Vendor meaning | Mode byte | Original observation |
+| --- | --- | --- |
+| Balanced center, L2 | **0x30** | Code and recorded logs |
+| Balanced slider L0/L1/L3/L4 | 0x10 / 0x20 / 0x40 / 0x50 | Code |
+| Performance default, L7 | **0x31** | Code and recorded logs |
+| Performance L5/L6 | 0x11 / 0x21 | Code |
+| Unleashed, L8/Extreme | **0x04** | Code/logs and separate own trial |
+| Automatic Eco, enum 256 cast to byte | **0x00** | Code; not a dedicated UI button |
 
-**Byte 2** = Rückgabe von `Entry.IsNBBiosFanControl()`. Laut [FAN_CONTROL.md](../FAN_CONTROL.md) ist das im Netzbetrieb immer `false` (0); nur im Akkubetrieb mit Thermal-Auto, Plattformfreigabe und passender BIOS-Version kann es 1 werden. Pro Modus unterscheidet es sich nicht. **Byte 3** ist immer 0.
+The vendor UI offered Balanced/Performance sliders and Unleashed. It did not expose a distinct notebook Quiet opcode. The own Quiet choice uses the measured Balanced-L0-style **0x10**, not an invented mode 3.
 
-Ein Modus „Cool“ oder „Quiet“ mit eigenem 0x1A-Wert existiert auf 8E35 also nicht. Am nächsten kommt der Balanced-Slider ganz links (L0 = 0x10). Die eingebettete Gerätedatei hat keine Modusliste; das UI ergibt sich aus `UnleashedModeSupport: true` und dem V2-Slider-Modell.
+The ownership byte is separate from the performance byte. The examined AC route uses software ownership; the vendor BIOS branch has DC/thermal/model conditions. Full current ownership readback is missing. [Fan handover](../FAN_HANDOVER.md).
 
-## 2. Was der Hub dem UI anbietet
+## Coupled writes
 
-- **Balanced** mit 5-stufigem Slider (L0…L4), **Performance** mit 3-stufigem Slider (L5…L7), **Unleashed** (Extreme, nur mit Netzteil).
-- **Eco** (Modus 256) ist kein Knopf. `IsInEcoMode` wird wahr, wenn `ShouldAutoSwitchToEcoMode` greift (Einstellung „AutoSwitchToEcoMode“, im Log meist `False`). Dann sendet ApplySettings 0x1A mit Byte 1 = 0x00.
-- Quiet (3) sendet auf diesem Gerät nie einen eigenen Wert.
+HP mode changes also update cTGP/PPAB through 0x22, shared budget and paired CPU limits through 0x29, and Max-Fan state. The paired CPU payload `[W,W,FF,FF]` is not an independently qualified STAPM interface.
 
-## 3. Weitere Schreibzugriffe beim Moduswechsel
+| Own factory-style choice | Thermal byte | cTGP / PPAB on AC | CPU PL1 target |
+| --- | --- | --- | --- |
+| Quiet | 0x10 | Off / Off | 55 W |
+| Balanced | 0x30 | Off / On | 55 W |
+| Performance | 0x31 | On / On | 60 W |
+| Unleashed | 0x04 | On / On | 80 W |
 
-- **CPU-PL1 (`0x29`)**: `PowerControlBase.SetPL1DefaultValue` setzt den Zielwert, `ResetParameters(needResetPL1)` lässt ihn neu schreiben (über `SetPowerLimit` → `[W, W, FF, FF]`, Byte 0 = Slow, Byte 1 = STAPM laut eigener Messung). Werte aus Log und JSON:
-  - Unleashed: gespeicherter Nutzerwert `UnleashedModePowerLimit1` (bei Flo **75 W**, Bereich 45…80, Default 80).
-  - Performance (L5–L7): `NbPL1UpperBoundPerformance` = **60 W** (mit BIOS-OC ebenfalls 60).
-  - Balanced/Eco: `PL1DefaultValue` = **55 W**.
-  - `IsDynamicPowerLimitSupport = False`, `IsPowerLimit2/4Support = False`: kein dynamischer PL1-Algorithmus, kein PL2/PL4.
-- **TPP (`0x29` Byte 3)**: Unleashed 72 W, Performance 45 W (siehe Dynamic-Boost-Analyse); Balanced sendet nichts.
-- **0x22 (cTGP/PPAB)**: siehe Dynamic-Boost-Analyse, je Modus unterschiedlich.
-- **Windows-Energiemodus**: Nur wenn die Hub-Einstellung `AutoSwitchToWin11PowerMode` an ist (`IsWin11PowerModeSyncSupport = True`): Performance/Unleashed → „Beste Leistung“, Eco → „Beste Energieeffizienz“, sonst „Keine Überlagerung“, getrennt für AC und Akku (`PowerSetUserConfigured{AC,DC}PowerMode`). Energiesparplan, EPP oder Prozessor-Boost schreibt der Hub dabei nicht.
-- **PBO**: `AMDSDKHelper.SetPBOStatus(IsPerformanceMode)` läuft nur, wenn `IsSystemSupportedPBOScalar`; auf 8E35 laut Log `False`, also kein Schreibzugriff.
-- **Max-Fan**: `OmenHsaClient.SetMaxFan(CurrentMaxFan)` bei jedem ApplySettings.
+The source resource's default shared budget was 45; Unleashed uses the separately observed 72-W payload field. This shared-budget field is not an independently chosen GPU TGP. The original Hub can retain a user's Unleashed PL1, so its configured value need not equal the own factory-style 80-W target. Exact current payload construction is in `core/hp_mode.rs`; do not generalize it to other boards/BIOS.
 
-## 4. AMD-CPU-Übertaktung im Hub
+Vendor Windows-power synchronization and AMD RPC tuning are separate optional paths. The HP AMD wrapper serializes requests to its service; it does not expose the actual native SMU messages. Omen Hub++ now has its own fixed qualified RSMU path rather than loading that RPC wrapper. CCD affinity is a Windows process policy, not a CPU firmware mode.
 
-Vorhanden, aber nicht über eigene SMU-Aufrufe in der App:
+## Current implementation limits
 
-- `HP.Omen.OverclockingAMDModule` (UI) → `AMDSDKHelper` (`EnableOverclocking`, `SetCurrentFID`, `SetCurrentVoltage`, `SetCurveOptimizerForAllCores/EachCore/PerCore`, `SetPPTLimit`, `SetTDCLimit`, `SetEDCLimit`, `SetPBOStatus`) → `AMDRyzenSDK.dll` (`AmdRyzenHelper`).
-- `AmdRyzenHelper` serialisiert die Parameter als JSON und schickt sie per RPC an den HP-Dienst **„AmdRyzenOverclockingService“** (`RpcClientUtil.RunCustomCapabilityCommandAsync`, Befehlsnummern: EnableOverclocking 11, SetCurrentFID 2, SetCurrentVoltage 4); PBO-Scalar geht über `SetOmenCapFunctionAsync` Nr. 37. Weitere Einträge im Wrapper: `SetOverclockFreqAllCores`, `SetOverclockFreqPerCore`, `SetOverclockCPUVID`, `SetOverclockCPUVoltage`, `SetSOCVoltage`, `SetAutoOverclockingCPU`, `GetFIDbyFrequency`, `GetVIDbyVoltage`.
-- Die eigentlichen SMU-Nachrichten liegen im nativen HP-Dienst außerhalb des App-Pakets und sind hier **nicht** sichtbar. Für eigene Implementierungen bleiben die bekannten Raphael-RSMU-Nachrichten (ZenStates-Core) die Quelle; sie sind auf 8E35 ungetestet.
-- Auf 8E35 laut Log: Overclocking-Seite mit „CPU_AMD“-Ansicht wird geladen, `IsBiosDefinedOcSupport = True`, `DeviceJsonHasCurveOptimizer = False`, der Hintergrunddienst `OverclockingAMDBg` wird **nicht** geladen.
-- **CCD-/Kern-Affinität**: Nur im Game Booster (`GameBoosterLib.CoreAffinity.CoreAffinityUtility.SetCoreAffinity_ByProcessObj`) für einzelne Spielprozesse, also Prozess-Affinität per Windows, kein Firmware- oder SMU-Schalter. Fester Takt/feste Spannung/Spannungs-Offset gibt es nur über den RPC-Pfad oben.
+The four own modes were exercised with GPU flag and available Slow/PL1 readback, ending in the user-specified Unleashed baseline. A complete active thermal-mode original cannot be read back. The dashboard path takes the shared write lease but has no complete preset-style write-ahead transaction. On a failed non-Balanced mode it attempts Balanced; that is a fallback, not restoration of the unknown previous mode.
 
-## Folgerung für Omen Hub++
-
-- Performance = `[FF, 0x31, 0, 0]`, danach PL1 60 W (`0x29 [3C, 3C, FF, FF]`), 0x22/TPP wie Dynamic-Boost-Analyse.
-- Ein „Quiet“-Modus entspricht am ehesten Balanced-L0 = `[FF, 0x10, 0, 0]` mit PL1 55 W; Eco wäre `[FF, 0x00, 0, 0]`. Beides ist vom Hub auf diesem Gerät nicht als eigener Modus vorgesehen und muss vor Freigabe auf der Hardware gemessen werden.
+Keep default-mode switching, Dynamic Boost flag and a future numeric GPU power limit distinct. The static vendor route is evidence for fixed contracts, not free CPU/GPU tuning or safe BIOS ownership. [System controls](../SYSTEM_CONTROLS.md), [Recovery](../RECOVERY.md), [Project review](../PROJECT_REVIEW.md).
