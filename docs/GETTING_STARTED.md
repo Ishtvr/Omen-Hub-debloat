@@ -41,9 +41,20 @@ The default HP-mode and dashboard MUX shortcuts currently have weaker recovery c
 - **Lighting:** choose one of four zones, confirm a color in the native color dialog, or use On/Off. Confirmed changes are applied immediately and read back; Cancel does not write. The window requests UAC once. [Lighting UI](KEYBOARD_UI.md).
 - **Graphics:** the dashboard offers Hybrid and GPU only boot preferences. A change requires a restart to take effect. Physical switching and iGPU-only battery operation are not yet qualified. [Hardware matrix](HARDWARE_MATRIX.md).
 
+## Administrator rights and single instance
+
+The dashboard runs with administrator rights. Started without them, it asks once through UAC and restarts itself; declining keeps an unelevated dashboard that asks per action as before. Sub windows started from the dashboard inherit the rights, so hardware actions no longer prompt each time. Only one dashboard, preset editor and lighting editor runs per Windows session; a second launch brings the open window forward (from the tray if hidden). Smoke scripts that drive the dashboard must run in an elevated PowerShell, otherwise the restart replaces the process they started.
+
+## Dashboard settings
+
+Every setting has a round **i** that explains it.
+
+- **Disable HP OMEN Cap** stops the HP service HPOmenCap (`OmenCap.exe`) and sets its start type to Disabled. While it runs it overwrites CPU power limits, and presets with CPU PPT or Slow are refused. The previous start type is saved; turning the setting off restores it and starts the service. Details: [HP control](HP_CONTROL.md).
+- **Preset on battery** applies the chosen mode or preset when the charger is unplugged and returns to the mode or preset last applied on AC when it is plugged in again (Balanced if none is known). A preset applied by hand on battery stays. The app must be running, the tray is enough. The change is applied through the same elevated commands as **Apply**; it is not yet validated on hardware.
+
 ## Two different Windows-start options
 
-**Start with Windows** launches the unelevated tray UI through the user's Run entry. It does not apply a hardware profile.
+**Start with Windows** creates a per-user logon task (`OmenHubPP-Tray-<SID>`, highest run level) that opens the tray UI with administrator rights without a prompt. Windows does not start programs that need administrator rights from the Run key, so an entry from older builds is moved to the task the first time the elevated dashboard starts. It does not apply a hardware profile.
 
 **Activate at Windows start** in a preset authorizes a particular applied revision and uses a protected scheduled task for sign-in application. Editing the profile or replacing the installed binary invalidates that approval. Full automatic recovery/reapplication after actual sleep and power changes is still pending.
 

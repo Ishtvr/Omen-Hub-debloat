@@ -4,7 +4,7 @@ Open **Performance profiles / Leistungsprofile** or run `omen-hub-pp.exe presets
 
 ## Workflow
 
-1. Select a saved preset or create a new one and enter its name.
+1. Select a saved preset or create a new one and enter its name. A new preset offers only **Reset** and **Save**; Apply, Delete and the sign-in option appear once it is saved (a pending hardware restore always shows **Restore**). **Reset** returns the draft to the system defaults: no setting selected and every editor at its default value. It changes only the draft.
 2. Expand GPU, CPU or Windows groups. Only checked settings belong to the preset. Omitting a setting does not reset an existing hardware override.
 3. **Save** persists the draft. **Apply** uses a fixed elevated child and complete preflight of a saved preset. Unsupported or conflicting instructions block the whole Apply.
 4. **Activate at Windows start** requires the exact successfully applied revision, live verification and protected installation/approval. An explicit startup choice during Save may request Apply followed by authorization; ordinary Save alone does not do so.

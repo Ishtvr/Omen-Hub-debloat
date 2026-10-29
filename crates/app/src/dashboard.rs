@@ -271,6 +271,7 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
         for (id, label) in [
             (190, t("settings.autostart")),
             (191, t("settings.close_to_tray")),
+            (192, t("settings.hp_service")),
         ] {
             control(
                 id,
@@ -278,6 +279,29 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
                 label,
                 WS_TABSTOP | BS_AUTOCHECKBOX as u32,
                 th.body,
+                false,
+                false,
+            );
+        }
+        // Preset applied automatically without the charger.
+        label(193, t("settings.battery"), th.body, false, false);
+        control(
+            194,
+            "COMBOBOX",
+            "",
+            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+            th.body,
+            false,
+            false,
+        );
+        // Round "i" after each setting.
+        for id in SETTING_INFO {
+            control(
+                id,
+                "BUTTON",
+                "i",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                th.small,
                 false,
                 false,
             );
@@ -294,6 +318,8 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
         layout(hwnd);
     }
 }
+/// Info buttons of the autostart, tray, HP service and battery settings.
+pub const SETTING_INFO: [i32; 4] = [195, 196, 197, 198];
 /// Lower edge of the GPU and CPU panels, shared by layout and painting.
 const PANEL_BOTTOM: i32 = 380;
 pub unsafe fn layout(hwnd: HWND) {
@@ -386,20 +412,34 @@ pub unsafe fn layout(hwnd: HWND) {
             (102, [right, bottom + 34, panel - 136, 220]),
             (181, [right, bottom + 78, panel, 44]),
         ]);
-        // Settings row under the system details; each box fits its label.
+        // Settings rows under the system details; each control fits its
+        // label and is followed by its info button.
         let settings_top = bottom + 128;
-        let mut x = 28;
-        for id in [190, 191] {
-            let check = GetDlgItem(hwnd, id);
-            let font = SendMessageW(check, WM_GETFONT, 0, 0) as HFONT;
+        let fitted = |id: i32, extra: i32| {
+            let control = GetDlgItem(hwnd, id);
+            let font = SendMessageW(control, WM_GETFONT, 0, 0) as HFONT;
             let mut label = [0u16; 128];
-            let n = GetWindowTextW(check, label.as_mut_ptr(), 128).max(0) as usize;
-            let width =
-                crate::native_ui::text_width(check, font, &String::from_utf16_lossy(&label[..n]))
-                    + 36;
+            let n = GetWindowTextW(control, label.as_mut_ptr(), 128).max(0) as usize;
+            crate::native_ui::text_width(control, font, &String::from_utf16_lossy(&label[..n]))
+                + extra
+        };
+        let mut x = 28;
+        for (id, info) in [(190, 195), (191, 196), (192, 197)] {
+            let width = fitted(id, 36);
             boxes.push((id, [x, settings_top, width, 26]));
-            x += width + 32;
+            boxes.push((info, [x + width + 2, settings_top + 1, 24, 24]));
+            x += width + 26 + 32;
         }
+        let battery_top = settings_top + 38;
+        let label_width = fitted(193, 8);
+        boxes.extend([
+            (193, [28, battery_top + 4, label_width, 24]),
+            (194, [28 + label_width + 8, battery_top, 260, 260]),
+            (
+                198,
+                [28 + label_width + 8 + 260 + 8, battery_top + 3, 24, 24],
+            ),
+        ]);
         for (id, b) in boxes {
             MoveWindow(GetDlgItem(hwnd, id), b[0], b[1], b[2], b[3], 1);
         }

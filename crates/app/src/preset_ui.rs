@@ -46,6 +46,8 @@ const APPLY: usize = 705;
 const DELETE: usize = 706;
 const STARTUP: usize = 707;
 const TAB: usize = 708;
+/// Draft back to the system defaults.
+const RESET: usize = 709;
 const GROUP_BASE: usize = 1200;
 const FIELD_BASE: usize = 2000;
 const PANE: usize = 710;
@@ -57,7 +59,7 @@ const INFO_OFFSET: usize = FIELD_STRIDE - 1;
 /// Checkbox square and gap before its label, in window units.
 const CHECK_BOX: i32 = 28;
 const INFO_SIZE: i32 = 26;
-const CLASS: &str = "OmenHubPPPresetEditor";
+pub const CLASS: &str = "OmenHubPPPresetEditor";
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
 struct View {
     profiles: Vec<PerformanceProfile>,
@@ -378,6 +380,25 @@ fn enable(hwnd: HWND, state: &State) {
                         && view.as_ref().is_some_and(|v| v.applicable)))) as i32,
         );
         EnableWindow(GetDlgItem(hwnd, STARTUP as i32), ready as i32);
+        EnableWindow(GetDlgItem(hwnd, RESET as i32), ready as i32);
+        // A new preset can only be reset and saved; Apply, Delete and the
+        // sign-in option belong to saved presets. A pending restore always shows.
+        let visible = actions(saved, pending);
+        for id in [APPLY, RESET, SAVE, DELETE] {
+            ShowWindow(
+                GetDlgItem(hwnd, id as i32),
+                if visible.contains(&id) {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
+        ShowWindow(
+            GetDlgItem(hwnd, STARTUP as i32),
+            if saved { SW_SHOW } else { SW_HIDE },
+        );
+        place_actions(hwnd, &visible);
         for row in state.rows.borrow().iter() {
             EnableWindow(row.check, ready as i32);
             let included = ready && checked(row.check);
@@ -397,6 +418,30 @@ fn enable(hwnd: HWND, state: &State) {
                     }
                 }
             }
+        }
+    }
+}
+/// Buttons in the action row, left to right.
+fn actions(saved: bool, pending: bool) -> Vec<usize> {
+    match (saved, pending) {
+        (true, _) => vec![APPLY, RESET, SAVE, DELETE],
+        (false, true) => vec![APPLY, RESET, SAVE],
+        (false, false) => vec![RESET, SAVE],
+    }
+}
+/// Right-aligned action buttons; hidden ones leave no gap.
+fn place_actions(hwnd: HWND, visible: &[usize]) {
+    unsafe {
+        let mut r: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut r);
+        for (i, id) in visible.iter().rev().enumerate() {
+            ui::place(
+                GetDlgItem(hwnd, *id as i32),
+                r.right - 154 - i as i32 * 134,
+                r.bottom - 65,
+                126,
+                40,
+            );
         }
     }
 }
@@ -600,48 +645,7 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         set_checked(row.check, stored.is_some());
         row.edited.set(false);
         *row.baseline.borrow_mut() = stored.clone();
-        let value = stored.unwrap_or_else(|| row.field.initial());
-        unsafe {
-            match (&row.editor, &value) {
-                (Editor::Text(h), Value::Integer(value)) => text(
-                    *h,
-                    &crate::i18n::number(&preset::format_number(*value, row.field.scale())),
-                ),
-                (Editor::Text(h), Value::CoreRatios(values)) => text(
-                    *h,
-                    &values
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ),
-                (Editor::Choice(h), Value::Choice(value)) => {
-                    let index = row
-                        .field
-                        .choices()
-                        .iter()
-                        .position(|v| v == value)
-                        .unwrap_or(0);
-                    SendMessageW(*h, CB_SETCURSEL, index, 0);
-                }
-                (Editor::Boolean(h), Value::Boolean(value)) => {
-                    SendMessageW(*h, CB_SETCURSEL, usize::from(*value), 0);
-                }
-                (Editor::PerCore(items), Value::PerCore(points)) => {
-                    for (ccd, core, _, h) in items {
-                        text(
-                            *h,
-                            &points
-                                .iter()
-                                .find(|p| p.ccd == *ccd && p.core == *core)
-                                .map_or(0, |p| p.steps)
-                                .to_string(),
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
+        show_value(row, &stored.unwrap_or_else(|| row.field.initial()));
         text(
             row.note,
             if row.field.feature == Feature::GpuCoreOffsetMhz && view.core_curve_conflict {
@@ -679,6 +683,72 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
     unsafe {
         layout_pane(state.pane.get(), state);
     }
+}
+/// Shows `value` in the row's editor without changing whether it is included.
+fn show_value(row: &Row, value: &Value) {
+    unsafe {
+        match (&row.editor, value) {
+            (Editor::Text(h), Value::Integer(value)) => text(
+                *h,
+                &crate::i18n::number(&preset::format_number(*value, row.field.scale())),
+            ),
+            (Editor::Text(h), Value::CoreRatios(values)) => text(
+                *h,
+                &values
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            (Editor::Choice(h), Value::Choice(value)) => {
+                let index = row
+                    .field
+                    .choices()
+                    .iter()
+                    .position(|v| v == value)
+                    .unwrap_or(0);
+                SendMessageW(*h, CB_SETCURSEL, index, 0);
+            }
+            (Editor::Boolean(h), Value::Boolean(value)) => {
+                SendMessageW(*h, CB_SETCURSEL, usize::from(*value), 0);
+            }
+            (Editor::PerCore(items), Value::PerCore(points)) => {
+                for (ccd, core, _, h) in items {
+                    text(
+                        *h,
+                        &points
+                            .iter()
+                            .find(|p| p.ccd == *ccd && p.core == *core)
+                            .map_or(0, |p| p.steps)
+                            .to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+/// Draft back to the system defaults: no setting is selected, so the preset
+/// changes nothing until options are chosen again, and each editor shows its
+/// default value. Only the draft changes; Save keeps it.
+fn reset(hwnd: HWND, state: &State) {
+    state.rendering.set(true);
+    for row in state.rows.borrow().iter() {
+        set_checked(row.check, false);
+        row.edited.set(true);
+        show_value(row, &row.field.initial());
+    }
+    // The curve editor starts again from the curve the GPU reports.
+    *state.curve.borrow_mut() = state
+        .view
+        .borrow()
+        .as_ref()
+        .and_then(|v| v.curve.as_ref().ok().and_then(|c| c.value().ok()));
+    set_checked(unsafe { GetDlgItem(hwnd, STARTUP as i32) }, false);
+    state.rendering.set(false);
+    state.dirty.set(true);
+    status(hwnd, state, t("preset.reset_done"), false);
+    enable(hwnd, state);
 }
 fn collect(state: &State) -> Result<SaveData, String> {
     let view = state.view.borrow();
@@ -915,10 +985,15 @@ unsafe fn layout(hwnd: HWND, state: &State) {
         );
         ui::place(state.pane.get(), 28, 208, w - 56, h - 348);
         ui::place(GetDlgItem(hwnd, STARTUP as i32), 28, h - 115, 360, 30);
-        ui::place(GetDlgItem(hwnd, STATUS), 28, h - 67, w - 470, 48);
-        for (id, offset) in [(APPLY, 422), (SAVE, 288), (DELETE, 154)] {
-            ui::place(GetDlgItem(hwnd, id as i32), w - offset, h - 65, 126, 40);
-        }
+        ui::place(GetDlgItem(hwnd, STATUS), 28, h - 67, w - 604, 48);
+        let view = state.view.borrow();
+        place_actions(
+            hwnd,
+            &actions(
+                view.as_ref().is_some_and(|v| v.selected.is_some()),
+                view.as_ref().is_some_and(|v| v.pending),
+            ),
+        );
         layout_pane(state.pane.get(), state);
     }
 }
@@ -1399,6 +1474,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 );
                 for (id, label) in [
                     (APPLY, t("preset.apply_button")),
+                    (RESET, t("preset.reset")),
                     (SAVE, t("preset.save")),
                     (DELETE, t("preset.delete")),
                 ] {
@@ -1541,6 +1617,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                             dispatch(hwnd, state, Request::Load(None), t("preset.new_loading"));
                         }
                     }
+                    RESET => reset(hwnd, state),
                     SAVE => match collect(state) {
                         Ok(data) => dispatch(
                             hwnd,

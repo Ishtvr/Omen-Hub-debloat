@@ -1,5 +1,6 @@
 //! Bounded, versioned profile persistence and durable hardware transaction journal.
 use omen_core::{
+    battery::Selection,
     profiles::{PerformanceProfile, validate_id},
     quick_switch::{FanMode, GraphicsMode, GraphicsRecord},
     transaction::{Completion, Journal, PendingTransaction},
@@ -424,17 +425,72 @@ impl ProfileStore {
     /// Closing the dashboard hides it in the tray unless the user turned
     /// that off; absent or unreadable keeps the tray behaviour.
     pub fn close_to_tray(&self) -> bool {
-        read_json::<serde_json::Value>(&self.root.join("app-settings.json"))
-            .ok()
-            .filter(|v| v["schema"] == 1)
-            .and_then(|v| v["close_to_tray"].as_bool())
+        self.app_settings()["close_to_tray"]
+            .as_bool()
             .unwrap_or(true)
     }
     pub fn save_close_to_tray(&self, enabled: bool) -> Result<(), String> {
-        atomic_json(
-            &self.root.join("app-settings.json"),
-            &serde_json::json!({"schema": 1, "close_to_tray": enabled}),
+        self.update_app_settings("close_to_tray", enabled.into())
+    }
+    /// Preset applied automatically when the charger is unplugged; absent or
+    /// unreadable means no automatic change.
+    pub fn battery_selection(&self) -> Option<Selection> {
+        self.app_settings()["battery_selection"]
+            .as_str()
+            .and_then(Selection::parse)
+    }
+    pub fn save_battery_selection(&self, selection: Option<&Selection>) -> Result<(), String> {
+        self.update_app_settings(
+            "battery_selection",
+            selection.map_or(serde_json::Value::Null, |s| s.key().into()),
         )
+    }
+    /// Last mode or preset applied from the dashboard while on AC power.
+    pub fn ac_selection(&self) -> Option<Selection> {
+        self.app_settings()["ac_selection"]
+            .as_str()
+            .and_then(Selection::parse)
+    }
+    pub fn save_ac_selection(&self, selection: &Selection) -> Result<(), String> {
+        self.update_app_settings("ac_selection", selection.key().into())
+    }
+    /// Whether the battery selection was applied automatically and is still
+    /// active, so plugging the charger in returns to the AC selection.
+    pub fn battery_switched(&self) -> bool {
+        self.app_settings()["battery_switched"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+    pub fn save_battery_switched(&self, switched: bool) -> Result<(), String> {
+        self.update_app_settings("battery_switched", switched.into())
+    }
+    /// Start type HPOmenCap had before the "Disable HP OMEN Cap" setting.
+    pub fn hp_service_start_type(&self) -> Option<u32> {
+        self.app_settings()["hp_service_start_type"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+    }
+    pub fn save_hp_service_start_type(&self, start: Option<u32>) -> Result<(), String> {
+        self.update_app_settings(
+            "hp_service_start_type",
+            start.map_or(serde_json::Value::Null, Into::into),
+        )
+    }
+    fn app_settings(&self) -> serde_json::Value {
+        read_json::<serde_json::Value>(&self.root.join("app-settings.json"))
+            .ok()
+            .filter(|v| v["schema"] == 1 && v.is_object())
+            .unwrap_or_else(|| serde_json::json!({"schema": 1}))
+    }
+    /// Changes one dashboard setting and keeps the others.
+    fn update_app_settings(&self, key: &str, value: serde_json::Value) -> Result<(), String> {
+        let mut settings = self.app_settings();
+        if value.is_null() {
+            settings.as_object_mut().map(|o| o.remove(key));
+        } else {
+            settings[key] = value;
+        }
+        atomic_json(&self.root.join("app-settings.json"), &settings)
     }
     /// CCD selection the background service pins foreground programs to
     /// (bit 0 = first CCD). Absent means every CCD: Windows schedules freely.
@@ -672,6 +728,30 @@ mod tests {
         assert!(!store.close_to_tray());
         store.save_close_to_tray(true).unwrap();
         assert!(store.close_to_tray());
+        fs::remove_file(store.root().join("app-settings.json")).unwrap();
+    }
+    #[test]
+    fn battery_settings_share_the_settings_file_without_overwriting_each_other() {
+        use omen_core::hp_mode::HpMode;
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.battery_selection(), None);
+        assert_eq!(store.ac_selection(), None);
+        assert!(!store.battery_switched());
+        store.save_close_to_tray(false).unwrap();
+        let battery = Selection::Mode(HpMode::Quiet);
+        let ac = Selection::Preset("preset-gaming".into());
+        store.save_battery_selection(Some(&battery)).unwrap();
+        store.save_ac_selection(&ac).unwrap();
+        store.save_battery_switched(true).unwrap();
+        assert!(!store.close_to_tray());
+        assert_eq!(store.battery_selection(), Some(battery));
+        assert_eq!(store.ac_selection(), Some(ac.clone()));
+        assert!(store.battery_switched());
+        store.save_battery_selection(None).unwrap();
+        assert_eq!(store.battery_selection(), None);
+        assert_eq!(store.ac_selection(), Some(ac));
+        assert!(!store.close_to_tray());
         fs::remove_file(store.root().join("app-settings.json")).unwrap();
     }
     #[test]

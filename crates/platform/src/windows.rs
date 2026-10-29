@@ -17,6 +17,7 @@ mod nvidia;
 mod smu;
 mod startup;
 mod thermal;
+mod tray_task;
 mod user_data;
 mod vf;
 mod windows_settings;
@@ -47,6 +48,7 @@ pub use startup::{
 };
 use std::collections::HashMap;
 pub use thermal::{CoolingSnapshot, read_cooling_snapshot};
+pub use tray_task::{set_tray_task, tray_task_installed};
 pub(crate) use user_data::profile_directory;
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use wmi::{Variant, WMIConnection};

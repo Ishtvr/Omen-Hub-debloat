@@ -66,7 +66,7 @@ Only an actually pending own session calls for elevated `hp-control-recover`. It
 & "$env:ProgramFiles\OmenHubPlusPlus\Omen Hub++.exe" profile-startup-status
 ```
 
-The preset's startup checkbox controls hardware-profile sign-in. The separate dashboard **Start with Windows** setting controls the unelevated tray Run entry; turn it off too when removing the app. Disabling sign-in does not restore current hardware values.
+The preset's startup checkbox controls hardware-profile sign-in. The separate dashboard **Start with Windows** setting controls the tray logon task `OmenHubPP-Tray-<SID>`; turn it off too when removing the app. If **Disable HP OMEN Cap** is on, turn it off before removing the app to return HPOmenCap to its saved start type, or set the service back to Automatic in `services.msc`. Disabling sign-in does not restore current hardware values.
 
 ## Remove or update
 

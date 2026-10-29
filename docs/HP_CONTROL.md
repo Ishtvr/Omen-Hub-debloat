@@ -1,12 +1,18 @@
 # Controlled HP migration and ownership
 
-The product target is complete operation without original HP/OMEN user-mode controllers. Current ordinary UI/sign-in **does not automatically stop HPOmenCap or take over its lifetime**. A prepared, explicitly opted-in native migration qualification is separate; it is not yet physically accepted for the current native owner/guardian/cooling combination.
+The product target is complete operation without original HP/OMEN user-mode controllers. Current ordinary UI/sign-in **does not automatically stop HPOmenCap or take over its lifetime**; the explicit dashboard setting below disables it on request. A prepared, explicitly opted-in native migration qualification is separate; it is not yet physically accepted for the current native owner/guardian/cooling combination.
+
+## User setting: Disable HP OMEN Cap
+
+The dashboard setting **Disable HP OMEN Cap** is the normal way to run without the HP controller. It runs the fixed elevated command `hp-service-ui disable|restore <nonce>`, which only accepts the `HPOmenCap` user-process service whose image is `OmenCap.exe` from an `hpomencustomcapcomp.inf_amd64_*` DriverStore package (any package version, so a Windows Update of the component keeps working). Disabling saves the current start type, sets it to Disabled and stops the service. Restoring sets the saved start type back (Automatic or Manual, otherwise Automatic) and starts it; it is refused while a hardware transaction still needs restoring. An open developer handover session blocks both. No other service, driver or configuration field is touched.
+
+While the service is stopped and Disabled, CPU PPT/Slow presets apply and may also be approved for sign-in, because Windows will not start the service at logon. The BIOS keeps its own thermal protection; the own fan helper controls the fans when Curve or Max is chosen. A Windows Update of the HP component can enable the service again; the checkbox then shows it as not disabled. This setting has not yet been run on the device.
 
 ## Normal profile gates
 
 A preset containing independent CPU **PPT or Slow** fails before capture/SET if HPOmenCap is running, transitioning or unreadable. Each power write rechecks the condition. A missing service is accepted only for the explicit Windows “service does not exist” result; the app does not install/start an absent OEM service.
 
-New PPT/Slow sign-in approval requires the OEM service to be absent until startup takeover is qualified. A temporarily stopped installed service is insufficient. Existing hardware-original recovery remains available and must finish before an owned OEM return. Read-only status/preflight changes no selection, service or hardware.
+New PPT/Slow sign-in approval requires the OEM service to be absent, or stopped with start type Disabled, until startup takeover is qualified. A temporarily stopped auto-start service is insufficient. Existing hardware-original recovery remains available and must finish before an owned OEM return. Read-only status/preflight changes no selection, service or hardware.
 
 ## Fixed native qualification
 

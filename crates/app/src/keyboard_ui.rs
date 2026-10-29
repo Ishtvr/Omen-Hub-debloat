@@ -34,7 +34,7 @@ const UPDATE: u32 = WM_APP + 21;
 const POWER: usize = 600;
 const ZONE: usize = 610;
 const STATUS: i32 = 624;
-const CLASS: &str = "OmenHubPPKeyboardEditor";
+pub const CLASS: &str = "OmenHubPPKeyboardEditor";
 /// Language keys of the four keyboard zones, left to right.
 const LABELS: [&str; 4] = [
     "lighting.zone_left",

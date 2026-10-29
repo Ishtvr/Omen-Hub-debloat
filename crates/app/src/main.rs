@@ -33,6 +33,8 @@ mod read_process;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod segments;
 #[cfg(windows)]
+mod single_instance;
+#[cfg(windows)]
 mod startup_setup;
 #[cfg(windows)]
 mod switch;
@@ -129,7 +131,30 @@ fn run() -> Result<(), String> {
     }
     #[cfg(windows)]
     if args.is_empty() || args == ["--tray"] {
-        return ui::run(!args.is_empty());
+        let tray = !args.is_empty();
+        // A second launch only brings the running dashboard forward; a
+        // second sign-in start stays silent.
+        let existing = || {
+            if !tray {
+                single_instance::activate(ui::CLASS, true);
+            }
+            Ok(())
+        };
+        if !single_instance::elevated() {
+            if single_instance::running(ui::KIND) {
+                return existing();
+            }
+            // Hardware actions need administrator rights: restart with them.
+            // Declining the prompt keeps the dashboard with prompts per action.
+            let arguments = format!("--lang {} {}", i18n::language_code(), args.join(" "));
+            if single_instance::relaunch_elevated(arguments.trim()) {
+                return Ok(());
+            }
+        }
+        let Some(_instance) = single_instance::claim(ui::KIND) else {
+            return existing();
+        };
+        return ui::run(tray);
     }
     #[cfg(windows)]
     if args
@@ -137,6 +162,10 @@ fn run() -> Result<(), String> {
         .is_some_and(|a| matches!(a.as_str(), "gpu-ui" | "presets-ui"))
         && args.len() <= 2
     {
+        let Some(_instance) = single_instance::claim("Presets") else {
+            single_instance::activate(preset_ui::CLASS, false);
+            return Ok(());
+        };
         return preset_ui::run(args.get(1).cloned());
     }
     #[cfg(windows)]
@@ -153,6 +182,10 @@ fn run() -> Result<(), String> {
     }
     #[cfg(windows)]
     if args == ["keyboard-ui"] {
+        let Some(_instance) = single_instance::claim("Keyboard") else {
+            single_instance::activate(keyboard_ui::CLASS, false);
+            return Ok(());
+        };
         return keyboard_ui::run(None);
     }
     #[cfg(windows)]

@@ -19,6 +19,8 @@ pub enum Action {
     Mode(omen_core::hp_mode::HpMode),
     FanService,
     Graphics(omen_core::quick_switch::GraphicsMode),
+    /// `true` stops and disables HPOmenCap, `false` restores it.
+    HpService(bool),
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -29,6 +31,7 @@ impl Action {
             Self::Mode(_) => "mode",
             Self::FanService => "fan",
             Self::Graphics(_) => "mux",
+            Self::HpService(_) => "hp_service",
         }
     }
 }
@@ -57,6 +60,10 @@ pub fn run(
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
         Action::FanService => format!("fan-service-install {nonce}"),
         Action::Graphics(mode) => format!("mux-ui-apply {} {nonce}", mode.key()),
+        Action::HpService(disable) => format!(
+            "hp-service-ui {} {nonce}",
+            if disable { "disable" } else { "restore" }
+        ),
     };
     let arguments = format!("--lang {} {arguments}", crate::i18n::language_code());
     let file = wide(

@@ -70,6 +70,7 @@ pub fn handles(command: &str) -> bool {
             | "fan-service"
             | "fan-service-stop"
             | "mux-ui-apply"
+            | "hp-service-ui"
             | "fan-service-install"
             | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
@@ -163,6 +164,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
             Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
             Some("mux-ui-apply") if args.len() == 3 => Some(("mux", args[2].as_str())),
+            Some("hp-service-ui") if args.len() == 3 => Some(("hp_service", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -222,6 +224,19 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             );
             store.save_graphics_mode(&record)?;
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"mux","nonce":args[2],"result":{"Ok":report}}))?;
+            return print(&report);
+        }
+        Some("hp-service-ui") if args.len() == 3 => {
+            // Fixed target: only HPOmenCap, only its start type and run state.
+            validate_nonce(Some(&args[2]))?;
+            let disable = match args[1].as_str() {
+                "disable" => true,
+                "restore" => false,
+                _ => return Err("Unknown HP service action".into()),
+            };
+            let _lease = ControlLease::acquire()?;
+            let report = omen_platform::hp_control::set_oem_service_disabled(disable)?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"hp_service","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
         }
         Some("fan-service-stop") if args.len() == 1 => {

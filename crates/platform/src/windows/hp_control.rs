@@ -3,8 +3,10 @@
 mod cooling;
 mod guard;
 mod handoff;
+mod oem_service;
 pub use guard::Report as GuardianReport;
 pub use handoff::{ScopedSession, qualify, recover_controller};
+pub use oem_service::{OemService, oem_service, set_oem_service_disabled};
 use omen_core::{
     Inventory,
     ownership::{self, Identity, Owner, Snapshot, State, Subject},
@@ -686,16 +688,24 @@ pub(super) fn check_cpu_power_write(feature: omen_core::features::Feature) -> Re
     check_cpu_power_state(service_state(), true)
 }
 /// A briefly stopped auto-start OEM service is not a qualified logon handover.
-/// Independent startup remains possible after the original service is absent.
+/// Independent startup remains possible after the original service is absent,
+/// or stopped with start type Disabled (the "Disable HP OMEN Cap" setting).
 pub(super) fn cpu_power_startup_safe(feature: omen_core::features::Feature) -> bool {
     use omen_core::features::Feature;
     if !matches!(feature, Feature::CpuPptLimitMw | Feature::CpuSlowPptLimitMw) {
         return true;
     }
-    startup_safe_for_status(service_state())
+    startup_safe_for_status(oem_service())
 }
-fn startup_safe_for_status(status: Result<Option<State>, String>) -> bool {
-    matches!(status, Ok(None))
+fn startup_safe_for_status(status: Result<Option<OemService>, String>) -> bool {
+    matches!(
+        status,
+        Ok(None
+            | Some(OemService {
+                state: State::Stopped,
+                disabled: true
+            }))
+    )
 }
 fn check_cpu_power_state(
     current: Result<Option<State>, String>,
@@ -802,8 +812,25 @@ mod tests {
     fn a_temporarily_stopped_oem_is_not_a_qualified_startup_handover() {
         assert!(startup_safe_for_status(Ok(None)));
         for state in [State::Stopped, State::Running, State::Transitioning] {
-            assert!(!startup_safe_for_status(Ok(Some(state))));
+            assert!(!startup_safe_for_status(Ok(Some(OemService {
+                state,
+                disabled: false
+            }))));
         }
         assert!(!startup_safe_for_status(Err("unavailable".into())));
+    }
+    #[test]
+    fn a_stopped_and_disabled_oem_service_allows_independent_startup() {
+        assert!(startup_safe_for_status(Ok(Some(OemService {
+            state: State::Stopped,
+            disabled: true
+        }))));
+        // Disabled but still running until the stop completes.
+        for state in [State::Running, State::Transitioning] {
+            assert!(!startup_safe_for_status(Ok(Some(OemService {
+                state,
+                disabled: true
+            }))));
+        }
     }
 }

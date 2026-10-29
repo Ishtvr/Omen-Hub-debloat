@@ -2,6 +2,7 @@
 use crate::i18n::{t, tf};
 use omen_core::{
     APP_NAME, CpuHardwareStatus, Snapshot,
+    battery::{Selection, Switch},
     hp_mode::HpMode,
     power::Sampling,
     quick_switch::{FanMode, GraphicsMode},
@@ -24,6 +25,9 @@ use windows_sys::Win32::{
     },
 };
 
+/// Window class and single-instance kind of the dashboard.
+pub const CLASS: &str = "OmenHubPlusPlusWindow";
+pub const KIND: &str = "Dashboard";
 const UPDATE: u32 = WM_APP + 1;
 const TRAY: u32 = crate::tray::CALLBACK;
 const CPU_READER_PID: u32 = WM_APP + 61;
@@ -41,6 +45,10 @@ const MUX_NOTE: i32 = 153;
 const APPLY: usize = 108;
 const AUTOSTART: usize = 190;
 const CLOSE_TO_TRAY: usize = 191;
+/// Stops and disables the HP OMEN Cap service (HPOmenCap).
+const HP_SERVICE: usize = 192;
+/// Preset applied automatically without the charger.
+const BATTERY: usize = 194;
 /// Round "i" next to the performance-mode label.
 const MODE_INFO: usize = 182;
 const SHOW: u32 = 201;
@@ -62,6 +70,7 @@ enum Request {
     ApplyMode(HpMode),
     FanMode(FanMode),
     Graphics(GraphicsMode),
+    HpService(bool),
     Stop,
 }
 
@@ -82,6 +91,8 @@ struct State {
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
     close_to_tray: Cell<bool>,
+    /// Battery selector entries after "Off", in list order.
+    battery_entries: RefCell<Vec<Selection>>,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -136,6 +147,78 @@ fn cpu_failed(snapshot: &mut Snapshot, detail: String) {
     snapshot.cpu_hardware_status = CpuHardwareStatus::Error(detail);
 }
 
+/// Display name of a mode or preset for status lines.
+fn selection_name(selection: &Selection) -> String {
+    match selection {
+        Selection::Mode(mode) => DEFAULT_MODES
+            .iter()
+            .find(|(_, m)| m == mode)
+            .map_or_else(String::new, |(key, _)| t(key).to_owned()),
+        Selection::Preset(id) => omen_platform::profile_store::ProfileStore::user_data()
+            .and_then(|store| store.load(id))
+            .map_or_else(|_| id.clone(), |profile| profile.name),
+    }
+}
+/// Applies a mode or preset through the same elevated commands as Apply.
+fn apply_selection(selection: &Selection) -> Result<serde_json::Value, String> {
+    match selection {
+        Selection::Mode(mode) => {
+            crate::elevation::run(None, crate::elevation::Action::Mode(*mode), || false)
+        }
+        Selection::Preset(id) => {
+            crate::elevation::run(Some(id), crate::elevation::Action::Apply, || false)
+        }
+    }
+}
+/// Remembers a mode or preset applied by hand: on AC it is the one to return
+/// to after battery use; either way an automatic battery switch is over.
+fn record_manual(selection: &Selection) {
+    if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
+        if omen_platform::power_status().ac_connected != Some(false) {
+            let _ = store.save_ac_selection(selection);
+        }
+        let _ = store.save_battery_switched(false);
+    }
+}
+/// Reacts to a changed power source; returns the status line to show.
+fn battery_switch(previous: Option<bool>, current: Option<bool>) -> Option<String> {
+    let store = omen_platform::profile_store::ProfileStore::user_data().ok()?;
+    let switch = omen_core::battery::on_source_change(
+        previous,
+        current,
+        store.battery_selection().as_ref(),
+        store.ac_selection().as_ref(),
+        store.battery_switched(),
+    )?;
+    // A loose plug can flicker: act only on a source that stays changed.
+    thread::sleep(Duration::from_secs(2));
+    if omen_platform::power_status().ac_connected != current {
+        return None;
+    }
+    let (selection, to_battery) = match &switch {
+        Switch::ToBattery(selection) => (selection, true),
+        Switch::BackToAc(selection) => (selection, false),
+    };
+    let name = selection_name(selection);
+    Some(match apply_selection(selection) {
+        Ok(_) => {
+            let _ = store.save_battery_switched(to_battery);
+            tf(
+                if to_battery {
+                    "battery.applied"
+                } else {
+                    "battery.returned"
+                },
+                &[&name],
+            )
+        }
+        Err(error) => tf(
+            "battery.failed",
+            &[&name, &crate::i18n::error_message(&error)],
+        ),
+    })
+}
+
 fn worker(
     hwnd: usize,
     rx: mpsc::Receiver<Request>,
@@ -151,6 +234,7 @@ fn worker(
         ..Default::default()
     };
     let mut visible = initially_visible;
+    let mut ac = snapshot.power.ac_connected;
     let mut nvidia = None;
     let mut cpu = None;
     let mut hardware: Option<crate::cpu_sensor_bridge::CpuSensorBridge> = None;
@@ -237,6 +321,15 @@ fn worker(
         snapshot.power = omen_platform::power_status();
         snapshot.cpu_reader_pid = hardware.as_ref().map(|r| r.process_id());
         publish(&snapshot);
+        if snapshot.power.ac_connected != ac {
+            let previous = std::mem::replace(&mut ac, snapshot.power.ac_connected);
+            if let Some(message) = battery_switch(previous, ac) {
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
+        }
         // CPU values need no separate switch: the first visible dashboard
         // requests the session helper once. A cancelled or failed request is
         // retried only through Aktualisieren, never in a prompt loop.
@@ -272,8 +365,11 @@ fn worker(
         match request {
             Some(Request::Stop) => break,
             Some(Request::ApplyPreset(id)) => {
-                let result =
-                    crate::elevation::run(Some(&id), crate::elevation::Action::Apply, || false);
+                let selection = Selection::Preset(id);
+                let result = apply_selection(&selection);
+                if result.is_ok() {
+                    record_manual(&selection);
+                }
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(if result.is_ok() {
                     t("preset.applied").into()
                 } else {
@@ -330,9 +426,27 @@ fn worker(
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
                 }
             }
+            Some(Request::HpService(disable)) => {
+                let result = crate::elevation::run(
+                    None,
+                    crate::elevation::Action::HpService(disable),
+                    || false,
+                );
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                    Ok(_) if disable => t("hp_service.disabled").into(),
+                    Ok(_) => t("hp_service.restored").into(),
+                    Err(error) => tf("hp_service.failed", &[&crate::i18n::error_message(&error)]),
+                });
+                unsafe {
+                    PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
+                }
+            }
             Some(Request::ApplyMode(mode)) => {
-                let result =
-                    crate::elevation::run(None, crate::elevation::Action::Mode(mode), || false);
+                let selection = Selection::Mode(mode);
+                let result = apply_selection(&selection);
+                if result.is_ok() {
+                    record_manual(&selection);
+                }
                 let label = DEFAULT_MODES
                     .iter()
                     .find(|(_, m)| *m == mode)
@@ -408,6 +522,26 @@ unsafe fn sync_switches(hwnd: HWND) {
             graphics.map(|r| r.mode).unwrap_or_default().index(),
         );
         let pending = graphics.is_some_and(|r| r.restart_pending(omen_platform::boot_unix_s()));
+        // Ticked while HPOmenCap is disabled; unavailable when it is absent.
+        let hp_service = omen_platform::hp_control::oem_service();
+        let check = GetDlgItem(hwnd, HP_SERVICE as i32);
+        SendMessageW(
+            check,
+            BM_SETCHECK,
+            if hp_service
+                .as_ref()
+                .is_ok_and(|s| s.is_some_and(|s| s.disabled))
+            {
+                BST_CHECKED
+            } else {
+                BST_UNCHECKED
+            } as usize,
+            0,
+        );
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+            check,
+            hp_service.is_ok_and(|s| s.is_some()) as i32,
+        );
         for (id, checked) in [
             (AUTOSTART, crate::autostart::enabled()),
             (
@@ -463,6 +597,7 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
             if selected < DEFAULT_MODES.len() {
                 *state.selected_custom.borrow_mut() = None;
             }
+            fill_battery(hwnd, state, &entries);
             *state.custom_profiles.borrow_mut() = entries;
             SendMessageW(state.profile.get(), CB_SETCURSEL, selected, 0);
             SetWindowTextW(
@@ -481,6 +616,44 @@ unsafe fn reload_modes(hwnd: HWND, state: &State) {
                 wide(t("mode.presets_unreadable")).as_ptr(),
             );
         }
+    }
+}
+
+/// Battery selector: "Off", the built-in modes, then the saved presets.
+unsafe fn fill_battery(hwnd: HWND, state: &State, presets: &[(String, String)]) {
+    unsafe {
+        let combo = GetDlgItem(hwnd, BATTERY as i32);
+        if combo.is_null() {
+            return;
+        }
+        let saved = omen_platform::profile_store::ProfileStore::user_data()
+            .ok()
+            .and_then(|s| s.battery_selection());
+        let mut entries: Vec<(Selection, String)> = DEFAULT_MODES
+            .iter()
+            .map(|(key, mode)| (Selection::Mode(*mode), tf("mode.default_entry", &[&t(key)])))
+            .collect();
+        entries.extend(
+            presets
+                .iter()
+                .map(|(id, name)| (Selection::Preset(id.clone()), name.clone())),
+        );
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            0,
+            wide(t("battery.off")).as_ptr() as isize,
+        );
+        let mut selected = 0;
+        for (i, (selection, label)) in entries.iter().enumerate() {
+            SendMessageW(combo, CB_ADDSTRING, 0, wide(label).as_ptr() as isize);
+            if saved.as_ref() == Some(selection) {
+                selected = i + 1;
+            }
+        }
+        SendMessageW(combo, CB_SETCURSEL, selected, 0);
+        *state.battery_entries.borrow_mut() = entries.into_iter().map(|(s, _)| s).collect();
     }
 }
 
@@ -556,6 +729,12 @@ unsafe extern "system" fn window_proc(
         // Shared references plus Cell allow reentrant child-window notifications
         // without aliasing a Rust &mut State across a Windows call.
         let state = &*state_ptr;
+        let activate = crate::single_instance::activation_message();
+        if activate != 0 && message == activate {
+            // Another launch asked for the dashboard.
+            show_dashboard(hwnd, state);
+            return 0;
+        }
         if state.taskbar_message != 0 && message == state.taskbar_message {
             // MODIFY/ADD is idempotent even if Explorer broadcasts twice.
             if !state.tray.ensure(hwnd) && !state.tray.retrying() && IsWindowVisible(hwnd) == 0 {
@@ -595,6 +774,7 @@ unsafe extern "system" fn window_proc(
                         ptr::null_mut(),
                     );
                 }
+                crate::single_instance::accept_activation(hwnd);
                 state.tray.ensure(hwnd);
                 0
             }
@@ -622,7 +802,9 @@ unsafe extern "system" fn window_proc(
             }
             WM_DRAWITEM => {
                 let item = &*(lparam as *const windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT);
-                if item.CtlID == MODE_INFO as u32 {
+                if item.CtlID == MODE_INFO as u32
+                    || crate::dashboard::SETTING_INFO.contains(&(item.CtlID as i32))
+                {
                     state.theme.info(item);
                     1
                 } else if item.CtlType == windows_sys::Win32::UI::Controls::ODT_BUTTON {
@@ -638,15 +820,68 @@ unsafe extern "system" fn window_proc(
             }
             WM_GETMINMAXINFO => {
                 let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMinTrackSize = POINT { x: 960, y: 750 };
+                info.ptMinTrackSize = POINT { x: 960, y: 790 };
                 0
             }
             WM_COMMAND => {
                 let id = wparam & 0xffff;
                 // Owner-drawn buttons also send non-click notifications.
                 // Focus/paint/double-click notifications cannot trigger actions.
+                if id == BATTERY {
+                    if (wparam >> 16) as u32 == CBN_SELENDOK {
+                        let index = SendMessageW(lparam as HWND, CB_GETCURSEL, 0, 0);
+                        let selection = usize::try_from(index - 1)
+                            .ok()
+                            .and_then(|i| state.battery_entries.borrow().get(i).cloned());
+                        let message = match omen_platform::profile_store::ProfileStore::user_data()
+                            .and_then(|s| s.save_battery_selection(selection.as_ref()))
+                        {
+                            Ok(()) => match &selection {
+                                Some(selection) => {
+                                    tf("battery.chosen", &[&selection_name(selection)])
+                                }
+                                None => t("battery.none").into(),
+                            },
+                            Err(error) => tf("settings.failed", &[&error]),
+                        };
+                        SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
+                    }
+                    return 0;
+                }
                 if id != PROFILE && (wparam >> 16) as u32 != BN_CLICKED {
                     return 0;
+                }
+                if let Some(index) = crate::dashboard::SETTING_INFO
+                    .iter()
+                    .position(|info| *info as usize == id)
+                {
+                    let (body, title) = [
+                        ("info.autostart", "settings.autostart"),
+                        ("info.close_to_tray", "settings.close_to_tray"),
+                        ("info.hp_service", "settings.hp_service"),
+                        ("info.battery", "settings.battery"),
+                    ][index];
+                    MessageBoxW(
+                        hwnd,
+                        wide(t(body)).as_ptr(),
+                        wide(t(title)).as_ptr(),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                }
+                if id == HP_SERVICE {
+                    let check = GetDlgItem(hwnd, HP_SERVICE as i32);
+                    let disable = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(check, 0);
+                    SetWindowTextW(
+                        state.preview.get(),
+                        wide(t(if disable {
+                            "hp_service.disabling"
+                        } else {
+                            "hp_service.restoring"
+                        }))
+                        .as_ptr(),
+                    );
+                    let _ = state.tx.send(Request::HpService(disable));
                 }
                 if id == MODE_INFO {
                     MessageBoxW(
@@ -909,13 +1144,14 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    run_window(start_in_tray, None, [1140, 780])
+    crate::autostart::migrate();
+    run_window(start_in_tray, None, [1140, 820])
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
-    run_window(false, Some(path), [1140, 780])
+    run_window(false, Some(path), [1140, 820])
 }
 pub fn preview_sized(path: &std::path::Path, size: [i32; 2]) -> Result<(), String> {
-    if size[0] < 960 || size[1] < 750 || size[0] > 2000 || size[1] > 1400 {
+    if size[0] < 960 || size[1] < 790 || size[0] > 2000 || size[1] > 1400 {
         return Err(t("error.preview_size").into());
     }
     run_window(false, Some(path), size)
@@ -948,12 +1184,13 @@ fn run_window(
             omen_platform::profile_store::ProfileStore::user_data()
                 .map_or(true, |s| s.close_to_tray()),
         ),
+        battery_entries: RefCell::new(vec![]),
     });
     // SAFETY: All window/class strings are nul-terminated. Box owns the stable
     // state address; Windows objects and power registrations are cleaned up.
     unsafe {
         let instance = GetModuleHandleW(ptr::null());
-        let class_name = wide("OmenHubPlusPlusWindow");
+        let class_name = wide(CLASS);
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_proc),

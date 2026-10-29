@@ -43,7 +43,7 @@ The global own-process control lease serializes writing sessions. It does not ex
 
 ## Sign-in, cooling and ownership
 
-The ordinary Windows-start checkbox uses the user's Run entry to launch the unelevated tray. It does not apply settings.
+The ordinary Windows-start checkbox registers a per-user logon task with the highest run level that launches the elevated tray. It does not apply settings. The dashboard restarts itself elevated when started without administrator rights and holds a per-session single-instance mutex; a second launch posts a registered activation message to the running window.
 
 Profile sign-in uses a protected fixed binary/action, task/principal verification, binary digest and approval of an exact applied profile revision. It performs full preflight again. Binary replacement or profile edits invalidate approval. Lighting and Max-Fan are currently allowed by capability policy; their full physical lifecycle is not yet accepted. CPU PPT/Slow have an additional HP-controller gate.
 

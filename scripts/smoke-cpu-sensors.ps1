@@ -97,7 +97,7 @@ public static class OmenCpuCapture {
  public static void Save(IntPtr window,string path){Rect r;if(!GetClientRect(window,out r))throw new Exception("No owned client");using(var bitmap=new Bitmap(r.right,r.bottom)){using(var graphics=Graphics.FromImage(bitmap)){IntPtr dc=graphics.GetHdc();try{if(!PrintWindow(window,dc,1))throw new Exception("Owned client render failed");}finally{graphics.ReleaseHdc(dc);}}bitmap.Save(path,ImageFormat.Png);}}
 }
 '@}
-  foreach($taskSize in @(@(1140,780),@(960,750))){
+  foreach($taskSize in @(@(1140,820),@(960,790))){
    [void][OmenCpuSensorSmoke]::MoveWindow($taskWindow,80,80,$taskSize[0],$taskSize[1],$true)
    Start-Sleep -Milliseconds 150
    [OmenCpuCapture]::Save($taskWindow,(Join-Path $CaptureDirectory ('cpu-clocks-'+$taskSize[0]+'.png')))

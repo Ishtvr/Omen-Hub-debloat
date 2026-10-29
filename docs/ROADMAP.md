@@ -24,7 +24,9 @@ Acceptance: native controller/cooling recovery, helper loss and aborted ownershi
 
 ## 3. Complete the profile and power lifecycle
 
-- [ ] Connect authorized profile revalidation/reapplication to resume and AC/DC transitions. Existing dashboard notifications renew sensor baselines; they are not a full profile controller.
+- [ ] Connect authorized profile revalidation/reapplication to resume and AC/DC transitions. Existing dashboard notifications renew sensor baselines; they are not a full profile controller. The dashboard's **Preset on battery** applies a chosen mode/preset on unplug and returns on AC; validate it on the device.
+- [ ] Run **Disable HP OMEN Cap** and its restore on the device, then apply a CPU PPT/Slow preset and a sign-in approval without HPOmenCap.
+- [ ] Check the elevated self-restart, single instance and the tray logon task on the device, including migration of an old Run entry.
 - [ ] Test actual sign-in after reboot with an exact authorized profile revision.
 - [ ] Test actual standby/resume, display/power events, driver loss/restart and controller failure, then verify full originals/targets.
 - [ ] Prove keyboard behavior across hotkeys, lock/unlock, resume and reboot without HP controllers.
