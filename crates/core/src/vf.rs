@@ -50,7 +50,7 @@ impl VfState {
             || self.nodes.len() != usize::from(self.last_index - self.first_index) + 1
             || self.minimum_delta_khz > self.maximum_delta_khz
         {
-            return Err("Incomplete or inconsistent GPU V/F domain".into());
+            return Err(crate::message::msg("vf.err.domain", &[]));
         }
         for (position, node) in self.nodes.iter().enumerate() {
             if usize::from(node.index) != usize::from(self.first_index) + position
@@ -58,7 +58,7 @@ impl VfState {
                 || node.frequency_khz == 0
                 || !(self.minimum_delta_khz..=self.maximum_delta_khz).contains(&node.delta_khz)
             {
-                return Err("Invalid V/F node identity or original delta".into());
+                return Err(crate::message::msg("vf.err.node", &[]));
             }
         }
         if self
@@ -66,7 +66,7 @@ impl VfState {
             .windows(2)
             .any(|p| p[0].voltage_uv >= p[1].voltage_uv)
         {
-            return Err("GPU voltage grid is not strictly ordered".into());
+            return Err(crate::message::msg("vf.err.grid_order", &[]));
         }
         Ok(())
     }
@@ -77,9 +77,7 @@ impl VfState {
             .iter()
             .any(|p| p.voltage_uv % 1000 != 0 || p.frequency_khz % 1000 != 0)
         {
-            return Err(
-                "This V/F grid cannot be represented exactly in profile mV/MHz units".into(),
-            );
+            return Err(crate::message::msg("vf.err.units", &[]));
         }
         let value = Value::VfCurve(
             self.nodes
@@ -105,15 +103,26 @@ impl VfState {
         }
         .validate()?;
         if target.len() != self.nodes.len() {
-            return Err("V/F profile must include the complete GPU voltage grid".into());
+            return Err(crate::message::msg("vf.err.complete_grid", &[]));
         }
-        self.nodes.iter().zip(target).map(|(original,wanted)| {
-            if u64::from(wanted.voltage_mv)*1000 != u64::from(original.voltage_uv) { return Err("Voltage anchors differ from this VBIOS; no new voltage field may be written".into()); }
-            let delta = i64::from(wanted.frequency_mhz)*1000-i64::from(original.frequency_khz)+i64::from(original.delta_khz);
-            let delta = i32::try_from(delta).map_err(|_| "V/F delta exceeds signed driver ABI")?;
-            if !(self.minimum_delta_khz..=self.maximum_delta_khz).contains(&delta) { return Err("V/F delta exceeds the actual driver domain limits".into()); }
-            Ok((original.index,delta))
-        }).collect()
+        self.nodes
+            .iter()
+            .zip(target)
+            .map(|(original, wanted)| {
+                if u64::from(wanted.voltage_mv) * 1000 != u64::from(original.voltage_uv) {
+                    return Err(crate::message::msg("vf.err.anchors", &[]));
+                }
+                let delta = i64::from(wanted.frequency_mhz) * 1000
+                    - i64::from(original.frequency_khz)
+                    + i64::from(original.delta_khz);
+                let delta = i32::try_from(delta)
+                    .map_err(|_| crate::message::msg("vf.err.delta_representation", &[]))?;
+                if !(self.minimum_delta_khz..=self.maximum_delta_khz).contains(&delta) {
+                    return Err(crate::message::msg("vf.err.bounds", &[]));
+                }
+                Ok((original.index, delta))
+            })
+            .collect()
     }
     /// Derive once from the durable capture, so recovery can reconstruct the
     /// exact controls even if boost observations change before or after SET.
@@ -125,7 +134,7 @@ impl VfState {
             node.frequency_khz = point
                 .frequency_mhz
                 .checked_mul(1000)
-                .ok_or("V/F MHz exceeds the native field")?;
+                .ok_or(crate::message::msg("vf.err.frequency", &[]))?;
         }
         Ok(state)
     }
@@ -140,7 +149,7 @@ pub fn plateau(state: &VfState, voltage_mv: u32, frequency_mhz: u32) -> Result<V
     let first = points
         .iter()
         .position(|p| p.voltage_mv == voltage_mv)
-        .ok_or("Choose an existing driver voltage anchor")?;
+        .ok_or(crate::message::msg("vf.err.anchor_required", &[]))?;
     for point in &mut points[first..] {
         point.frequency_mhz = frequency_mhz;
     }

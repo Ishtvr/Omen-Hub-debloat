@@ -40,7 +40,7 @@ const HEARTBEAT: Duration = Duration::from_secs(20);
 const LEASE_RETRY: Duration = Duration::from_millis(50);
 const CYCLE_LEASE_ATTEMPTS: usize = 6;
 const RELEASE_LEASE_ATTEMPTS: usize = 41;
-const HARDWARE_BUSY: &str = "Another Omen Hub++ hardware transaction is running";
+const HARDWARE_BUSY: &str = super::control_lease::HARDWARE_BUSY;
 
 enum WriteAccess<T> {
     Acquired(T),

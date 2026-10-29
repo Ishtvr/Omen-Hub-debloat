@@ -30,12 +30,12 @@ pub(super) fn driver_evidence(
     identity: &NvidiaIdentity,
 ) -> Result<&'static DriverEvidence, String> {
     if identity.name != "NVIDIA GeForce RTX 5070 Laptop GPU" || identity.vbios != "98.06.2a.40.da" {
-        return Err("GPU/VBIOS differs from the validated NVIDIA control contract".into());
+        return Err(omen_core::message::msg("support.err.gpu_vbios", &[]));
     }
     DRIVERS
         .iter()
         .find(|entry| entry.driver == identity.driver)
-        .ok_or_else(|| "NVIDIA control evidence exists only for drivers 617.14 and 617.42".into())
+        .ok_or_else(|| omen_core::message::msg("support.err.driver", &[]))
 }
 
 pub(super) fn model_evidence(
@@ -43,7 +43,7 @@ pub(super) fn model_evidence(
     identity: &NvidiaIdentity,
 ) -> Result<&'static DriverEvidence, String> {
     if inventory.manufacturer != "HP" || inventory.board != "8E35" || inventory.bios != "F.13" {
-        return Err("GPU control evidence is limited to HP 8E35/F.13".into());
+        return Err(omen_core::message::msg("support.err.board", &[]));
     }
     driver_evidence(identity)
 }

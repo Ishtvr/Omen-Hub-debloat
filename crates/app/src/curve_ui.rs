@@ -129,7 +129,7 @@ fn load(id: Option<&str>) -> Result<View, String> {
             Err(error) => Row {
                 curve: None,
                 enabled: setting.is_some(),
-                source: error,
+                source: crate::i18n::error_message(&error),
             },
         }
     });
@@ -165,7 +165,7 @@ fn load_fans() -> Result<View, String> {
         Err(error) => Row {
             curve: None,
             enabled: false,
-            source: error,
+            source: crate::i18n::error_message(&error),
         },
     };
     Ok(View {
@@ -318,7 +318,7 @@ fn worker(hwnd: usize, rx: mpsc::Receiver<Request>, tx: mpsc::Sender<Update>) {
         })();
         let update = match result {
             Ok((view, status)) => Update::View(Box::new(view), status),
-            Err(e) => Update::Error(e),
+            Err(e) => Update::Error(crate::i18n::error_message(&e)),
         };
         if tx.send(update).is_err() {
             break;
@@ -1299,6 +1299,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         if let Some(id) = selected(s) {
                             if let Err(e) = std::env::current_exe().and_then(|exe| {
                                 std::process::Command::new(exe)
+                                    .args(["--lang", crate::i18n::language_code()])
                                     .args(["presets-ui", &id])
                                     .spawn()
                             }) {

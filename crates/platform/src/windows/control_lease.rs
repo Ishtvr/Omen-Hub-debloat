@@ -4,6 +4,10 @@ use windows_sys::Win32::{
     System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
 };
 
+/// Stable machine-readable contention signal. Control-flow consumers compare
+/// this code, never translated display prose.
+pub(super) const HARDWARE_BUSY: &str = "⟦control.err.busy⟧";
+
 pub struct ControlLease {
     handle: HANDLE,
 }
@@ -28,7 +32,7 @@ impl ControlLease {
             unsafe {
                 CloseHandle(handle);
             }
-            return Err("Another Omen Hub++ hardware transaction is running".into());
+            return Err(HARDWARE_BUSY.into());
         }
         // An abandoned mutex is owned now; the durable journal separately blocks retry.
         Ok(Self { handle })
@@ -41,5 +45,18 @@ impl Drop for ControlLease {
             ReleaseMutex(self.handle);
             CloseHandle(self.handle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contention_code_matches_the_language_neutral_message_contract() {
+        assert_eq!(
+            HARDWARE_BUSY,
+            omen_core::message::msg("control.err.busy", &[])
+        );
     }
 }

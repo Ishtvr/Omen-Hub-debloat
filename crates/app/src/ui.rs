@@ -88,6 +88,9 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
+    // Keep old saved diagnostics readable; new launches use a stable code.
+    let approval_failed = detail.starts_with(crate::cpu_sensor_bridge::APPROVAL_FAILED)
+        || detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:");
     if detail.starts_with("This build has no staged signed CPU module") {
         t("cpu_error.no_module")
     } else if detail.contains("qualified only")
@@ -104,11 +107,9 @@ pub(crate) fn cpu_error_message(detail: &str) -> &'static str {
         || detail.contains("driver path")
     {
         t("cpu_error.driver_version")
-    } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:") && detail.contains("1223") {
+    } else if approval_failed && detail.contains("1223") {
         t("cpu_error.cancelled")
-    } else if detail.starts_with("CPU-Sensorfreigabe nicht erfolgt:")
-        || detail.starts_with("CPU driver access requires")
-    {
+    } else if approval_failed || detail.starts_with("CPU driver access requires") {
         t("cpu_error.denied")
     } else if detail.contains("pipe peer")
         || detail.contains("server PID")
@@ -310,7 +311,7 @@ fn worker(
                     Ok(_) if mode == FanMode::Max => t("fan.quick.max_active").into(),
                     Ok(true) => t("fan.quick.curve_active").into(),
                     Ok(false) => t("fan.quick.curve_missing").into(),
-                    Err(error) => tf("fan.quick.failed", &[&error]),
+                    Err(error) => tf("fan.quick.failed", &[&crate::i18n::error_message(&error)]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -323,7 +324,7 @@ fn worker(
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
                     Ok(_) if restart_pending() => tf("mux.pending", &[&name]),
                     Ok(_) => tf("mux.active", &[&name]),
-                    Err(error) => tf("mux.failed", &[&error]),
+                    Err(error) => tf("mux.failed", &[&crate::i18n::error_message(&error)]),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -338,7 +339,10 @@ fn worker(
                     .map_or("", |(key, _)| t(key));
                 *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
                     Ok(_) => tf("mode.active", &[&label]),
-                    Err(error) => tf("mode.failed", &[&label, &error]),
+                    Err(error) => tf(
+                        "mode.failed",
+                        &[&label, &crate::i18n::error_message(&error)],
+                    ),
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -671,6 +675,7 @@ unsafe extern "system" fn window_proc(
                 if id == GPU_PROFILES || id == CURVES || id == KEYBOARD {
                     match std::env::current_exe().and_then(|path| {
                         std::process::Command::new(path)
+                            .args(["--lang", crate::i18n::language_code()])
                             .arg(match id {
                                 CURVES => "fan-ui",
                                 KEYBOARD => "keyboard-ui",
@@ -1141,9 +1146,9 @@ mod tests {
             ],
         });
         let line = crate::dashboard::cpu_load_line(&snapshot);
-        assert!(line.contains("3705") && line.contains("12.5"));
+        assert!(line.contains("3705") && line.contains(&crate::i18n::number("12.5")));
         assert!(!line.contains("2401"));
-        assert!(crate::dashboard::cpu_detail(&snapshot).contains("1.1"));
+        assert!(crate::dashboard::cpu_detail(&snapshot).contains(&crate::i18n::number("1.1")));
         snapshot.cpu_hardware_status = CpuHardwareStatus::Paused;
         assert!(!crate::dashboard::cpu_load_line(&snapshot).contains("3705"));
         assert!(crate::dashboard::cpu_detail(&snapshot).is_empty());

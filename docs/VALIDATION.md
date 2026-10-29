@@ -1,10 +1,22 @@
 # Validation
 
-Current summary reviewed **29 October 2026**. Source tested: **`251fff6987966ca0b04f9c92c8b1e1f068b53511`**, version **`0.9.0-dev.2`**, Windows x64 / Rust-Cargo 1.99.0. The documentation refresh introduces no new hardware qualification.
+Current summary reviewed **29 October 2026**, version **`0.9.0-dev.2`**, Windows x64 / Rust-Cargo 1.99.0. The localization follow-up below supersedes the earlier software-check count. No new hardware-control qualification is introduced.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
-## Latest software checks
+## German/English localization — 29 October 2026
+
+The localization candidate, based on `b58d62c` plus this follow-up, is **3,160,576 bytes**, SHA-256 **`DC54030F4089BECB48BDBFCC200D0CD3BE4D454E7910333196530C81B0A26B19`**. Formatting, **242 unit tests** (130 Core / 75 Platform / 37 App), **14 process/file scenarios**, Clippy with denied warnings and the release build passed. All 37 App tests also passed with English explicitly selected.
+
+Both catalogs have **543 matching keys**. New checks cover duplicate/empty entries, placeholder parity, literal placeholder-looking argument data, exact localized profile units, explicit language argument dispatch, structured preflight/rollback errors in both languages and direct native display literals. Hardware-busy handling uses a shared language-neutral code rather than display prose; all existing consumers were updated together.
+
+**14 own native client renders** covered dashboard, presets, GPU V/F draft and synthetic keyboard lighting in both languages, plus expanded GPU/CPU/Windows groups at the 920×720 minimum preset size. These showed readable translated labels/actions; scrollable sections remain scrollable. CLI help was checked in German and English. Protected profile/recovery/startup/fan/CCD/graphics preference files remained byte-identical; the temporary metadata-only fixture was removed. No Apply, hardware SET, UAC activation, service action or installation occurred. Local images/results stay ignored in `.local/review/localization-20261029/`.
+
+The app now propagates the selected language to separate control/UAC launches and localizes display decimals without changing stored driver/profile units. Expected profile/recovery/support failures use message keys; opaque native/provider details remain labeled original diagnostics. Windows-owned dialogs can retain the installed Windows resource language. [Localization policy](LOCALIZATION.md).
+
+No real sign-in/reboot/sleep, hardware tuning or new memory acceptance is claimed. The installed 0.1.0 copy remains separate from this candidate.
+
+## Previous software checks — source `251fff6`
 
 | Check | Result |
 | --- | --- |

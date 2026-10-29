@@ -522,7 +522,11 @@ pub fn run(selected: Option<String>) -> Result<(), String> {
                 ptr::null_mut(),
                 wide("runas").as_ptr(),
                 wide(&exe.to_string_lossy()).as_ptr(),
-                wide("keyboard-ui").as_ptr(),
+                wide(&format!(
+                    "--lang {} keyboard-ui",
+                    crate::i18n::language_code()
+                ))
+                .as_ptr(),
                 ptr::null(),
                 SW_SHOWNORMAL,
             )

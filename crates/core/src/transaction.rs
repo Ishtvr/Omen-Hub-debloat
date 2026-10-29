@@ -40,18 +40,19 @@ impl Capability {
             return Err(self.reason.clone());
         }
         if self.requires_ac && context.ac_connected != Some(true) {
-            return Err("This operation requires a confirmed AC connection".into());
+            return Err(crate::message::msg("transaction.err.ac_required", &[]));
         }
         if startup && !self.startup_safe {
-            return Err("Automatic application is not validated for this feature".into());
+            return Err(crate::message::msg("transaction.err.startup", &[]));
         }
         if let Value::Integer(value) = setting.value {
             let (minimum, maximum) = self
                 .integer_range
-                .ok_or("No hardware numeric limits were obtained")?;
+                .ok_or(crate::message::msg("transaction.err.bounds_missing", &[]))?;
             if minimum > maximum || !(minimum..=maximum).contains(&value) {
-                return Err(format!(
-                    "Requested value {value} is outside driver/model limits {minimum}..{maximum}"
+                return Err(crate::message::msg(
+                    "transaction.err.bounds",
+                    &[&value, &minimum, &maximum],
                 ));
             }
         }
@@ -101,9 +102,13 @@ pub trait Backend {
         if actual == setting.value {
             Ok(actual)
         } else {
-            Err(format!(
-                "Readback mismatch for {:?}: requested {:?}, obtained {:?}",
-                setting.feature, setting.value, actual
+            Err(crate::message::msg(
+                "transaction.err.readback",
+                &[
+                    &format!("{:?}", setting.feature),
+                    &format!("{:?}", setting.value),
+                    &format!("{actual:?}"),
+                ],
             ))
         }
     }
@@ -115,7 +120,7 @@ pub trait Backend {
         if self.read(saved.feature)? == saved.value {
             Ok(())
         } else {
-            Err("Control readback differs from the captured original".into())
+            Err(crate::message::msg("transaction.err.original_changed", &[]))
         }
     }
     /// Restore and verify the complete adapter-specific image.
@@ -126,7 +131,7 @@ pub trait Backend {
         &mut self,
         _transaction: &PendingTransaction<Self::RestoreState>,
     ) -> Result<(), String> {
-        Err("This adapter does not support recovery from a persisted image".into())
+        Err(crate::message::msg("transaction.err.adapter_recovery", &[]))
     }
     fn write(&mut self, setting: &Setting) -> Result<(), String>;
 }
@@ -193,13 +198,13 @@ pub fn plan(profile: &PerformanceProfile, backend: &mut impl Backend, startup: b
     {
         result.blockers.push(Blocker {
             feature: None,
-            reason: "Device/BIOS/driver binding differs; revalidation is required".into(),
+            reason: crate::message::msg("transaction.err.binding_changed", &[]),
         });
     }
     if profile.settings.is_empty() {
         result.blockers.push(Blocker {
             feature: None,
-            reason: "Profile contains no requested settings".into(),
+            reason: crate::message::msg("transaction.err.empty_profile", &[]),
         });
     }
     for setting in &profile.settings {
@@ -235,7 +240,7 @@ pub struct PendingTransaction<S> {
 impl<S> PendingTransaction<S> {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != 1 || self.profile_digest.is_empty() || self.profile_digest.len() > 256 {
-            return Err("Unknown or invalid transaction schema/digest".into());
+            return Err(crate::message::msg("transaction.err.schema", &[]));
         }
         PerformanceProfile {
             schema: crate::profiles::PROFILE_SCHEMA,
@@ -246,11 +251,14 @@ impl<S> PendingTransaction<S> {
         }
         .validate()?;
         if self.original.is_empty() || self.original.len() != self.requested.len() {
-            return Err("Transaction has no complete original image".into());
+            return Err(crate::message::msg(
+                "transaction.err.original_incomplete",
+                &[],
+            ));
         }
         for (saved, requested) in self.original.iter().zip(&self.requested) {
             if saved.feature != requested.feature {
-                return Err("Transaction original/target features differ".into());
+                return Err(crate::message::msg("transaction.err.feature_mismatch", &[]));
             }
             Setting {
                 feature: saved.feature,
@@ -276,7 +284,7 @@ pub trait Journal<S> {
     fn finish(&mut self, completion: Completion) -> Result<(), String>;
     /// Retain the same original image and durably mark recovery as pending.
     fn resume_restore(&mut self, _transaction: &PendingTransaction<S>) -> Result<(), String> {
-        Err("Journal does not support persisted recovery".into())
+        Err(crate::message::msg("transaction.err.journal_recovery", &[]))
     }
 }
 
@@ -286,7 +294,7 @@ fn checked_write_order(backend: &impl Backend, settings: &[Setting]) -> Result<V
     let mut checked = order.clone();
     checked.sort_unstable();
     if checked != (0..settings.len()).collect::<Vec<_>>() {
-        return Err("Adapter write order omits or duplicates a setting".into());
+        return Err(crate::message::msg("transaction.err.write_order", &[]));
     }
     Ok(order)
 }
@@ -306,9 +314,10 @@ pub fn recover<B: Backend>(
         .for_settings(&saved.requested)
         .matches(&backend.context().map_err(fail)?.binding)
     {
-        return Err(fail(
-            "Device/BIOS/driver changed; persisted recovery was blocked".into(),
-        ));
+        return Err(fail(crate::message::msg(
+            "transaction.err.recovery_binding",
+            &[],
+        )));
     }
     backend.prepare_recovery(saved).map_err(fail)?;
     let attempted = checked_write_order(backend, &saved.requested).map_err(fail)?;
@@ -318,7 +327,7 @@ pub fn recover<B: Backend>(
         journal,
         &saved.original,
         &attempted,
-        "Recovery incomplete".into(),
+        crate::message::msg("transaction.err.recovery_incomplete", &[]),
     );
     if result.rollback_errors.is_empty() {
         Ok(())
@@ -435,7 +444,10 @@ fn apply_inner<B: Backend>(
     for setting in &profile.settings {
         let saved = backend.capture(setting.feature).map_err(fail)?;
         if saved.feature != setting.feature {
-            return Err(fail("Adapter captured a different feature".into()));
+            return Err(fail(crate::message::msg(
+                "transaction.err.capture_mismatch",
+                &[],
+            )));
         }
         Setting {
             feature: saved.feature,
@@ -465,7 +477,7 @@ fn apply_inner<B: Backend>(
                 .for_settings(&profile.settings)
                 .matches(&context.binding)
             {
-                return Err("Device context changed during application".into());
+                return Err(crate::message::msg("transaction.err.context_changed", &[]));
             }
             backend
                 .capability(setting.feature)
@@ -501,7 +513,7 @@ fn apply_inner<B: Backend>(
             .for_settings(&profile.settings)
             .matches(&context.binding)
         {
-            return Err("Device context changed before final verification".into());
+            return Err(crate::message::msg("transaction.err.context_final", &[]));
         }
         for setting in &profile.settings {
             backend
@@ -527,7 +539,10 @@ fn apply_inner<B: Backend>(
                     journal,
                     &original,
                     &attempted,
-                    format!("Final profile: {error}"),
+                    format!(
+                        "{} {error}",
+                        crate::message::msg("transaction.err.final_profile", &[])
+                    ),
                 ));
             }
         }
@@ -538,7 +553,7 @@ fn apply_inner<B: Backend>(
             journal,
             &original,
             &attempted,
-            "Trial restore failed".into(),
+            crate::message::msg("transaction.err.trial_restore", &[]),
         );
         if !restore.rollback_errors.is_empty() {
             return Err(restore);
@@ -865,7 +880,7 @@ mod tests {
         let (profile, mut backend, mut journal) = fixture();
         backend.drift_after_capture = true;
         let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("differs from the captured original"));
+        assert!(error.error.contains("transaction.err.original_changed"));
         assert!(error.rollback_errors.is_empty());
         assert!(backend.writes.is_empty());
         assert!(!journal.pending);
@@ -897,7 +912,7 @@ mod tests {
         let (profile, mut backend, mut journal) = fixture();
         backend.quantize_memory = true;
         let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("Readback mismatch"));
+        assert!(error.error.contains("transaction.err.readback"));
         assert!(error.rollback_errors.is_empty());
         assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
     }
@@ -906,7 +921,7 @@ mod tests {
         let (profile, mut backend, mut journal) = fixture();
         backend.couple_last = true;
         let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("Final profile"));
+        assert!(error.error.contains("transaction.err.final_profile"));
         assert!(error.rollback_errors.is_empty());
         assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
     }
@@ -915,7 +930,7 @@ mod tests {
         let (profile, mut backend, mut journal) = fixture();
         backend.disconnect_after_two_writes = true;
         let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("AC connection"));
+        assert!(error.error.contains("transaction.err.ac_required"));
         assert!(error.rollback_errors.is_empty());
         assert_eq!(journal.completed, Some(Completion::Restored));
     }

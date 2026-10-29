@@ -27,6 +27,7 @@ use windows_sys::Win32::{
 // escaping). This remains a local, PID/nonce/sequence-bound measurement frame.
 const MAX_FRAME: usize = 32_768;
 const MAX_LAUNCH_FRAME: usize = 4096;
+pub(crate) const APPROVAL_FAILED: &str = "CPU_SENSOR_APPROVAL_FAILED";
 const SAMPLE: u8 = 1;
 const PAUSE: u8 = 2;
 const STOP: u8 = 3;
@@ -360,7 +361,7 @@ pub fn launch(nonce: &str, parent: u32) -> Result<(), String> {
         launch.nShow = SW_HIDE;
         if unsafe { ShellExecuteExW(&mut launch) } == 0 {
             return Err(format!(
-                "CPU-Sensorfreigabe nicht erfolgt: {}",
+                "{APPROVAL_FAILED}: {}",
                 std::io::Error::last_os_error()
             ));
         }
@@ -741,7 +742,7 @@ mod tests {
         assert!(approved_pid(&frame("old", Ok(42)), "session").is_err());
         assert!(approved_pid(&frame("session", Ok(0)), "session").is_err());
         assert!(approved_pid(&vec![b' '; MAX_LAUNCH_FRAME + 1], "session").is_err());
-        let cancelled = "CPU-Sensorfreigabe nicht erfolgt: OS error 1223".to_string();
+        let cancelled = format!("{APPROVAL_FAILED}: OS error 1223");
         assert_eq!(
             approved_pid(&frame("session", Err(cancelled.clone())), "session"),
             Err(cancelled)

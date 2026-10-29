@@ -8,7 +8,7 @@ Reviewed **29 October 2026**, source **251fff6987966ca0b04f9c92c8b1e1f068b53511*
 | --- | --- | --- |
 | High | HP-mode/MUX shortcuts do not use the preset-equivalent pending-journal/write-ahead path | Block new conflicting writes during unresolved recovery; persist MUX original/intent first; establish actual HP-mode restore contract |
 | High | CPU allowed ranges exceed the measured safe trial envelope | Separate protocol bounds, model evidence and tested operating settings; correct fuse/stability implications |
-| Medium, before everyday acceptance | Fan quick-switch success can describe saved selection before actual helper acknowledgement | Match fresh helper process/status/mode and show waiting/error/pending separately from confirmed regulation |
+| Medium, before everyday acceptance | Fan quick-switch confirms selection, without a fresh actual helper acknowledgement | Match fresh helper process/status/mode and show waiting/error/pending separately from confirmed regulation |
 
 ### Shortcut recovery
 
@@ -22,7 +22,7 @@ Reviewed **29 October 2026**, source **251fff6987966ca0b04f9c92c8b1e1f068b53511*
 
 ### Fan status
 
-The `Request::FanMode` branch in [ui.rs](../crates/app/src/ui.rs) can announce maximum/curve regulation after saving preferences and checking installation. It does not require fresh matching helper acknowledgement. The helper can still be waiting for the original Hub or report a fault. Existing process identity, timestamps, modes and `waiting_for_hub` / `waiting_for_control` / `handover_pending` should inform execution confirmation.
+The `Request::FanMode` branch in [ui.rs](../crates/app/src/ui.rs) saves preferences and checks installation. The localization follow-up corrected its wording to confirm selection only. It still does not require fresh matching helper acknowledgement: the helper can be waiting for the original Hub or report a fault. Existing process identity, timestamps, modes and `waiting_for_hub` / `waiting_for_control` / `handover_pending` should inform execution confirmation.
 
 ## Larger remaining work
 

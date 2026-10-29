@@ -269,7 +269,10 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                 Request::Stop => unreachable!(),
             }
         })();
-        if updates.send(result.unwrap_or_else(Update::Error)).is_err() {
+        if updates
+            .send(result.unwrap_or_else(|error| Update::Error(crate::i18n::error_message(&error))))
+            .is_err()
+        {
             break;
         }
         unsafe {
@@ -600,9 +603,10 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         let value = stored.unwrap_or_else(|| row.field.initial());
         unsafe {
             match (&row.editor, &value) {
-                (Editor::Text(h), Value::Integer(value)) => {
-                    text(*h, &preset::format_number(*value, row.field.scale()))
-                }
+                (Editor::Text(h), Value::Integer(value)) => text(
+                    *h,
+                    &crate::i18n::number(&preset::format_number(*value, row.field.scale())),
+                ),
                 (Editor::Text(h), Value::CoreRatios(values)) => text(
                     *h,
                     &values

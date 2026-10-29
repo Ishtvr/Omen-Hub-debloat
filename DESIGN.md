@@ -127,7 +127,7 @@ Use the established frontmatter tokens instead of introducing competing palettes
 | Lighting | Real read colors and On/Off, four clickable zones, native picker; confirmed color applies immediately |
 | Graphics | Requested BIOS preference versus active routing; show restart pending without claiming a physical switch was verified |
 
-The current fan quick-switch copy does not yet fully satisfy its confirmation requirement; this is tracked in [Project review](docs/PROJECT_REVIEW.md). Documenting the design does not claim that bug fixed.
+Fan quick-switch copy now describes the selected request rather than confirmed regulation. Fresh actual helper-status feedback remains tracked in [Project review](docs/PROJECT_REVIEW.md).
 
 ## Curves and keyboard
 

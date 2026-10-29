@@ -11,7 +11,7 @@ A lightweight, native Windows control tool for HP OMEN laptops, written in Rust.
 - CPU power limits, Curve Optimizer, PBO and Windows power settings.
 - Custom presets with optional application at Windows sign-in.
 - Fan curves, maximum cooling and four-zone keyboard lighting.
-- A native dark interface and system tray integration.
+- A native dark interface in German and English, with system tray integration.
 
 **Hardware support is currently limited to the tested HP OMEN 16-ap0xxx, board 8E35, BIOS F.13, Ryzen 9 8940HX and RTX 5070 Laptop configuration.** Private GPU controls require the qualified NVIDIA 617.14 or 617.42 implementation. CPU hardware features require the separately installed, verified PawnIO driver.
 

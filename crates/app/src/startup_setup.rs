@@ -44,7 +44,7 @@ fn run_installer(installer: &str) -> Result<(), String> {
     let source = std::env::current_exe().map_err(|e| e.to_string())?;
     let quoted = source
         .to_str()
-        .ok_or("Executable path is not Unicode")?
+        .ok_or(t("setup.path_encoding"))?
         // PowerShell also ends single-quoted strings at U+2018..U+201B.
         .chars()
         .flat_map(|c| {

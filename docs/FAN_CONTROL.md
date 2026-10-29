@@ -54,6 +54,6 @@ The same helper enforces saved foreground CCD preferences and releases original 
 
 15 October Max-Fan trials verified full flags, separate-process recovery and preserved other controls. A 22 October conservative helper trial reached **4800/4800 firmware RPM**. The 23 October watchdog/FAMC observations did not qualify a direct BIOS-Auto switch. HP services were still present in these trials.
 
-The dashboard currently can announce Curve/Max after saving a choice, without a fresh helper acknowledgement. Treat it as selection until the status-confirmation [review item](PROJECT_REVIEW.md) is implemented. Durable own cooling, safe BIOS return, actual power transitions, full profile integration and independent HP replacement remain open. [Validation](VALIDATION.md), [HP control](HP_CONTROL.md).
+The dashboard now describes Curve/Max as a selected request after saving the choice, without claiming measured fan operation. Fresh matching helper acknowledgement remains the status-confirmation [review item](PROJECT_REVIEW.md). Durable own cooling, safe BIOS return, actual power transitions, full profile integration and independent HP replacement remain open. [Validation](VALIDATION.md), [HP control](HP_CONTROL.md).
 
 `fan-read` and `cooling-read` are fixed diagnostics needing suitable permissions. `fan-validate-max`, `check-system-controls.ps1` and the opt-in migration trial perform changes; they are not ordinary status checks.

@@ -149,13 +149,19 @@ impl Setting {
     pub fn validate(&self) -> Result<(), String> {
         let descriptor = self.feature.descriptor();
         if self.value.kind() != descriptor.value_kind {
-            return Err(format!("{:?}: wrong value type", self.feature));
+            return Err(crate::message::msg(
+                "profile.err.value_type",
+                &[&format!("{:?}", self.feature)],
+            ));
         }
         match &self.value {
             Value::Integer(value) => {
                 // Serialization bounds only. Actual hardware limits come from the adapter.
                 if *value < i64::from(i32::MIN) || *value > i64::from(u32::MAX) {
-                    return Err("Numeric setting cannot be represented by an adapter".into());
+                    return Err(crate::message::msg(
+                        "profile.err.numeric_representation",
+                        &[],
+                    ));
                 }
                 let signed = matches!(
                     self.feature,
@@ -171,10 +177,10 @@ impl Setting {
                         | Feature::GfxCurveOptimizer
                 );
                 if (!signed && *value < 0) || (signed && *value > i64::from(i32::MAX)) {
-                    return Err("Numeric setting has an invalid sign or representation".into());
+                    return Err(crate::message::msg("profile.err.numeric_sign", &[]));
                 }
                 if descriptor.unit == Unit::Percent && !(0..=100).contains(value) {
-                    return Err("Percentage must be in 0..100".into());
+                    return Err(crate::message::msg("profile.err.percentage", &[]));
                 }
             }
             Value::Choice(value) => {
@@ -223,7 +229,7 @@ impl Setting {
                     _ => false,
                 };
                 if !valid {
-                    return Err("Choice does not belong to this feature".into());
+                    return Err(crate::message::msg("profile.err.choice", &[]));
                 }
             }
             Value::VfCurve(points) => {
@@ -237,21 +243,18 @@ impl Setting {
                             || p[0].frequency_mhz > p[1].frequency_mhz
                     })
                 {
-                    return Err(
-                        "V/F points must have increasing voltage and nondecreasing frequency"
-                            .into(),
-                    );
+                    return Err(crate::message::msg("profile.err.vf_order", &[]));
                 }
             }
             Value::PerCore(points) => {
                 let unique: BTreeSet<_> = points.iter().map(|p| (p.ccd, p.core)).collect();
                 if points.is_empty() || points.len() > 256 || unique.len() != points.len() {
-                    return Err("Per-core settings need unique core identities".into());
+                    return Err(crate::message::msg("profile.err.per_core_unique", &[]));
                 }
             }
             Value::CoreRatios(values) => {
                 if values.is_empty() || values.len() > 256 || values.contains(&0) {
-                    return Err("Core ratios must be nonzero and bounded in count".into());
+                    return Err(crate::message::msg("profile.err.ratios", &[]));
                 }
             }
             Value::FanCurve(points) => {
@@ -265,14 +268,12 @@ impl Setting {
                             || p[0].duty_percent > p[1].duty_percent
                     })
                 {
-                    return Err(
-                        "Fan curve needs ordered temperatures and nondecreasing duty".into(),
-                    );
+                    return Err(crate::message::msg("profile.err.fan_order", &[]));
                 }
             }
             Value::Colors(values) => {
                 if values.is_empty() || values.len() > 128 {
-                    return Err("Invalid color zone count".into());
+                    return Err(crate::message::msg("profile.err.color_count", &[]));
                 }
             }
             Value::Boolean(_) => {}
@@ -303,7 +304,7 @@ pub fn validate_id(id: &str) -> Result<(), String> {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_'))
     {
-        return Err("Profile ID must be 1..64 lowercase letters/digits/hyphens/underscores and cannot be a Windows device name".into());
+        return Err(crate::message::msg("profile.err.id", &[]));
     }
     Ok(())
 }
@@ -311,20 +312,20 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 impl PerformanceProfile {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != PROFILE_SCHEMA {
-            return Err("Unsupported profile schema; no settings applied".into());
+            return Err(crate::message::msg("profile.err.schema", &[]));
         }
         validate_id(&self.id)?;
         if self.name.trim().is_empty()
             || self.name.chars().count() > 96
             || self.name.chars().any(char::is_control)
         {
-            return Err("Profile needs a nonempty name without control characters".into());
+            return Err(crate::message::msg("profile.err.name", &[]));
         }
         if self.binding.manufacturer.is_empty()
             || self.binding.board.is_empty()
             || self.binding.bios.is_empty()
         {
-            return Err("Profile has no complete board/BIOS binding".into());
+            return Err(crate::message::msg("profile.err.binding", &[]));
         }
         if self.settings.iter().any(|s| {
             matches!(
@@ -339,11 +340,11 @@ impl PerformanceProfile {
         .iter()
         .any(|id| id.is_none_or(str::is_empty))
         {
-            return Err("NVIDIA settings require UUID, driver and VBIOS binding".into());
+            return Err(crate::message::msg("profile.err.gpu_binding", &[]));
         }
         let unique: BTreeSet<_> = self.settings.iter().map(|s| s.feature).collect();
         if self.settings.len() > Feature::all().len() || unique.len() != self.settings.len() {
-            return Err("Profile contains duplicate or excessive settings".into());
+            return Err(crate::message::msg("profile.err.duplicates", &[]));
         }
         for setting in &self.settings {
             setting.validate()?;

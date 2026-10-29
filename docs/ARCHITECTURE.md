@@ -39,6 +39,8 @@ The global own-process control lease serializes writing sessions. It does not ex
 - `keyboard_ui.rs` owns one elevated direct-lighting worker. `DirectLighting` uses a separate transaction store, full state checks and the shared lease. A confirmed color applies immediately; Cancel does not write.
 - `theme.rs` supplies the shared dark native appearance. `.impeccable/` is design documentation, not app-loaded HTML/CSS. See [Design](../DESIGN.md).
 
+`i18n.rs` owns the immutable per-process German/English choice, with explicit `--lang` propagation to separate UI/UAC processes, display-number formatting and language-neutral error rendering. Known JSON preflight/rollback messages are decoded before display; opaque provider details remain labeled diagnostics. Persistent values and fixed task/IPC identifiers are not translated. [Localization](LOCALIZATION.md).
+
 ## Sign-in, cooling and ownership
 
 The ordinary Windows-start checkbox uses the user's Run entry to launch the unelevated tray. It does not apply settings.

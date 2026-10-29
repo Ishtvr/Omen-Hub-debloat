@@ -56,5 +56,6 @@ Current scope is investigation/planning. TPM and Secure Boot remain enabled; no 
 - [x] Replace the long GitHub README with a concise English entry point.
 - [x] Centralize current support, validation and pending work; move dated logs to history.
 - [x] Correct obsolete startup, driver, fan-curve and sensor descriptions without changing runtime permissions.
+- [x] Audit German/English UI, help and common errors; keep professional tuning terminology, exact localized display units and explicit selection-versus-confirmation wording.
 
 Direct GPU/VRAM voltage, FPS limiting, fixed CPU clocks/voltages and removed APU menus stay outside the current requested UI. Additional lighting effects require actual device capability and a separate restore contract; they are not required for the simple four-zone interface.

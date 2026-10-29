@@ -536,7 +536,7 @@ pub fn apply_hp_mode(
     use omen_core::hp_mode::{self, GPU_POWER_TYPE, HpMode, POWER_LIMITS_TYPE, THERMAL_MODE_TYPE};
     let ac = super::power_status().ac_connected == Some(true);
     if mode == HpMode::Unleashed && !ac {
-        return Err("Unleashed braucht Netzbetrieb.".into());
+        return Err(omen_core::message::msg("mode.err.ac_required", &[]));
     }
     let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
     let read_gpu = |bios: &HpBios| -> Result<GpuPowerStatus, String> {
@@ -550,7 +550,7 @@ pub fn apply_hp_mode(
         .map_err(|e| query_error("system-design", e))?;
     let design = decode_system_design(code, &design)?;
     if mode == HpMode::Unleashed && !design.extreme_supported {
-        return Err("Die Firmware meldet keinen Unleashed-/Extreme-Modus.".into());
+        return Err(omen_core::message::msg("mode.err.unsupported", &[]));
     }
     let gpu_before = read_gpu(&bios)?;
     type ModeReadback = (GpuPowerStatus, Option<(i64, i64)>, Option<String>);

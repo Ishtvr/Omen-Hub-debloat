@@ -55,13 +55,13 @@ impl ProfileStore {
         #[cfg(not(windows))]
         {
             let local = std::env::var_os("LOCALAPPDATA")
-                .ok_or("Windows user data directory is unavailable")?;
+                .ok_or(omen_core::message::msg("store.err.user_directory", &[]))?;
             Self::at(PathBuf::from(local).join("OmenHubPlusPlus"))
         }
     }
     pub fn at(root: PathBuf) -> Result<Self, String> {
         if !root.is_absolute() {
-            return Err("Profile storage requires an absolute directory".into());
+            return Err(omen_core::message::msg("store.err.absolute_directory", &[]));
         }
         fs::create_dir_all(root.join("profiles")).map_err(|e| e.to_string())?;
         Ok(Self { root })
@@ -71,7 +71,7 @@ impl ProfileStore {
     }
     pub fn checkpoint_completed_journal(&self) -> Result<JournalCheckpoint, String> {
         if self.pending()? {
-            return Err("Pending recovery blocks a qualification checkpoint".into());
+            return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
         }
         let previous = if self
             .journal_path()
@@ -82,7 +82,7 @@ impl ProfileStore {
             let file: JournalFile<serde_json::Value> =
                 serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             if file.pending || file.schema != 1 {
-                return Err("Changed/pending checkpoint journal".into());
+                return Err(omen_core::message::msg("store.err.checkpoint_changed", &[]));
             }
             file.transaction.validate()?;
             let path = self
@@ -107,7 +107,7 @@ impl ProfileStore {
         digest: &str,
     ) -> Result<(), String> {
         if checkpoint.root != self.root {
-            return Err("Qualification checkpoint belongs to another store".into());
+            return Err(omen_core::message::msg("store.err.checkpoint_store", &[]));
         }
         let current: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
         current.transaction.validate()?;
@@ -117,10 +117,7 @@ impl ProfileStore {
             || current.transaction.profile_id != id
             || current.transaction.profile_digest != digest
         {
-            return Err(
-                "Only the exact completely restored qualification can return to its checkpoint"
-                    .into(),
-            );
+            return Err(omen_core::message::msg("store.err.checkpoint_restore", &[]));
         }
         if let Some(previous) = checkpoint.previous {
             atomic_bytes(&self.journal_path(), &previous)?;
@@ -130,12 +127,13 @@ impl ProfileStore {
     /// Explicit migration: never overwrite an existing store or enable startup.
     /// Keep the old files; a pending original journal is copied before profiles.
     pub fn migrate_legacy(&self) -> Result<usize, String> {
-        let source = std::env::var_os("LOCALAPPDATA").ok_or("Legacy AppData unavailable")?;
+        let source = std::env::var_os("LOCALAPPDATA")
+            .ok_or(omen_core::message::msg("store.err.legacy_directory", &[]))?;
         self.migrate_from(&PathBuf::from(source).join("OmenHubPlusPlus"))
     }
     fn migrate_from(&self, source: &Path) -> Result<usize, String> {
         if !source.is_absolute() || !source.join("profiles").is_dir() {
-            return Err("Legacy profile store does not exist".into());
+            return Err(omen_core::message::msg("store.err.legacy_missing", &[]));
         }
         if !self.list()?.is_empty()
             || self
@@ -143,10 +141,7 @@ impl ProfileStore {
                 .try_exists()
                 .map_err(|e| e.to_string())?
         {
-            return Err(
-                "Current store already has profiles or a journal; migration did not overwrite it"
-                    .into(),
-            );
+            return Err(omen_core::message::msg("store.err.migration_existing", &[]));
         }
         let old = Self {
             root: source.to_owned(),
@@ -187,7 +182,7 @@ impl ProfileStore {
         let profile: PerformanceProfile = read_json(&self.path(id)?)?;
         profile.validate()?;
         if profile.id != id {
-            return Err("Stored profile ID does not match its filename".into());
+            return Err(omen_core::message::msg("store.err.filename_id", &[]));
         }
         Ok(profile)
     }
@@ -199,7 +194,7 @@ impl ProfileStore {
     pub fn delete(&self, id: &str) -> Result<(), String> {
         let profile = self.load(id)?;
         if self.pending()? {
-            return Err("Complete hardware recovery before deleting a preset".into());
+            return Err(omen_core::message::msg("store.err.delete_recovery", &[]));
         }
         let selection = self.startup()?;
         if selection.profile_id.as_deref() == Some(id) {
@@ -222,12 +217,12 @@ impl ProfileStore {
                     .path()
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    .ok_or("Profile filename is not Unicode")?
+                    .ok_or(omen_core::message::msg("store.err.filename_encoding", &[]))?
                     .to_owned();
                 result.push(self.load(&id)?);
             }
             if result.len() > 256 {
-                return Err("Profile count exceeds the bounded store size".into());
+                return Err(omen_core::message::msg("store.err.count", &[]));
             }
         }
         result.sort_by(|a, b| a.id.cmp(&b.id));
@@ -243,18 +238,18 @@ impl ProfileStore {
         }
         let file: JournalFile<serde_json::Value> = read_json(&path)?;
         if file.schema != 1 || file.transaction.schema != 1 {
-            return Err("Unknown control-journal version; automatic application is blocked".into());
+            return Err(omen_core::message::msg("store.err.journal_version", &[]));
         }
         file.transaction.validate()?;
         if file.pending == file.completion.is_some() {
-            return Err("Inconsistent control journal completion state".into());
+            return Err(omen_core::message::msg("store.err.journal_state", &[]));
         }
         Ok(file.pending)
     }
     pub fn last_transaction<S: DeserializeOwned>(&self) -> Result<PendingTransaction<S>, String> {
         let file: JournalFile<S> = read_json(&self.journal_path())?;
         if file.schema != 1 || file.transaction.schema != 1 {
-            return Err("Unknown control journal schema".into());
+            return Err(omen_core::message::msg("store.err.journal_schema", &[]));
         }
         file.transaction.validate()?;
         Ok(file.transaction)
@@ -269,7 +264,7 @@ impl ProfileStore {
         }
         let selection: StartupSelection = read_json(&path)?;
         if selection.schema != 1 {
-            return Err("Unknown startup selection schema".into());
+            return Err(omen_core::message::msg("store.err.startup_schema", &[]));
         }
         Ok(selection)
     }
@@ -297,10 +292,7 @@ impl ProfileStore {
             || journal.transaction.binding != profile.binding
             || journal.transaction.requested != profile.settings
         {
-            return Err(
-                "Startup requires a completed application of this exact profile/device revision"
-                    .into(),
-            );
+            return Err(omen_core::message::msg("store.err.startup_revision", &[]));
         }
         Ok(StartupSelection {
             schema: 1,
@@ -321,16 +313,14 @@ impl ProfileStore {
             return Ok(None);
         }
         if self.pending()? {
-            return Err(
-                "Previous transaction is incomplete; automatic retries are disabled".into(),
-            );
+            return Err(omen_core::message::msg("store.err.pending_retry", &[]));
         }
         let id = selection
             .profile_id
-            .ok_or("Startup profile ID is missing")?;
+            .ok_or(omen_core::message::msg("store.err.startup_id", &[]))?;
         let profile = self.load(&id)?;
         if Some(profile_digest(&profile)?) != selection.profile_digest {
-            return Err("Startup profile changed after verification; no settings applied".into());
+            return Err(omen_core::message::msg("store.err.startup_changed", &[]));
         }
         Ok(Some(profile))
     }
@@ -377,7 +367,7 @@ impl ProfileStore {
         }
         let value: serde_json::Value = read_json(&path)?;
         if value["schema"] != 1 {
-            return Err("Unknown fan curve schema".into());
+            return Err(omen_core::message::msg("store.err.fan_schema", &[]));
         }
         serde_json::from_value(value["points"].clone())
             .map(Some)
@@ -455,14 +445,14 @@ impl ProfileStore {
         }
         let value: serde_json::Value = read_json(&path)?;
         if value["schema"] != 1 {
-            return Err("Unknown CCD affinity schema".into());
+            return Err(omen_core::message::msg("store.err.ccd_schema", &[]));
         }
         value["selection"]
             .as_u64()
             .and_then(|s| u8::try_from(s).ok())
             .filter(|s| *s > 0)
             .map(Some)
-            .ok_or_else(|| "CCD affinity selection is invalid".into())
+            .ok_or_else(|| omen_core::message::msg("store.err.ccd_selection", &[]))
     }
     pub fn save_ccd_selection(&self, selection: Option<u8>) -> Result<(), String> {
         let path = self.root.join("ccd-affinity.json");
@@ -509,9 +499,7 @@ impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
     fn begin(&mut self, transaction: &PendingTransaction<S>) -> Result<(), String> {
         transaction.validate()?;
         if self.pending()? {
-            return Err(
-                "A previous control transaction needs recovery; no new writes were sent".into(),
-            );
+            return Err(omen_core::message::msg("store.err.pending_writes", &[]));
         }
         #[derive(Serialize)]
         struct NewJournal<'a, S> {
@@ -533,7 +521,7 @@ impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
     fn finish(&mut self, completion: Completion) -> Result<(), String> {
         let mut file: JournalFile<S> = read_json(&self.journal_path())?;
         if file.schema != 1 || !file.pending {
-            return Err("Control journal is not an active transaction".into());
+            return Err(omen_core::message::msg("store.err.journal_inactive", &[]));
         }
         file.pending = false;
         file.completion = Some(completion);
@@ -548,7 +536,7 @@ impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
             || serde_json::to_value(&file.transaction).map_err(|e| e.to_string())?
                 != serde_json::to_value(transaction).map_err(|e| e.to_string())?
         {
-            return Err("Stored recovery image changed; no restore writes were sent".into());
+            return Err(omen_core::message::msg("store.err.recovery_changed", &[]));
         }
         file.pending = true;
         file.completion = None;
@@ -563,7 +551,7 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
         .read_to_end(&mut data)
         .map_err(|e| e.to_string())?;
     if data.len() as u64 > MAX_FILE_BYTES {
-        return Err("Profile/control file exceeds 1 MiB".into());
+        return Err(omen_core::message::msg("store.err.size", &[]));
     }
     Ok(data)
 }
@@ -578,9 +566,11 @@ pub(crate) fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), St
 }
 pub(crate) fn atomic_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
     if data.len() as u64 > MAX_FILE_BYTES {
-        return Err("Profile/control file exceeds 1 MiB".into());
+        return Err(omen_core::message::msg("store.err.size", &[]));
     }
-    let parent = path.parent().ok_or("No parent directory")?;
+    let parent = path
+        .parent()
+        .ok_or(omen_core::message::msg("store.err.parent_directory", &[]))?;
     let temp = parent.join(format!(
         ".omen-{}-{}.tmp",
         std::process::id(),

@@ -42,7 +42,9 @@ pub fn parse_number(input: &str, scale: i64) -> Result<i64, String> {
         .and_then(|n| n.checked_add(fraction))
         .ok_or_else(|| msg("preset.err.too_large", &[]))?;
     if negative {
-        number.checked_neg().ok_or("Zahl zu klein".into())
+        number
+            .checked_neg()
+            .ok_or_else(|| msg("preset.err.too_small", &[]))
     } else {
         Ok(number)
     }

@@ -122,7 +122,7 @@ fn mux_mode(choice: Choice) -> Result<u8, String> {
         Choice::Hybrid => Ok(0),
         Choice::DiscreteOnly => Ok(1),
         Choice::IntegratedOnly => Ok(3),
-        _ => Err("Unbekannter Grafikmodus".into()),
+        _ => Err(omen_core::message::msg("support.err.graphics_mode", &[])),
     }
 }
 fn uses_hp_gpu_power(feature: Feature) -> bool {
@@ -692,7 +692,10 @@ impl Backend for Controller {
                     startup_safe: true,
                 }
             } else {
-                Capability::unsupported(feature, "Graphics mode is qualified only on HP8E35/F.13")
+                Capability::unsupported(
+                    feature,
+                    omen_core::message::msg("support.err.graphics_board", &[]),
+                )
             };
         }
         if super::cpu_tuning::handles(feature) {
@@ -731,7 +734,10 @@ impl Backend for Controller {
                     startup_safe: true,
                 }
             } else {
-                Capability::unsupported(feature, "Dynamic Boost is qualified only on HP8E35/F.13")
+                Capability::unsupported(
+                    feature,
+                    omen_core::message::msg("support.err.boost_board", &[]),
+                )
             };
         }
         if super::windows_settings::handles(feature) {
@@ -766,7 +772,7 @@ impl Backend for Controller {
             {
                 return Capability::unsupported(
                     feature,
-                    "Max-Fan is qualified only on HP8E35/F.13",
+                    omen_core::message::msg("support.err.fan_board", &[]),
                 );
             }
             return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
@@ -781,7 +787,7 @@ impl Backend for Controller {
             {
                 return Capability::unsupported(
                     feature,
-                    "Classic RGB is qualified only on HP8E35/F.13",
+                    omen_core::message::msg("support.err.keyboard_board", &[]),
                 );
             }
             let verified = if feature == Feature::KeyboardEffect {
@@ -819,7 +825,7 @@ impl Backend for Controller {
                         {
                             return Capability::unsupported(
                                 feature,
-                                "A nonuniform V/F curve is active; use its full curve profile instead of a global core offset",
+                                omen_core::message::msg("support.err.individual_curve", &[]),
                             );
                         }
                         let delta = state.nodes[0].delta_khz;
@@ -830,7 +836,7 @@ impl Backend for Controller {
                         if delta != 0 && i64::from(delta) != i64::from(core.current_mhz) * 1000 {
                             return Capability::unsupported(
                                 feature,
-                                "An independent uniform V/F curve is active; restore it before choosing a global core offset",
+                                omen_core::message::msg("support.err.uniform_curve", &[]),
                             );
                         }
                     }
@@ -886,35 +892,33 @@ impl Backend for Controller {
         }
         let reason = match feature {
             Feature::CpuFanCurve | Feature::GpuFanCurve => {
-                "Fan curves require verified performance-mode/fan-ownership readback and restore, coupled CPU/GPU/IR safety and lifecycle validation; saved Auto and Max-Fan OFF are not proof of BIOS ownership"
+                omen_core::message::msg("support.err.fan_profile", &[])
             }
             Feature::GpuUnleashed
             | Feature::GpuCustomTgp
             | Feature::GpuDynamicBoost
             | Feature::OmenPerformanceMode => {
-                "HP model configuration is identified; coupled power, thermal, heartbeat and full restore behavior are not validated. D-state 0 remains unknown"
+                omen_core::message::msg("support.err.coupled_hp", &[])
             }
             Feature::GpuVoltageOffsetMv | Feature::GpuVoltageLimitMv => {
-                "Frequency-at-voltage curves are supported; no verified direct millivolt setter or physical voltage-ceiling contract"
+                omen_core::message::msg("support.err.gpu_voltage", &[])
             }
             Feature::GpuMemoryVoltageOffsetMv => {
-                "No verified VRAM-voltage control contract on this hardware; VRAM clock is a separate setting"
+                omen_core::message::msg("support.err.vram_voltage", &[])
             }
             Feature::GpuCoreClockLimitMhz | Feature::GpuMemoryClockLimitMhz => {
-                "A full current locked-clock state and restore contract are required before exposing the public clock-lock setter"
+                omen_core::message::msg("support.err.locked_clocks", &[])
             }
             Feature::GpuPowerLimitMw => {
-                "Current power-limit readback/restore and model write validation are missing; a maximum constraint is not the current limit"
+                omen_core::message::msg("support.err.gpu_power_original", &[])
             }
             Feature::AmdCpuClockMhz | Feature::AmdCpuVoltageMv => {
-                "A fixed CPU clock or voltage needs the SMU OC mode. Firmware permission (cpu-smu-probe: oc_allowed) and a measured enable/restore on 8E35/F.13 are pending; the original Hub reaches it only through an HP service"
+                omen_core::message::msg("support.err.cpu_fixed", &[])
             }
             Feature::CpuBoostProfile | Feature::CpuAllCoreVoltageOffsetMv => {
-                "No such control exists for Dragon Range: neither the SMU nor the original Hub offers a boost profile or an all-core millivolt offset. Use EPP/processor boost and Curve Optimizer"
+                omen_core::message::msg("support.err.cpu_offset", &[])
             }
-            _ => {
-                "Profile data is supported; no validated hardware/Windows adapter for this feature yet"
-            }
+            _ => omen_core::message::msg("support.err.adapter_missing", &[]),
         };
         Capability::unsupported(feature, reason)
     }

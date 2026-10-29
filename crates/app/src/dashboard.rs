@@ -55,7 +55,7 @@ pub fn cpu_detail(s: &Snapshot) -> String {
                     "dash.effective_clock_interval",
                     &[
                         &clocks.logical_processor_count.to_string(),
-                        &format!("{:.1}", interval as f64 / 1000.0),
+                        &crate::i18n::number(&format!("{:.1}", interval as f64 / 1000.0)),
                     ],
                 )
             } else if hardware
@@ -75,7 +75,9 @@ pub fn cpu_load_line(s: &Snapshot) -> String {
     let cpu = s.cpu.as_ref();
     let load = cpu
         .and_then(|c| c.busy_percent)
-        .map_or(t("dash.load_unavailable").into(), |v| format!("{v:.1} %"));
+        .map_or(t("dash.load_unavailable").into(), |v| {
+            format!("{} %", crate::i18n::number(&format!("{v:.1}")))
+        });
     let clocks = matches!(s.cpu_hardware_status, CpuHardwareStatus::Active)
         .then(|| {
             cpu.and_then(|c| c.hardware.as_ref())
@@ -452,7 +454,8 @@ pub unsafe fn update(hwnd: HWND, th: &Theme, s: &Snapshot) {
             hwnd,
             133,
             th,
-            gpu.and_then(|g| g.power_w).map(|v| format!("{v:.1} W")),
+            gpu.and_then(|g| g.power_w)
+                .map(|v| format!("{} W", crate::i18n::number(&format!("{v:.1}")))),
         );
         metric(
             hwnd,
@@ -484,14 +487,14 @@ pub unsafe fn update(hwnd: HWND, th: &Theme, s: &Snapshot) {
             141,
             th,
             cpu.and_then(|c| c.package_power_w)
-                .map(|v| format!("{v:.1} W")),
+                .map(|v| format!("{} W", crate::i18n::number(&format!("{v:.1}")))),
         );
         metric(
             hwnd,
             142,
             th,
             cpu.and_then(|c| c.temperature_c)
-                .map(|v| format!("{v:.1} °C")),
+                .map(|v| format!("{} °C", crate::i18n::number(&format!("{v:.1}")))),
         );
         if matches!(s.cpu_hardware_status, CpuHardwareStatus::Active)
             && cpu.is_some_and(|c| c.hardware.is_some() && c.package_power_w.is_none())

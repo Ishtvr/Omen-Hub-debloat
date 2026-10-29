@@ -58,7 +58,7 @@ impl Target for ReturnTarget {
         // worker reports that wait explicitly and renews maximum afterwards.
         let _hardware = match super::super::ControlLease::acquire() {
             Ok(lease) => lease,
-            Err(error) if error == "Another Omen Hub++ hardware transaction is running" => {
+            Err(error) if error == super::super::control_lease::HARDWARE_BUSY => {
                 self.awaiting_cooling_after_lock = true;
                 return Ok(());
             }

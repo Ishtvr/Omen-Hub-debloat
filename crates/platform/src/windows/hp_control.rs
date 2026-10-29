@@ -641,8 +641,7 @@ fn hardware_lease(budget: Duration) -> Result<super::ControlLease, String> {
         match super::ControlLease::acquire() {
             Ok(lease) => return Ok(lease),
             Err(error)
-                if error == "Another Omen Hub++ hardware transaction is running"
-                    && Instant::now() < deadline =>
+                if error == super::control_lease::HARDWARE_BUSY && Instant::now() < deadline =>
             {
                 std::thread::sleep(Duration::from_millis(50));
             }

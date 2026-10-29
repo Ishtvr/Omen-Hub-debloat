@@ -53,8 +53,20 @@ mod win_resource;
 fn main() {
     if let Err(error) = run() {
         #[cfg(windows)]
-        if std::env::args().count() == 1 || std::env::args().skip(1).eq(["--tray"]) {
-            let body: Vec<u16> = i18n::message(&error)
+        let show_error_dialog = {
+            let args: Vec<_> = std::env::args().skip(1).collect();
+            let args = if args.first().is_some_and(|arg| arg == "--lang")
+                && args.get(1).is_some_and(|code| code == "de" || code == "en")
+            {
+                &args[2..]
+            } else {
+                &args[..]
+            };
+            args.is_empty() || args == ["--tray"]
+        };
+        #[cfg(windows)]
+        if show_error_dialog {
+            let body: Vec<u16> = i18n::error_message(&error)
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -70,6 +82,9 @@ fn main() {
                 );
             }
         }
+        #[cfg(windows)]
+        eprintln!("{}", i18n::message(&error));
+        #[cfg(not(windows))]
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -87,6 +102,12 @@ fn preview_size(args: &[String], offset: usize) -> Result<Option<[i32; 2]>, Stri
 }
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    let args = {
+        let mut args = args;
+        i18n::configure(&mut args)?;
+        args
+    };
     // GDI scaling renders text and shapes at the monitor resolution while the
     // fixed-pixel layouts stay in 96-DPI units. Without it, Windows stretches
     // the bitmap and text looks blurred at 125 % and above. Windowless control
@@ -369,11 +390,21 @@ fn run() -> Result<(), String> {
                 serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?
             );
         }
-        Some("--help" | "-h") => println!(
-            "Omen Hub++ {}\n\n  omen-hub-pp.exe           Native dashboard\n  omen-hub-pp.exe --tray    Start hidden in tray\n  omen-hub-pp.exe presets-ui [id] Native custom preset editor (gpu-ui alias)\n  omen-hub-pp.exe fan-ui [id] Native CPU/GPU fan curve editor\n  omen-hub-pp.exe gpu-curve-ui [id] Native GPU V/F curve editor\n  omen-hub-pp.exe curve-ui [id] Combined curve workbench (legacy entry)\n  omen-hub-pp.exe keyboard-ui Native direct four-zone lighting and on/off (UAC)\n  omen-hub-pp.exe keyboard-preview <id> <bmp-path> Render our native lighting controls\n  omen-hub-pp.exe curve-preview gpu|cpu-fan|gpu-fan <bmp-path> Render only our widget\n  omen-hub-pp.exe diagnose  Read-only JSON diagnostics\n  omen-hub-pp.exe inventory Read-only system inventory\n  omen-hub-pp.exe cpu-hardware-read  Fixed measured CPU energy/Tctl GETs; administrator required\n  omen-hub-pp.exe cpu-sensor-status  Last CPU error with technical detail\n  omen-hub-pp.exe dashboard-preview <bmp-path> Render our own native dashboard client\n  omen-hub-pp.exe cooling-read  One-shot CPU/GPU/IR/fan diagnostics; administrator required\n  omen-hub-pp.exe fan-read  Fixed HP fan/Max-Fan/table GETs; administrator required\n  omen-hub-pp.exe fan-validate-max  Fixed maximum cooling ON/hold/original restore trial\n  omen-hub-pp.exe hp-control-qualify --confirm-service-test  Bounded service/cooling migration trial; explicit administration required\n  omen-hub-pp.exe hp-control-status  Read-only fixed HP controller identity and recovery status\n  omen-hub-pp.exe hp-control-recover  Explicit OEM return for an interrupted owned session; administrator required\n  omen-hub-pp.exe hp-read   HP GPU-status GET (8E35/F.13 only)\n  omen-hub-pp.exe hp-performance-read  HP GPU status and system design GETs\n  omen-hub-pp.exe keyboard-read  Read-only keyboard state (8E35/F.13 only)\n  omen-hub-pp.exe keyboard-validate-colors Fixed one-byte RGB trial with complete restore\n  omen-hub-pp.exe keyboard-validate-lighting Fixed RGB/static-preset trial with complete restore\n  omen-hub-pp.exe gpu-capabilities [uuid] Read GPU offset limits and feature support\n  omen-hub-pp.exe gpu-curve-read  Read the complete Graphics V/F domain\n  omen-hub-pp.exe gpu-validate-memory-curve Fixed memory-after-curve preservation trial; full restore\n  omen-hub-pp.exe gpu-validate-curve Fixed -15 MHz Graphics frequency trial; full restore\n  omen-hub-pp.exe gpu-validate Two fixed +/-15 MHz GPU and +/-24 MHz VRAM trials; restore after each\n  omen-hub-pp.exe profile-catalog|profile-list\n  omen-hub-pp.exe profile-create <id> <name>\n  omen-hub-pp.exe profile-show|profile-plan|profile-verify-current|profile-apply|profile-apply-trace <id>\n  omen-hub-pp.exe profile-restore  Recover original state from the latest journal\n  omen-hub-pp.exe profile-set <id> <feature> <value>\n  omen-hub-pp.exe profile-set-vf <id> <anchor-mV> <target-MHz> Save a full plateau curve; no write\n  omen-hub-pp.exe profile-storage|profile-migrate-legacy\n  omen-hub-pp.exe profile-import <json-file>\n  omen-hub-pp.exe startup-setup Install/update the fixed protected logon task (UAC)\n  omen-hub-pp.exe profile-startup-enable <id>\n  omen-hub-pp.exe profile-startup-disable|profile-startup-apply|profile-startup-status|profile-startup-check\n  omen-hub-pp.exe plan quiet|balanced|performance|unleashed\n\nPlan commands only preview. Only validated adapters may write hardware.",
-            env!("CARGO_PKG_VERSION")
-        ),
-        _ => return Err("Use --help for supported commands".into()),
+        Some("--help" | "-h") => {
+            #[cfg(windows)]
+            println!("{}", i18n::tf("cli.help", &[&env!("CARGO_PKG_VERSION")]));
+            #[cfg(not(windows))]
+            println!(
+                "Omen Hub++ {}: native UI and hardware controls require Windows x64.",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+        _ => {
+            #[cfg(windows)]
+            return Err(omen_core::message::msg("cli.unknown", &[]));
+            #[cfg(not(windows))]
+            return Err("Use --help for supported commands".into());
+        }
     }
     Ok(())
 }

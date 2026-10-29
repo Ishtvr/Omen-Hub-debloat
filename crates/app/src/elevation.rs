@@ -58,6 +58,7 @@ pub fn run(
         Action::FanService => format!("fan-service-install {nonce}"),
         Action::Graphics(mode) => format!("mux-ui-apply {} {nonce}", mode.key()),
     };
+    let arguments = format!("--lang {} {arguments}", crate::i18n::language_code());
     let file = wide(
         &std::env::current_exe()
             .map_err(|e| e.to_string())?
@@ -117,12 +118,16 @@ pub fn run(
                 .flatten()
                 .map(|e| {
                     e.as_str()
-                        .map_or_else(|| e.to_string(), crate::i18n::message)
+                        .map_or_else(|| e.to_string(), crate::i18n::error_message)
                 })
                 .collect();
             let detail = match error["error"].as_str() {
-                Some(text) if rollback.is_empty() => crate::i18n::message(text),
-                Some(text) => format!("{} ({})", crate::i18n::message(text), rollback.join("; ")),
+                Some(text) if rollback.is_empty() => crate::i18n::error_message(text),
+                Some(text) => format!(
+                    "{} ({})",
+                    crate::i18n::error_message(text),
+                    rollback.join("; ")
+                ),
                 None => error.to_string(),
             };
             return Err(tf("elevation.failed", &[&detail]));
