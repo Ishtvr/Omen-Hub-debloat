@@ -17,6 +17,7 @@ mod nvidia;
 mod smu;
 mod startup;
 mod thermal;
+mod tray_task;
 mod user_data;
 mod vf;
 mod windows_settings;
@@ -29,14 +30,16 @@ pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
 pub use cpu_tuning::{CpuReadbackTrace, SmuImage};
 pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use fan_service::{request_stop as stop_fan_service, run_until as run_fan_service_until};
+pub use fan_task::keep_running as ensure_fan_service_running;
 pub use gpu::{GpuControlsReport, NvidiaIdentity, OffsetState, read_gpu_controls};
 pub use hp::{
     GraphicsModeReport, HpModeReport, apply_graphics_mode, apply_hp_mode, read_hp_gpu_status,
-    read_hp_graphics_mode, read_hp_keyboard_state, read_hp_system_design, write_hp_gpu_power,
-    write_hp_graphics_mode,
+    read_hp_graphics_mode, read_hp_keyboard_state, read_hp_system_design, write_hp_cpu_pl1,
+    write_hp_gpu_power, write_hp_graphics_mode, write_hp_performance_step, write_hp_shared_budget,
+    write_hp_thermal_mode,
 };
 pub use lighting::DirectLighting;
-pub use nvidia::Nvidia;
+pub use nvidia::{GpuLimitProbe, Nvidia};
 use omen_core::{Inventory, PowerStatus};
 pub use smu::{
     LimitCalibration, SmuProbe, calibrate_limits as smu_calibrate_limits, probe as smu_probe,
@@ -47,6 +50,7 @@ pub use startup::{
 };
 use std::collections::HashMap;
 pub use thermal::{CoolingSnapshot, read_cooling_snapshot};
+pub use tray_task::{set_tray_task, tray_task_command};
 pub(crate) use user_data::profile_directory;
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use wmi::{Variant, WMIConnection};

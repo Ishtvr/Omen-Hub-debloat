@@ -1,0 +1,4 @@
+# Link the C runtime statically: the release runs on a clean Windows without
+# the Visual C++ Redistributable, so the installer has no extra dependency.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

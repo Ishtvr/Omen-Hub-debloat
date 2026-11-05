@@ -46,6 +46,8 @@ const APPLY: usize = 705;
 const DELETE: usize = 706;
 const STARTUP: usize = 707;
 const TAB: usize = 708;
+/// Draft back to the system defaults.
+const RESET: usize = 709;
 const GROUP_BASE: usize = 1200;
 const FIELD_BASE: usize = 2000;
 const PANE: usize = 710;
@@ -54,22 +56,20 @@ const FIELD_STRIDE: usize = 64;
 const FIELD_HEIGHT: i32 = 36;
 /// Child-id offset of a row's info button inside its id block.
 const INFO_OFFSET: usize = FIELD_STRIDE - 1;
-/// Checkbox square and gap before its label, in window units.
-const CHECK_BOX: i32 = 28;
 const INFO_SIZE: i32 = 26;
-const CLASS: &str = "OmenHubPPPresetEditor";
+pub const CLASS: &str = "OmenHubPPPresetEditor";
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
 struct View {
     profiles: Vec<PerformanceProfile>,
     selected: Option<PerformanceProfile>,
     binding: DeviceBinding,
-    capabilities: BTreeMap<Feature, bool>,
+    /// This device's own values, shown greyed and used by Reset.
+    defaults: BTreeMap<Feature, Value>,
     curve: Result<omen_core::vf::VfState, String>,
     removed_options: usize,
-    core_curve_conflict: bool,
     pending: bool,
     applicable: bool,
-    blockers: usize,
+    blockers: Vec<String>,
     startup_enabled: bool,
     startup_valid: bool,
 }
@@ -77,7 +77,7 @@ fn load(id: Option<&str>) -> Result<View, String> {
     let store = ProfileStore::user_data()?;
     let selected = id.map(|id| store.load(id)).transpose()?;
     let mut controller = Controller::new(true, None)?;
-    let capabilities = preset_fields::fields()
+    let capabilities: BTreeMap<Feature, bool> = preset_fields::fields()
         .iter()
         .map(|f| {
             (
@@ -86,13 +86,31 @@ fn load(id: Option<&str>) -> Result<View, String> {
             )
         })
         .collect();
+    let binding = controller.context()?.binding;
+    // Record the firmware's own values only while untouched since boot; a
+    // preset, mode or other control may have changed them afterwards.
+    if !store
+        .controlled_since(omen_platform::boot_unix_s())
+        .unwrap_or(true)
+    {
+        let readings: Vec<Setting> = preset_fields::DEVICE_DEFAULTS
+            .iter()
+            .filter(|f| capabilities.get(f) == Some(&true))
+            .filter_map(|f| {
+                controller
+                    .read(*f)
+                    .ok()
+                    .map(|value| Setting { feature: *f, value })
+            })
+            .collect();
+        let _ = store.save_device_defaults(&binding.board, &binding.bios, &readings);
+    }
+    let defaults = store
+        .device_defaults(&binding.board, &binding.bios)
+        .into_iter()
+        .map(|s| (s.feature, s.value))
+        .collect();
     let curve = controller.gpu_curve();
-    let core_curve_conflict = curve.as_ref().is_ok_and(|curve| {
-        curve
-            .nodes
-            .first()
-            .is_some_and(|first| curve.nodes.iter().any(|p| p.delta_khz != first.delta_khz))
-    });
     let removed_options = selected.as_ref().map_or(0, |p| {
         p.settings
             .iter()
@@ -115,14 +133,15 @@ fn load(id: Option<&str>) -> Result<View, String> {
     Ok(View {
         profiles: store.list()?,
         selected,
-        binding: controller.context()?.binding,
-        capabilities,
+        binding,
+        defaults,
         curve,
         removed_options,
-        core_curve_conflict,
         pending: store.pending()?,
         applicable: plan.as_ref().is_some_and(|p| p.applicable),
-        blockers: plan.map_or(0, |p| p.blockers.len()),
+        blockers: plan.map_or_else(Vec::new, |p| {
+            p.blockers.into_iter().map(|b| b.reason).collect()
+        }),
         startup_enabled,
         startup_valid,
     })
@@ -185,9 +204,7 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                         .baseline
                         .as_ref()
                         .is_some_and(|p| p.binding.nvidia_uuid.is_none())
-                        && profile.settings.iter().any(|s| {
-                            s.feature.descriptor().category == omen_core::features::Category::Gpu
-                        })
+                        && profile.settings.iter().any(|s| s.feature.needs_nvidia())
                     {
                         profile.binding.nvidia_uuid = data.binding.nvidia_uuid.clone();
                         profile.binding.nvidia_driver = data.binding.nvidia_driver.clone();
@@ -195,9 +212,20 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     }
                     profile.binding = profile.binding.for_settings(&profile.settings);
                     store.save(&profile)?;
+                    // A changed sign-in preset is applied and approved again
+                    // instead of failing at the next sign-in (user rule, 30
+                    // October 2026).
+                    let startup = data.startup.or_else(|| {
+                        let selection = store.startup().ok()?;
+                        let digest = omen_platform::profile_store::profile_digest(&profile).ok();
+                        (selection.enabled
+                            && selection.profile_id.as_deref() == Some(profile.id.as_str())
+                            && selection.profile_digest != digest)
+                            .then_some(true)
+                    });
                     // Autostart ticked while creating or editing: apply the saved
                     // preset, then enable it, with the existing approved commands.
-                    let message = match data.startup {
+                    let message = match startup {
                         Some(true) => {
                             let mut controller = Controller::new(true, None)?;
                             if !transaction::plan(&profile, &mut controller, true).applicable {
@@ -219,10 +247,10 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                     ))
                 }
                 Request::Apply(id) => {
-                    elevation::run(Some(&id), Action::Apply, || false)?;
+                    let record = elevation::run(Some(&id), Action::Apply, || false)?;
                     Ok(Update::View(
                         Box::new(load(Some(&id))?),
-                        t("preset.applied").into(),
+                        elevation::applied_status(&record),
                     ))
                 }
                 Request::Recover => {
@@ -283,7 +311,8 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
 enum Editor {
     Text(HWND),
     Choice(HWND),
-    Boolean(HWND),
+    /// On/off field: the row's own checkbox is the value (always included).
+    Toggle,
     Curve(HWND),
     PerCore(Vec<(u8, u8, HWND, HWND)>),
 }
@@ -294,6 +323,7 @@ struct Row {
     info: HWND,
     /// Measured label width, so the info button sits right after the text.
     label_width: i32,
+    editor_width: i32,
     editor: Editor,
     note: HWND,
     edited: Cell<bool>,
@@ -311,6 +341,7 @@ struct State {
     scroll: Cell<i32>,
     extent: Cell<i32>,
     scroll_drag: Cell<Option<(i32, i32)>>,
+    name_frame: Cell<RECT>,
     rendering: Cell<bool>,
     busy: Cell<bool>,
     dirty: Cell<bool>,
@@ -318,6 +349,8 @@ struct State {
     curve: RefCell<Option<Value>>,
     preview: Option<PathBuf>,
     preview_group: Option<usize>,
+    /// Action buttons last placed, so they move only when the set changes.
+    actions: Cell<Option<(bool, bool)>>,
 }
 fn checked(handle: HWND) -> bool {
     unsafe { SendMessageW(handle, BM_GETCHECK, 0, 0) == BST_CHECKED as isize }
@@ -375,16 +408,50 @@ fn enable(hwnd: HWND, state: &State) {
                 && (pending
                     || (saved
                         && !state.dirty.get()
-                        && view.as_ref().is_some_and(|v| v.applicable)))) as i32,
+                        && view
+                            .as_ref()
+                            .is_some_and(|v| v.applicable && v.removed_options == 0))))
+                as i32,
         );
-        EnableWindow(GetDlgItem(hwnd, STARTUP as i32), ready as i32);
+        EnableWindow(
+            GetDlgItem(hwnd, STARTUP as i32),
+            (ready
+                && view
+                    .as_ref()
+                    .is_some_and(|v| v.removed_options == 0 || v.startup_enabled))
+                as i32,
+        );
+        EnableWindow(GetDlgItem(hwnd, RESET as i32), ready as i32);
+        // A new preset can only be reset and saved; Apply, Delete and the
+        // sign-in option belong to saved presets. A pending restore always shows.
+        let visible = actions(saved, pending);
+        for id in [APPLY, RESET, SAVE, DELETE] {
+            ShowWindow(
+                GetDlgItem(hwnd, id as i32),
+                if visible.contains(&id) {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
+        ShowWindow(
+            GetDlgItem(hwnd, STARTUP as i32),
+            if saved { SW_SHOW } else { SW_HIDE },
+        );
+        if state.actions.replace(Some((saved, pending))) != Some((saved, pending)) {
+            let mut layout = ui::Layout::new(hwnd);
+            place_actions(hwnd, &mut layout, &visible);
+            layout.apply();
+        }
         for row in state.rows.borrow().iter() {
             EnableWindow(row.check, ready as i32);
             let included = ready && checked(row.check);
             match &row.editor {
-                Editor::Text(h) | Editor::Choice(h) | Editor::Boolean(h) => {
+                Editor::Text(h) | Editor::Choice(h) => {
                     EnableWindow(*h, included as i32);
                 }
+                Editor::Toggle => {}
                 Editor::Curve(h) => {
                     EnableWindow(
                         *h,
@@ -397,6 +464,30 @@ fn enable(hwnd: HWND, state: &State) {
                     }
                 }
             }
+        }
+    }
+}
+/// Buttons in the action row, left to right.
+fn actions(saved: bool, pending: bool) -> Vec<usize> {
+    match (saved, pending) {
+        (true, _) => vec![APPLY, RESET, SAVE, DELETE],
+        (false, true) => vec![APPLY, RESET, SAVE],
+        (false, false) => vec![RESET, SAVE],
+    }
+}
+/// Right-aligned action buttons; hidden ones leave no gap.
+fn place_actions(hwnd: HWND, layout: &mut ui::Layout, visible: &[usize]) {
+    unsafe {
+        let mut r: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut r);
+        for (i, id) in visible.iter().rev().enumerate() {
+            layout.place(
+                GetDlgItem(hwnd, *id as i32),
+                r.right - 154 - i as i32 * 134,
+                r.bottom - 65,
+                126,
+                40,
+            );
         }
     }
 }
@@ -437,7 +528,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                 id,
                 "BUTTON",
                 &label,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32 | BS_NOTIFY as u32,
+                WS_TABSTOP | BS_AUTOCHECKBOX as u32 | BS_NOTIFY as u32 | BS_MULTILINE as u32,
             );
             let label_width = ui::text_width(pane, state.theme.body, &label);
             let info = ui::control(
@@ -468,18 +559,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                     );
                     Editor::Choice(h)
                 }
-                ValueKind::Boolean => {
-                    let h = ui::control(
-                        pane,
-                        state.theme.body,
-                        id + 1,
-                        "COMBOBOX",
-                        "",
-                        WS_TABSTOP | CBS_DROPDOWNLIST as u32,
-                    );
-                    choices(h, &[t("common.off"), t("common.on")]);
-                    Editor::Boolean(h)
-                }
+                ValueKind::Boolean => Editor::Toggle,
                 ValueKind::VfCurve => Editor::Curve(ui::control(
                     pane,
                     state.theme.body,
@@ -528,6 +608,18 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                     Editor::Text(h)
                 }
             };
+            let editor_width = match &editor {
+                Editor::Choice(handle) => ui::dropdown_width(
+                    *handle,
+                    state.theme.body,
+                    &field
+                        .choices()
+                        .iter()
+                        .map(|choice| preset_fields::choice_label(*choice))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => 176,
+            };
             let note = ui::control(pane, state.theme.small, 0, "STATIC", "", 0);
             theme::muted(note);
             rows.push(Row {
@@ -535,6 +627,7 @@ unsafe fn build_rows(hwnd: HWND, state: &State) {
                 check,
                 info,
                 label_width,
+                editor_width,
                 editor,
                 note,
                 edited: Cell::new(false),
@@ -586,83 +679,54 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
                 .find(|s| s.feature == Feature::GpuVfCurve)
                 .map(|s| s.value.clone())
         })
+        // Without a saved curve: the driver's factory curve. The live curve
+        // may carry an applied undervolt and must not become the default.
         .or_else(|| {
             view.curve
                 .as_ref()
                 .ok()
+                .and_then(|curve| curve.factory().ok())
                 .and_then(|curve| curve.value().ok())
         });
+    let mut added = false;
     for row in state.rows.borrow().iter() {
         let stored = view
             .selected
             .as_ref()
             .and_then(|p| preset::display_value(p, row.field.feature).cloned());
+        // On/off fields are always part of a preset. A saved preset without
+        // one shows its default (cTGP on, others off); Save stores it.
+        added |=
+            matches!(row.editor, Editor::Toggle) && view.selected.is_some() && stored.is_none();
         set_checked(row.check, stored.is_some());
         row.edited.set(false);
         *row.baseline.borrow_mut() = stored.clone();
-        let value = stored.unwrap_or_else(|| row.field.initial());
-        unsafe {
-            match (&row.editor, &value) {
-                (Editor::Text(h), Value::Integer(value)) => text(
-                    *h,
-                    &crate::i18n::number(&preset::format_number(*value, row.field.scale())),
-                ),
-                (Editor::Text(h), Value::CoreRatios(values)) => text(
-                    *h,
-                    &values
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ),
-                (Editor::Choice(h), Value::Choice(value)) => {
-                    let index = row
-                        .field
-                        .choices()
-                        .iter()
-                        .position(|v| v == value)
-                        .unwrap_or(0);
-                    SendMessageW(*h, CB_SETCURSEL, index, 0);
-                }
-                (Editor::Boolean(h), Value::Boolean(value)) => {
-                    SendMessageW(*h, CB_SETCURSEL, usize::from(*value), 0);
-                }
-                (Editor::PerCore(items), Value::PerCore(points)) => {
-                    for (ccd, core, _, h) in items {
-                        text(
-                            *h,
-                            &points
-                                .iter()
-                                .find(|p| p.ccd == *ccd && p.core == *core)
-                                .map_or(0, |p| p.steps)
-                                .to_string(),
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        text(
-            row.note,
-            if row.field.feature == Feature::GpuCoreOffsetMhz && view.core_curve_conflict {
-                t("preset.note_curve_active")
-            } else if view.capabilities.get(&row.field.feature) == Some(&true) {
-                ""
-            } else {
-                t("preset.note_unavailable")
-            },
+        show_value(
+            row,
+            &stored.unwrap_or_else(|| default_value(&row.field, &view.defaults)),
         );
+        // Explanations live only in the "i" buttons (user rule); an empty
+        // note takes no space in the layout.
+        text(row.note, "");
     }
     let summary = if view.pending {
         t("preset.pending").into()
     } else if view.removed_options > 0 {
         tf("preset.removed_options", &[&view.removed_options])
+    } else if added {
+        t("preset.toggles_added").into()
     } else if view.startup_enabled && !view.startup_valid {
         t("preset.startup_invalid").into()
-    } else if view.blockers > 0 {
-        format!("{message} {}", tf("preset.blockers", &[&view.blockers]))
-            .trim()
-            .to_string()
+    } else if !view.blockers.is_empty() {
+        tf(
+            "preset.preflight_blocked",
+            &[&view
+                .blockers
+                .iter()
+                .map(|reason| crate::i18n::error_message(reason))
+                .collect::<Vec<_>>()
+                .join("\r\n")],
+        )
     } else if !message.is_empty() {
         message.to_string()
     } else if view.selected.is_none() {
@@ -671,7 +735,8 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         t("preset.loaded").into()
     };
     *state.view.borrow_mut() = Some(view);
-    state.dirty.set(false);
+    // The added on/off defaults are a draft change: Apply follows Save.
+    state.dirty.set(added);
     state.busy.set(false);
     state.rendering.set(false);
     status(hwnd, state, &summary, false);
@@ -679,6 +744,82 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
     unsafe {
         layout_pane(state.pane.get(), state);
     }
+}
+/// Shows `value` in the row's editor without changing whether it is included.
+fn show_value(row: &Row, value: &Value) {
+    unsafe {
+        match (&row.editor, value) {
+            (Editor::Text(h), Value::Integer(value)) => text(
+                *h,
+                &crate::i18n::number(&preset::format_number(*value, row.field.scale())),
+            ),
+            (Editor::Choice(h), Value::Choice(value)) => {
+                let index = row
+                    .field
+                    .choices()
+                    .iter()
+                    .position(|v| v == value)
+                    .unwrap_or(0);
+                SendMessageW(*h, CB_SETCURSEL, index, 0);
+            }
+            (Editor::Toggle, Value::Boolean(value)) => set_checked(row.check, *value),
+            (Editor::PerCore(items), Value::PerCore(points)) => {
+                for (ccd, core, _, h) in items {
+                    text(
+                        *h,
+                        &points
+                            .iter()
+                            .find(|p| p.ccd == *ccd && p.core == *core)
+                            .map_or(0, |p| p.steps)
+                            .to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+/// The device's own value where one was read, else the field's seed.
+fn default_value(field: &Field, defaults: &BTreeMap<Feature, Value>) -> Value {
+    defaults
+        .get(&field.feature)
+        .cloned()
+        .unwrap_or_else(|| field.initial())
+}
+/// Draft back to the system defaults: no setting is selected, so the preset
+/// changes nothing until options are chosen again, and each editor shows the
+/// device's default value. Only the draft changes; Save keeps it.
+fn reset(hwnd: HWND, state: &State) {
+    state.rendering.set(true);
+    let view = state.view.borrow();
+    let defaults = view.as_ref().map(|v| &v.defaults);
+    for row in state.rows.borrow().iter() {
+        // On/off fields take their default from `show_value` below.
+        set_checked(row.check, false);
+        row.edited.set(true);
+        show_value(
+            row,
+            &defaults.map_or_else(
+                || row.field.initial(),
+                |defaults| default_value(&row.field, defaults),
+            ),
+        );
+    }
+    // The curve editor starts again from the driver's factory curve, not
+    // from a curve a preset applied earlier.
+    *state.curve.borrow_mut() = view.as_ref().and_then(|v| {
+        v.curve
+            .as_ref()
+            .ok()
+            .and_then(|c| c.factory().ok())
+            .and_then(|c| c.value().ok())
+    });
+    drop(view);
+    set_checked(unsafe { GetDlgItem(hwnd, STARTUP as i32) }, false);
+    state.rendering.set(false);
+    state.dirty.set(true);
+    status(hwnd, state, t("preset.reset_done"), false);
+    enable(hwnd, state);
 }
 fn collect(state: &State) -> Result<SaveData, String> {
     let view = state.view.borrow();
@@ -692,31 +833,20 @@ fn collect(state: &State) -> Result<SaveData, String> {
     }
     let mut edits = vec![];
     for row in state.rows.borrow().iter() {
-        let value = if !checked(row.check) {
+        // On/off fields are always part of the preset: no tick writes off.
+        let value = if matches!(row.editor, Editor::Toggle) {
+            Some(Value::Boolean(checked(row.check)))
+        } else if !checked(row.check) {
             None
         } else if !row.edited.get() && row.baseline.borrow().is_some() {
             row.baseline.borrow().clone()
         } else {
             Some(unsafe {
                 match &row.editor {
-                    Editor::Text(h) => {
-                        if row.field.feature.descriptor().value_kind == ValueKind::CoreRatios {
-                            Value::CoreRatios(
-                                ui::value(*h)
-                                    .split([',', ';', ' '])
-                                    .filter(|s| !s.is_empty())
-                                    .map(|s| {
-                                        s.parse::<u8>().map_err(|_| t("preset.core_ratios_invalid"))
-                                    })
-                                    .collect::<Result<Vec<_>, _>>()?,
-                            )
-                        } else {
-                            Value::Integer(
-                                preset::parse_number(&ui::value(*h), row.field.scale())
-                                    .map_err(|e| format!("{}: {e}", row.field.label()))?,
-                            )
-                        }
-                    }
+                    Editor::Text(h) => Value::Integer(
+                        preset::parse_number(&ui::value(*h), row.field.scale())
+                            .map_err(|e| format!("{}: {e}", row.field.label()))?,
+                    ),
                     Editor::Choice(h) => {
                         let i = SendMessageW(*h, CB_GETCURSEL, 0, 0);
                         Value::Choice(
@@ -726,11 +856,7 @@ fn collect(state: &State) -> Result<SaveData, String> {
                                 .ok_or(t("preset.choice_invalid"))?,
                         )
                     }
-                    Editor::Boolean(h) => match SendMessageW(*h, CB_GETCURSEL, 0, 0) {
-                        0 => Value::Boolean(false),
-                        1 => Value::Boolean(true),
-                        _ => return Err(t("preset.boolean_invalid").into()),
-                    },
+                    Editor::Toggle => Value::Boolean(checked(row.check)),
                     Editor::Curve(_) => state
                         .curve
                         .borrow()
@@ -784,25 +910,51 @@ fn collect(state: &State) -> Result<SaveData, String> {
 }
 unsafe fn show(handle: HWND, visible: bool) {
     unsafe {
-        ShowWindow(handle, if visible { SW_SHOW } else { SW_HIDE });
+        if (GetWindowLongPtrW(handle, GWL_STYLE) as u32 & WS_VISIBLE != 0) != visible {
+            SetWindowPos(
+                handle,
+                ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | SWP_NOREDRAW
+                    | if visible {
+                        SWP_SHOWWINDOW
+                    } else {
+                        SWP_HIDEWINDOW
+                    },
+            );
+        }
     }
 }
 unsafe fn layout_pane(hwnd: HWND, state: &State) {
     unsafe {
         let mut rect: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut rect);
-        let w = rect.right;
-        let h = rect.bottom;
+        let (w, h) = (rect.right, rect.bottom);
+        if w < 200 || h <= 0 {
+            return;
+        }
+        let mut layout = ui::Layout::new(hwnd);
         let mut y = 0;
         let scroll = state.scroll.get();
         for group in 0..GROUPS.len() {
             if let Some(section) = SECTIONS.iter().position(|(start, _)| *start == group) {
-                let heading = GetDlgItem(hwnd, 720 + section as i32);
-                ui::place(heading, 4, y - scroll, w - 20, 32);
+                layout.place(
+                    GetDlgItem(hwnd, 720 + section as i32),
+                    4,
+                    y - scroll,
+                    w - 20,
+                    32,
+                );
                 y += 40;
             }
-            let header = state.groups.get()[group];
-            ui::place(header, 0, y - scroll, w - 18, 48);
+            layout.place(state.groups.get()[group], 0, y - scroll, w - 18, 48);
             y += 56;
             let expanded = state.expanded.borrow()[group];
             for row in state
@@ -811,34 +963,45 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
                 .iter()
                 .filter(|r| r.field.group == group)
             {
+                let has_note = !ui::value(row.note).is_empty();
+                let shape =
+                    crate::preset_layout::row(w, row.label_width, row.editor_width, has_note);
                 show(row.check, expanded);
                 show(row.info, expanded);
-                show(row.note, expanded);
+                show(row.note, expanded && has_note);
                 if expanded {
-                    let check = (CHECK_BOX + row.label_width + 6).min(w - 430);
-                    ui::place(row.check, 16, y - scroll, check, 32);
-                    ui::place(
+                    layout.place(
+                        row.check,
+                        16,
+                        y - scroll,
+                        shape.check_width,
+                        shape.label_height,
+                    );
+                    layout.place(
                         row.info,
-                        16 + check + 4,
+                        20 + shape.check_width,
                         y - scroll + 3,
                         INFO_SIZE,
                         INFO_SIZE,
                     );
-                    ui::place(row.note, w - 370, y - scroll + 7, 156, 24);
+                    layout.place(
+                        row.note,
+                        16,
+                        y - scroll + shape.note_y,
+                        (shape.editor_x - 28).max(100),
+                        26,
+                    );
                 }
                 match &row.editor {
-                    Editor::Text(input)
-                    | Editor::Choice(input)
-                    | Editor::Boolean(input)
-                    | Editor::Curve(input) => {
+                    Editor::Text(input) | Editor::Choice(input) | Editor::Curve(input) => {
                         show(*input, expanded);
                         if expanded {
-                            ui::place(
+                            layout.place(
                                 *input,
-                                w - 202,
-                                y - scroll,
-                                176,
-                                if matches!(row.editor, Editor::Choice(_) | Editor::Boolean(_)) {
+                                shape.editor_x,
+                                y - scroll + shape.editor_y,
+                                shape.editor_width,
+                                if matches!(row.editor, Editor::Choice(_)) {
                                     280
                                 } else {
                                     32
@@ -846,17 +1009,17 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
                             );
                         }
                     }
+                    Editor::Toggle => {}
                     Editor::PerCore(items) => {
                         for (ccd, core, label, input) in items {
                             show(*label, expanded);
                             show(*input, expanded);
                             if expanded {
-                                let col = *ccd as i32;
                                 let column = (w - 56) / 2;
-                                let x = 18 + col * column;
+                                let x = 18 + *ccd as i32 * column;
                                 let top = y + 42 + *core as i32 * 36 - scroll;
-                                ui::place(*label, x, top + 5, column - 104, 25);
-                                ui::place(*input, x + column - 100, top, 78, 29);
+                                layout.place(*label, x, top + 5, column - 104, 25);
+                                layout.place(*input, x + column - 100, top, 78, 29);
                             }
                         }
                     }
@@ -865,7 +1028,7 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
                     y += if matches!(row.editor, Editor::PerCore(_)) {
                         342
                     } else {
-                        44
+                        shape.height
                     };
                 }
             }
@@ -880,45 +1043,59 @@ unsafe fn layout_pane(hwnd: HWND, state: &State) {
             layout_pane(hwnd, state);
             return;
         }
-        InvalidateRect(hwnd, ptr::null(), 0);
+        layout.apply();
     }
 }
 unsafe fn layout(hwnd: HWND, state: &State) {
     unsafe {
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
-        let w = r.right;
-        let h = r.bottom;
-        ui::place(GetDlgItem(hwnd, 730), 28, 20, w - 56, 40);
-        ui::place(GetDlgItem(hwnd, TAB as i32), 28, 72, 174, 36);
-        // Preset, Neu and Name share one column width and field height.
+        let (w, h) = (r.right, r.bottom);
+        if w < 200 || h < 200 {
+            return;
+        }
+        let mut layout = ui::Layout::new(hwnd);
+        layout.place(GetDlgItem(hwnd, 730), 28, 20, w - 56, 40);
+        layout.place(GetDlgItem(hwnd, TAB as i32), 28, 72, 174, 36);
         let column = (w - 56 - 2 * 16) / 3;
         let [select, new, name] = [0, 1, 2].map(|i| 28 + i * (column + 16));
-        ui::place(GetDlgItem(hwnd, 731), select, 125, column, 22);
+        layout.place(GetDlgItem(hwnd, 731), select, 125, column, 22);
         let combo = GetDlgItem(hwnd, SELECT as i32);
-        ui::place(combo, select, 150, column, 320);
-        // The closed selection field excludes its 3 px frame on each side.
+        layout.place(combo, select, 150, column, 320);
+        layout.place(GetDlgItem(hwnd, NEW as i32), new, 150, column, FIELD_HEIGHT);
+        layout.place(GetDlgItem(hwnd, 732), name, 125, column, 22);
+        // Vertically center the original single-line EDIT in its painted field.
+        // No custom text drawing: caret, selection, IME and keyboard stay native.
+        state.name_frame.set(RECT {
+            left: name,
+            top: 150,
+            right: name + column,
+            bottom: 150 + FIELD_HEIGHT,
+        });
+        layout.place(
+            GetDlgItem(hwnd, NAME as i32),
+            name + 8,
+            157,
+            column - 16,
+            22,
+        );
+        layout.place(state.pane.get(), 28, 208, w - 56, h - 414);
+        layout.place(GetDlgItem(hwnd, STARTUP as i32), 28, h - 191, w - 56, 30);
+        layout.place(GetDlgItem(hwnd, STATUS), 28, h - 149, w - 56, 68);
+        let (saved, pending) = state
+            .view
+            .borrow()
+            .as_ref()
+            .map_or((false, false), |v| (v.selected.is_some(), v.pending));
+        state.actions.set(Some((saved, pending)));
+        place_actions(hwnd, &mut layout, &actions(saved, pending));
+        layout.apply();
         SendMessageW(
             combo,
             CB_SETITEMHEIGHT,
             usize::MAX,
             (FIELD_HEIGHT - 6) as isize,
         );
-        ui::place(GetDlgItem(hwnd, NEW as i32), new, 150, column, FIELD_HEIGHT);
-        ui::place(GetDlgItem(hwnd, 732), name, 125, column, 22);
-        ui::place(
-            GetDlgItem(hwnd, NAME as i32),
-            name,
-            150,
-            column,
-            FIELD_HEIGHT,
-        );
-        ui::place(state.pane.get(), 28, 208, w - 56, h - 348);
-        ui::place(GetDlgItem(hwnd, STARTUP as i32), 28, h - 115, 360, 30);
-        ui::place(GetDlgItem(hwnd, STATUS), 28, h - 67, w - 470, 48);
-        for (id, offset) in [(APPLY, 422), (SAVE, 288), (DELETE, 154)] {
-            ui::place(GetDlgItem(hwnd, id as i32), w - offset, h - 65, 126, 40);
-        }
         layout_pane(state.pane.get(), state);
     }
 }
@@ -926,10 +1103,14 @@ unsafe fn scroll(hwnd: HWND, state: &State, delta: i32) {
     unsafe {
         let mut r: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut r);
-        state
+        let next = state
             .scroll
-            .set((state.scroll.get() + delta).clamp(0, (state.extent.get() - r.bottom).max(0)));
-        layout_pane(hwnd, state);
+            .get()
+            .saturating_add(delta)
+            .clamp(0, (state.extent.get() - r.bottom).max(0));
+        if next != state.scroll.replace(next) {
+            layout_pane(hwnd, state);
+        }
     }
 }
 // The scrolling content keeps native child controls and keyboard focus. Only
@@ -1314,14 +1495,6 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 );
                 ui::control(
                     hwnd,
-                    state.theme.small,
-                    732,
-                    "STATIC",
-                    t("preset.name_label"),
-                    0,
-                );
-                ui::control(
-                    hwnd,
                     state.theme.body,
                     SELECT,
                     "COMBOBOX",
@@ -1336,6 +1509,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     t("preset.new"),
                     WS_TABSTOP,
                 );
+                ui::control(
+                    hwnd,
+                    state.theme.small,
+                    732,
+                    "STATIC",
+                    t("preset.name_label"),
+                    0,
+                );
                 let name = ui::control(
                     hwnd,
                     state.theme.body,
@@ -1349,7 +1530,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     WS_EX_CONTROLPARENT,
                     wide(PANE_CLASS).as_ptr(),
                     wide("").as_ptr(),
-                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     0,
                     0,
                     10,
@@ -1393,12 +1574,17 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     hwnd,
                     state.theme.small,
                     STATUS as usize,
-                    "STATIC",
+                    "EDIT",
                     t("preset.status_loading"),
-                    0,
+                    WS_TABSTOP
+                        | WS_VSCROLL
+                        | ES_MULTILINE as u32
+                        | ES_READONLY as u32
+                        | ES_AUTOVSCROLL as u32,
                 );
                 for (id, label) in [
                     (APPLY, t("preset.apply_button")),
+                    (RESET, t("preset.reset")),
                     (SAVE, t("preset.save")),
                     (DELETE, t("preset.delete")),
                 ] {
@@ -1412,7 +1598,21 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                 let mut r = std::mem::zeroed();
                 GetClientRect(hwnd, &mut r);
                 ui::fill(w as HDC, &r, state.theme.bg());
+                FillRect(w as HDC, &state.name_frame.get(), state.theme.field);
                 1
+            }
+            WM_LBUTTONDOWN => {
+                let point = POINT {
+                    x: l as u16 as i16 as i32,
+                    y: (l >> 16) as u16 as i16 as i32,
+                };
+                if PtInRect(&state.name_frame.get(), point) != 0 {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(GetDlgItem(
+                        hwnd,
+                        NAME as i32,
+                    ));
+                }
+                0
             }
             WM_SIZE => {
                 layout(hwnd, state);
@@ -1498,6 +1698,25 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                                     other_row.edited.set(true);
                                 }
                             }
+                            // Dynamic Boost proposes cTGP on and the Hub's
+                            // Unleashed TPP of 72 W, visible and editable.
+                            if offset == 0
+                                && checked(row.check)
+                                && row.field.feature == Feature::GpuUnleashed
+                            {
+                                for other_row in state.rows.borrow().iter() {
+                                    let value = match other_row.field.feature {
+                                        Feature::GpuCustomTgp => Value::Boolean(true),
+                                        Feature::HpSharedPowerMw => Value::Integer(72_000),
+                                        _ => continue,
+                                    };
+                                    if !checked(other_row.check) {
+                                        set_checked(other_row.check, true);
+                                        show_value(other_row, &value);
+                                        other_row.edited.set(true);
+                                    }
+                                }
+                            }
                             dirty(hwnd, state);
                         }
                     }
@@ -1541,6 +1760,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                             dispatch(hwnd, state, Request::Load(None), t("preset.new_loading"));
                         }
                     }
+                    RESET => reset(hwnd, state),
                     SAVE => match collect(state) {
                         Ok(data) => dispatch(
                             hwnd,
@@ -1687,6 +1907,7 @@ fn run_window(
         scroll: Cell::new(0),
         extent: Cell::new(0),
         scroll_drag: Cell::new(None),
+        name_frame: Cell::new(unsafe { std::mem::zeroed() }),
         rendering: Cell::new(true),
         busy: Cell::new(false),
         dirty: Cell::new(false),
@@ -1694,6 +1915,7 @@ fn run_window(
         curve: RefCell::new(None),
         preview,
         preview_group,
+        actions: Cell::new(None),
     });
     unsafe {
         ui::register(CLASS, Some(procedure))?;

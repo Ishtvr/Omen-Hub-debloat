@@ -9,7 +9,8 @@ On 14 October 2026 the user clarified that the **open window may exceed 50 MB** 
 Omen Hub++ must eventually replace the original OMEN Hub and its hardware-controller processes completely. Original OMEN Hub modules are reverse-engineering sources, not mandatory runtime dependencies for the target engine. Prove the necessary lifecycle and independent transport before claiming replacement support.
 
 - Keep documentation truthful about implemented features versus plans. Never imply that a profile preview changed firmware.
-- Hardware write support requires evidence for the exact board/BIOS, validated payloads and readback/restore behavior. Do not guess WMI opcodes, EC offsets or driver structures.
+- Hardware write support requires evidence for the exact board/BIOS, validated payloads and readback/restore behavior. Do not guess WMI opcodes, EC offsets or driver structures. Exception decided by the user on 29 October 2026: NVIDIA V/F curve and GPU clock offsets accept any loaded NVIDIA driver version on the qualified device (board/BIOS, GPU and VBIOS still exact); runtime ABI checks, readback and restore are the protection, and a missing driver blocks them.
+- On 29 October 2026 the user decided that presets must not be blocked by overlapping instructions or tight limits: Apply resolves overlaps by fixed precedence (`PerformanceProfile::effective`), numeric checks only reject values beyond the driver's or adapter's reported range, and device binding, readback and restore remain.
 - Keep proprietary DLLs, drivers, decompiled sources and local diagnostic dumps in ignored `.local/` or `.tools/`. Commit only original code and concise interface observations.
 - Do not stop/remove vendor services, install a kernel driver, flash firmware, or change power/voltage as part of ordinary verification.
 - Keep core policies independent of Windows. No network calls, telemetry, updater or embedded browser in runtime code.

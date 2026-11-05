@@ -1,6 +1,7 @@
 //! Bounded, versioned profile persistence and durable hardware transaction journal.
 use omen_core::{
-    profiles::{PerformanceProfile, validate_id},
+    battery::Selection,
+    profiles::{PerformanceProfile, Setting, validate_id},
     quick_switch::{FanMode, GraphicsMode, GraphicsRecord},
     transaction::{Completion, Journal, PendingTransaction},
 };
@@ -246,6 +247,42 @@ impl ProfileStore {
         }
         Ok(file.pending)
     }
+    /// Profile id, digest and settings of the last transaction if it was
+    /// applied and is still in effect (not pending, not restored).
+    pub fn applied_settings(&self) -> Result<Option<(String, String, Vec<Setting>)>, String> {
+        if !self
+            .journal_path()
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(None);
+        }
+        let file: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
+        if file.schema != 1 || file.pending || file.completion != Some(Completion::Applied) {
+            return Ok(None);
+        }
+        file.transaction.validate()?;
+        Ok(Some((
+            file.transaction.profile_id,
+            file.transaction.profile_digest,
+            file.transaction.requested,
+        )))
+    }
+    /// Appends one line to `preset-hold.log`; a full log becomes `.1.log`.
+    pub fn append_hold_log(&self, line: &str) -> Result<(), String> {
+        use std::io::Write;
+        const MAX_BYTES: u64 = 256 * 1024;
+        let path = self.root.join("preset-hold.log");
+        if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
+            fs::rename(&path, self.root.join("preset-hold.1.log")).map_err(|e| e.to_string())?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        writeln!(file, "{line}").map_err(|e| e.to_string())
+    }
     pub fn last_transaction<S: DeserializeOwned>(&self) -> Result<PendingTransaction<S>, String> {
         let file: JournalFile<S> = read_json(&self.journal_path())?;
         if file.schema != 1 || file.transaction.schema != 1 {
@@ -290,7 +327,9 @@ impl ProfileStore {
             || journal.transaction.profile_id != id
             || journal.transaction.profile_digest != digest
             || journal.transaction.binding != profile.binding
-            || journal.transaction.requested != profile.settings
+            // Journals before 29 October 2026 hold the raw settings.
+            || (journal.transaction.requested != profile.settings
+                && journal.transaction.requested != profile.effective().settings)
         {
             return Err(omen_core::message::msg("store.err.startup_revision", &[]));
         }
@@ -312,9 +351,8 @@ impl ProfileStore {
         if !selection.enabled {
             return Ok(None);
         }
-        if self.pending()? {
-            return Err(omen_core::message::msg("store.err.pending_retry", &[]));
-        }
+        // An unfinished entry is superseded by the next Apply; it does not
+        // stop the sign-in preset.
         let id = selection
             .profile_id
             .ok_or(omen_core::message::msg("store.err.startup_id", &[]))?;
@@ -326,6 +364,60 @@ impl ProfileStore {
     }
     pub fn save_startup_result<T: Serialize>(&self, value: &T) -> Result<(), String> {
         atomic_json(&self.root.join("last-startup-result.json"), value)
+    }
+    /// Whether any Omen Hub++ control (preset, mode, MUX, HP service) ran at
+    /// or after `unix_s`. Before that, volatile firmware values are untouched.
+    pub fn controlled_since(&self, unix_s: u64) -> Result<bool, String> {
+        if self.pending()? {
+            return Ok(true);
+        }
+        for name in ["control-journal.json", "last-control-result.json"] {
+            let modified = match fs::metadata(self.root.join(name)).and_then(|m| m.modified()) {
+                Ok(time) => time,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            let modified = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if modified >= unix_s {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    /// The device's own values (read while no control was active since boot)
+    /// for this exact board/BIOS; empty for another firmware.
+    pub fn device_defaults(&self, board: &str, bios: &str) -> Vec<Setting> {
+        read_json::<serde_json::Value>(&self.root.join("device-defaults.json"))
+            .ok()
+            .filter(|v| v["schema"] == 1 && v["board"] == board && v["bios"] == bios)
+            .and_then(|v| serde_json::from_value::<Vec<Setting>>(v["settings"].clone()).ok())
+            .map(|settings| {
+                settings
+                    .into_iter()
+                    .filter(|s| s.validate().is_ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    /// Newer readings replace older ones of the same feature.
+    pub fn save_device_defaults(
+        &self,
+        board: &str,
+        bios: &str,
+        readings: &[Setting],
+    ) -> Result<(), String> {
+        let mut settings = self.device_defaults(board, bios);
+        for reading in readings {
+            reading.validate()?;
+            settings.retain(|s| s.feature != reading.feature);
+            settings.push(reading.clone());
+        }
+        atomic_json(
+            &self.root.join("device-defaults.json"),
+            &serde_json::json!({"schema":1,"board":board,"bios":bios,"settings":settings}),
+        )
     }
     pub fn save_control_result<T: Serialize>(&self, value: &T) -> Result<(), String> {
         atomic_json(&self.root.join("last-control-result.json"), value)
@@ -373,13 +465,6 @@ impl ProfileStore {
             .map(Some)
             .map_err(|e| e.to_string())
     }
-    pub fn clear_active_fan_curve(&self) -> Result<(), String> {
-        let path = self.root.join("active-fan-curve.json");
-        if path.try_exists().map_err(|e| e.to_string())? {
-            fs::remove_file(path).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
     /// Dashboard fan switch, read by the elevated fan service every cycle.
     pub fn save_fan_mode(&self, mode: FanMode) -> Result<(), String> {
         #[cfg(windows)]
@@ -423,18 +508,99 @@ impl ProfileStore {
     }
     /// Closing the dashboard hides it in the tray unless the user turned
     /// that off; absent or unreadable keeps the tray behaviour.
-    pub fn close_to_tray(&self) -> bool {
-        read_json::<serde_json::Value>(&self.root.join("app-settings.json"))
-            .ok()
-            .filter(|v| v["schema"] == 1)
-            .and_then(|v| v["close_to_tray"].as_bool())
-            .unwrap_or(true)
+    pub fn app_settings(&self) -> Result<omen_core::app_settings::AppSettings, String> {
+        self.app_settings_with_start_default(false)
     }
-    pub fn save_close_to_tray(&self, enabled: bool) -> Result<(), String> {
-        atomic_json(
-            &self.root.join("app-settings.json"),
-            &serde_json::json!({"schema": 1, "close_to_tray": enabled}),
+    /// Preserve the old Run entry's tray preference while reading a pre-settings
+    /// file. No file is rewritten until the user explicitly saves Settings.
+    pub fn app_settings_with_start_default(
+        &self,
+        start_in_tray: bool,
+    ) -> Result<omen_core::app_settings::AppSettings, String> {
+        let path = self.root.join("app-settings.json");
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(omen_core::app_settings::AppSettings {
+                start_in_tray,
+                ..Default::default()
+            });
+        }
+        let value: serde_json::Value = read_json(&path)?;
+        let explicit_start = value.get("start_in_tray").is_some();
+        let mut settings: omen_core::app_settings::AppSettings =
+            serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if !explicit_start {
+            settings.start_in_tray = start_in_tray;
+        }
+        settings.validate()?;
+        Ok(settings)
+    }
+    pub fn save_app_settings(
+        &self,
+        settings: &omen_core::app_settings::AppSettings,
+    ) -> Result<(), String> {
+        settings.validate()?;
+        atomic_json(&self.root.join("app-settings.json"), settings)
+    }
+    pub fn close_to_tray(&self) -> bool {
+        self.app_settings()
+            .map_or(true, |settings| settings.close_to_tray)
+    }
+    /// Preset applied automatically when the charger is unplugged; absent or
+    /// unreadable means no automatic change.
+    pub fn battery_selection(&self) -> Option<Selection> {
+        self.app_settings()
+            .ok()?
+            .battery_preset
+            .as_deref()
+            .and_then(Selection::parse)
+    }
+    /// Last mode or preset applied from the dashboard while on AC power.
+    pub fn ac_selection(&self) -> Option<Selection> {
+        self.power_state()["ac_selection"]
+            .as_str()
+            .and_then(Selection::parse)
+    }
+    pub fn save_ac_selection(&self, selection: &Selection) -> Result<(), String> {
+        self.update_power_state("ac_selection", selection.key().into())
+    }
+    /// Whether the battery selection was applied automatically and is still
+    /// active, so plugging the charger in returns to the AC selection.
+    pub fn battery_switched(&self) -> bool {
+        self.power_state()["battery_switched"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+    pub fn save_battery_switched(&self, switched: bool) -> Result<(), String> {
+        self.update_power_state("battery_switched", switched.into())
+    }
+    /// Start type HPOmenCap had before the "Disable HP OMEN Cap" setting.
+    pub fn hp_service_start_type(&self) -> Option<u32> {
+        self.power_state()["hp_service_start_type"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+    }
+    pub fn save_hp_service_start_type(&self, start: Option<u32>) -> Result<(), String> {
+        self.update_power_state(
+            "hp_service_start_type",
+            start.map_or(serde_json::Value::Null, Into::into),
         )
+    }
+    /// Runtime state of the battery switch and the HP service setting, kept
+    /// apart from the user's settings file.
+    fn power_state(&self) -> serde_json::Value {
+        read_json::<serde_json::Value>(&self.root.join("power-switch.json"))
+            .ok()
+            .filter(|v| v["schema"] == 1 && v.is_object())
+            .unwrap_or_else(|| serde_json::json!({"schema": 1}))
+    }
+    fn update_power_state(&self, key: &str, value: serde_json::Value) -> Result<(), String> {
+        let mut state = self.power_state();
+        if value.is_null() {
+            state.as_object_mut().map(|o| o.remove(key));
+        } else {
+            state[key] = value;
+        }
+        atomic_json(&self.root.join("power-switch.json"), &state)
     }
     /// CCD selection the background service pins foreground programs to
     /// (bit 0 = first CCD). Absent means every CCD: Windows schedules freely.
@@ -498,8 +664,19 @@ pub(crate) fn lock_fan_preference(root: &Path) -> Result<fs::File, String> {
 impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
     fn begin(&mut self, transaction: &PendingTransaction<S>) -> Result<(), String> {
         transaction.validate()?;
+        // An unfinished earlier entry no longer blocks a new Apply (user
+        // rule, 30 October 2026): its complete originals move to the history.
         if self.pending()? {
-            return Err(omen_core::message::msg("store.err.pending_writes", &[]));
+            let history = self.root.join("control-history");
+            fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            fs::copy(
+                self.journal_path(),
+                history.join(format!("superseded-{now}.json")),
+            )
+            .map_err(|e| e.to_string())?;
         }
         #[derive(Serialize)]
         struct NewJournal<'a, S> {
@@ -540,6 +717,22 @@ impl<S: Serialize + DeserializeOwned> Journal<S> for ProfileStore {
         }
         file.pending = true;
         file.completion = None;
+        atomic_json(&self.journal_path(), &file)
+    }
+    fn update_original(&mut self, transaction: &PendingTransaction<S>) -> Result<(), String> {
+        transaction.validate()?;
+        let mut file: JournalFile<S> = read_json(&self.journal_path())?;
+        if file.schema != 1
+            || !file.pending
+            || file.transaction.profile_id != transaction.profile_id
+            || file.transaction.profile_digest != transaction.profile_digest
+            || file.transaction.requested != transaction.requested
+        {
+            return Err(omen_core::message::msg("store.err.journal_inactive", &[]));
+        }
+        file.transaction =
+            serde_json::from_value(serde_json::to_value(transaction).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         atomic_json(&self.journal_path(), &file)
     }
 }
@@ -628,6 +821,99 @@ mod tests {
         transaction::Captured,
     };
 
+    #[test]
+    fn device_defaults_belong_to_one_firmware_and_newer_readings_replace_older() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let reading = |feature, value| Setting {
+            feature,
+            value: Value::Integer(value),
+        };
+        assert!(store.device_defaults("8E35", "F.13").is_empty());
+        store
+            .save_device_defaults(
+                "8E35",
+                "F.13",
+                &[
+                    reading(Feature::CpuTdcMa, 108_000),
+                    reading(Feature::CpuTemperatureLimitC, 95),
+                ],
+            )
+            .unwrap();
+        store
+            .save_device_defaults(
+                "8E35",
+                "F.13",
+                &[reading(Feature::CpuTemperatureLimitC, 100)],
+            )
+            .unwrap();
+        let defaults = store.device_defaults("8E35", "F.13");
+        assert_eq!(defaults.len(), 2);
+        assert!(defaults.contains(&reading(Feature::CpuTemperatureLimitC, 100)));
+        assert!(store.device_defaults("8E35", "F.14").is_empty());
+        assert!(!store.controlled_since(0).unwrap());
+        store
+            .save_control_result(&serde_json::json!({"schema":1}))
+            .unwrap();
+        assert!(store.controlled_since(0).unwrap());
+        assert!(!store.controlled_since(u64::MAX).unwrap());
+    }
+
+    #[test]
+    fn legacy_intel_profiles_stay_readable_and_are_retired_only_on_explicit_save() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let mut old = profile();
+        old.settings.push(
+            serde_json::from_str(
+                r#"{"feature":"intel_pl1_mw","value":{"kind":"integer","value":45000}}"#,
+            )
+            .unwrap(),
+        );
+        let bytes = serde_json::to_vec(&old).unwrap();
+        let path = store.path(&old.id).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let loaded = store.load(&old.id).unwrap();
+        assert_eq!(store.list().unwrap(), vec![old.clone()]);
+        assert_eq!(
+            profile_digest(&loaded).unwrap(),
+            profile_digest(&old).unwrap()
+        );
+        assert!(loaded.validate_intent().is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        let edits: Vec<_> = loaded
+            .settings
+            .iter()
+            .filter(|s| s.feature.retired())
+            .map(|s| (s.feature, None))
+            .collect();
+        let mut fresh = loaded.clone();
+        let hidden = Setting {
+            feature: Feature::KeyboardBrightness,
+            value: Value::Integer(50),
+        };
+        fresh.settings.push(hidden.clone());
+        let cleaned = omen_core::preset::merge(&loaded, &fresh, &loaded.name, &edits).unwrap();
+        assert!(cleaned.settings.contains(&hidden));
+        assert!(cleaned.settings.iter().all(|s| !s.feature.retired()));
+        assert_ne!(
+            profile_digest(&cleaned).unwrap(),
+            profile_digest(&loaded).unwrap()
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        fresh
+            .settings
+            .iter_mut()
+            .find(|s| s.feature.retired())
+            .unwrap()
+            .value = Value::Integer(45001);
+        assert!(omen_core::preset::merge(&loaded, &fresh, &loaded.name, &edits).is_err());
+        store.save(&cleaned).unwrap();
+        assert_eq!(store.load(&old.id).unwrap(), cleaned);
+    }
+
     struct Fixture(ProfileStore);
     impl Fixture {
         fn new() -> Self {
@@ -668,11 +954,96 @@ mod tests {
         let fixture = Fixture::new();
         let store = &fixture.0;
         assert!(store.close_to_tray());
-        store.save_close_to_tray(false).unwrap();
+        let mut settings = store.app_settings().unwrap();
+        settings.close_to_tray = false;
+        settings.language = omen_core::app_settings::LanguagePreference::English;
+        settings.start_in_tray = true;
+        store.save_app_settings(&settings).unwrap();
         assert!(!store.close_to_tray());
-        store.save_close_to_tray(true).unwrap();
+        let reopened = ProfileStore::at(store.root().to_owned()).unwrap();
+        assert_eq!(reopened.app_settings().unwrap(), settings);
+        settings.close_to_tray = true;
+        store.save_app_settings(&settings).unwrap();
         assert!(store.close_to_tray());
+        assert_eq!(
+            store.app_settings().unwrap().language,
+            omen_core::app_settings::LanguagePreference::English
+        );
         fs::remove_file(store.root().join("app-settings.json")).unwrap();
+    }
+    #[test]
+    fn battery_switch_state_is_kept_apart_from_the_settings_file() {
+        use omen_core::hp_mode::HpMode;
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        assert_eq!(store.battery_selection(), None);
+        assert_eq!(store.ac_selection(), None);
+        assert!(!store.battery_switched());
+        let mut settings = store.app_settings().unwrap();
+        settings.battery_preset = Some(Selection::Mode(HpMode::Quiet).key());
+        store.save_app_settings(&settings).unwrap();
+        let ac = Selection::Preset("preset-gaming".into());
+        store.save_ac_selection(&ac).unwrap();
+        store.save_battery_switched(true).unwrap();
+        store.save_hp_service_start_type(Some(2)).unwrap();
+        assert_eq!(
+            store.battery_selection(),
+            Some(Selection::Mode(HpMode::Quiet))
+        );
+        assert_eq!(store.ac_selection(), Some(ac.clone()));
+        assert!(store.battery_switched());
+        assert_eq!(store.hp_service_start_type(), Some(2));
+        // The settings file is unchanged by runtime state.
+        assert_eq!(store.app_settings().unwrap(), settings);
+        store.save_hp_service_start_type(None).unwrap();
+        assert_eq!(store.hp_service_start_type(), None);
+        assert_eq!(store.ac_selection(), Some(ac));
+        fs::remove_file(store.root().join("app-settings.json")).unwrap();
+        fs::remove_file(store.root().join("power-switch.json")).unwrap();
+    }
+    #[test]
+    fn global_settings_preserve_profile_approval_and_recovery_files() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let protected = [
+            "startup.json",
+            "control-journal.json",
+            "last-control-result.json",
+        ];
+        for name in protected {
+            fs::write(store.root().join(name), b"preserved fixture").unwrap();
+        }
+        let mut settings = store.app_settings().unwrap();
+        settings.close_to_tray = false;
+        settings.language = omen_core::app_settings::LanguagePreference::English;
+        store.save_app_settings(&settings).unwrap();
+        for name in protected {
+            assert_eq!(
+                fs::read(store.root().join(name)).unwrap(),
+                b"preserved fixture"
+            );
+        }
+    }
+    #[test]
+    fn legacy_tray_start_is_read_without_rewriting_the_settings_file() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let path = store.root().join("app-settings.json");
+        let original = br#"{"schema":1,"close_to_tray":false}"#;
+        fs::write(&path, original).unwrap();
+        let settings = store.app_settings_with_start_default(true).unwrap();
+        assert!(settings.start_in_tray);
+        assert!(!settings.close_to_tray);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let mut explicit = settings;
+        explicit.start_in_tray = false;
+        store.save_app_settings(&explicit).unwrap();
+        assert!(
+            !store
+                .app_settings_with_start_default(true)
+                .unwrap()
+                .start_in_tray
+        );
     }
     #[test]
     #[cfg(windows)]
@@ -876,7 +1247,7 @@ mod tests {
         assert!(store.startup_profile().unwrap().is_none());
     }
     #[test]
-    fn pending_transaction_survives_reopening_and_blocks_new_writes_and_startup() {
+    fn a_pending_transaction_survives_reopening_and_is_archived_by_the_next_apply() {
         let mut fixture = Fixture::new();
         let profile = profile();
         fixture.0.save(&profile).unwrap();
@@ -886,12 +1257,20 @@ mod tests {
         fixture.0.begin(&transaction(&profile)).unwrap();
         let mut reopened = ProfileStore::at(fixture.0.root().to_owned()).unwrap();
         assert!(reopened.pending().unwrap());
-        assert!(reopened.begin(&transaction(&profile)).is_err());
-        assert!(reopened.startup_profile().is_err());
         assert_eq!(
             reopened.last_transaction::<Value>().unwrap(),
             transaction(&profile)
         );
+        // Neither sign-in nor a new Apply is blocked (user rule, 30 October
+        // 2026); the unfinished entry keeps its originals in the history.
+        assert_eq!(reopened.startup_profile().unwrap().unwrap(), profile);
+        reopened.begin(&transaction(&profile)).unwrap();
+        let archived = fs::read_dir(reopened.root().join("control-history"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("superseded-"))
+            .count();
+        assert_eq!(archived, 1);
     }
     #[test]
     fn startup_rejects_a_completed_journal_with_different_requested_values() {
@@ -1011,7 +1390,7 @@ mod tests {
         store.save_fan_mode(FanMode::Bios).unwrap();
         assert_eq!(store.fan_mode(), FanMode::Bios);
 
-        store.clear_active_fan_curve().unwrap();
+        fs::remove_file(store.root().join("active-fan-curve.json")).unwrap();
         assert_eq!(store.active_fan_curve().unwrap(), None);
 
         assert_eq!(store.fan_status().unwrap(), None);

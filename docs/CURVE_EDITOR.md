@@ -60,7 +60,7 @@ Fan curves retain 2–32 points, strictly ordered temperatures within 0–110 °
 
 ## Hardware boundary
 
-GPU frequency-at-voltage Apply/restore is qualified for the exact 8E35/F.13 / RTX 5070 Laptop / VBIOS and **617.14 or 617.42** implementations. Memory writes preserve coupled Graphics controls. Direct mV, hard voltage lock, Afterburner L lock and OC Scanner are not supported. A plateau is not a physical voltage ceiling or a load-stability result.
+GPU frequency-at-voltage Apply/restore is qualified for the exact 8E35/F.13 / RTX 5070 Laptop / VBIOS with drivers **617.14 and 617.42**. Since 29 October 2026 any installed NVIDIA driver is accepted on this device; other versions are unmeasured and rely on the runtime ABI checks, readback and restore. Memory writes preserve coupled Graphics controls. Direct mV, hard voltage lock, Afterburner L lock and OC Scanner are not supported. A plateau is not a physical voltage ceiling or a load-stability result.
 
 Fan curves do run through the separate own helper. They remain unsupported as `CpuFanCurve`/`GpuFanCurve` instructions inside a complete performance-profile transaction, and BIOS ownership handover is not qualified. [GPU contracts](GPU_PROFILES.md), [fan control](FAN_CONTROL.md), [hardware matrix](HARDWARE_MATRIX.md).
 

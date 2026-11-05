@@ -19,7 +19,7 @@ use windows::{
         },
         TaskScheduler::{
             IExecAction, ITaskService, TASK_INSTANCES_IGNORE_NEW, TASK_LOGON_INTERACTIVE_TOKEN,
-            TASK_RUNLEVEL_HIGHEST, TaskScheduler,
+            TASK_RUNLEVEL_HIGHEST, TASK_STATE_RUNNING, TaskScheduler,
         },
         Variant::VARIANT,
     },
@@ -63,7 +63,8 @@ impl Drop for Handle {
 pub(super) fn image_path() -> Result<PathBuf, String> {
     Ok(startup::installation_root()?.join("Omen Hub++ Fan.exe"))
 }
-pub(super) fn verify(expected_hash: &str, start: bool) -> Result<(), String> {
+/// The protected per-user receipt of the installed cooling task.
+fn receipt() -> Result<startup::StartupInstallation, String> {
     let root = startup::installation_root()?;
     let sid = startup::current_user_sid()?;
     let mut bytes = vec![];
@@ -75,9 +76,21 @@ pub(super) fn verify(expected_hash: &str, start: bool) -> Result<(), String> {
     if bytes.len() > 65536 {
         return Err("Cooling installation receipt exceeds its bound".into());
     }
-    let receipt: startup::StartupInstallation =
-        serde_json::from_slice(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
-            .map_err(|e| e.to_string())?;
+    serde_json::from_slice(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
+        .map_err(|e| e.to_string())
+}
+/// Keeps the fan service running (user decision, 30 October 2026): starts the
+/// installed, verified cooling task when it is not running. Nothing is
+/// installed. `Ok(true)` when it was started; an error when none is installed.
+pub fn keep_running() -> Result<bool, String> {
+    verify(&receipt()?.sha256, true)
+}
+/// Verifies the installed cooling task; with `start`, runs it unless it
+/// already runs. Returns whether it was started.
+pub(super) fn verify(expected_hash: &str, start: bool) -> Result<bool, String> {
+    let root = startup::installation_root()?;
+    let sid = startup::current_user_sid()?;
+    let receipt = receipt()?;
     let name = format!("OmenHubPP-Fan-{sid}");
     let path = image_path()?;
     if receipt.schema != 1
@@ -94,7 +107,7 @@ pub(super) fn verify(expected_hash: &str, start: bool) -> Result<(), String> {
         return Err(init.to_string());
     }
     let _apartment = Apartment(init.is_ok());
-    let operation = || -> windows::core::Result<()> {
+    let operation = || -> windows::core::Result<bool> {
         unsafe {
             let service: ITaskService =
                 CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
@@ -155,10 +168,11 @@ pub(super) fn verify(expected_hash: &str, start: bool) -> Result<(), String> {
             {
                 return Err(reject("Cooling task action differs"));
             }
-            if start {
+            if start && task.State()? != TASK_STATE_RUNNING {
                 let _ = task.Run(&empty)?;
+                return Ok(true);
             }
-            Ok(())
+            Ok(false)
         }
     };
     operation().map_err(|e| e.to_string())

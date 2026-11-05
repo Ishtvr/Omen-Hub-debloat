@@ -7,8 +7,8 @@ use windows_sys::Win32::{
     UI::{
         Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
         Controls::{
-            COMBOBOXINFO, DRAWITEMSTRUCT, GetComboBoxInfo, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
-            SetWindowTheme, WM_MOUSELEAVE,
+            COMBOBOXINFO, DRAWITEMSTRUCT, EM_SETSEL, GetComboBoxInfo, ODS_DISABLED, ODS_FOCUS,
+            ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE,
         },
         Input::KeyboardAndMouse::{GetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
@@ -406,9 +406,38 @@ unsafe extern "system" fn control_proc(
     _data: usize,
 ) -> LRESULT {
     unsafe {
+        // Classic EDIT does not consistently implement Ctrl+A. Handle its
+        // translated character, leaving native selection, caret and Undo intact.
+        if m == WM_CHAR && w == 1 {
+            let mut class = [0u16; 16];
+            let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+            if String::from_utf16_lossy(&class[..n.max(0) as usize]).eq_ignore_ascii_case("edit") {
+                SendMessageW(hwnd, EM_SETSEL, 0, -1);
+                return 0;
+            }
+        }
         // Preserve native checkbox roles, automatic toggling and keyboard input;
         // replace only classic painting (including embossed disabled lettering).
-        if matches!(m, WM_PAINT | WM_PRINT | WM_PRINTCLIENT) && is_checkbox(hwnd) {
+        // Custom pixels are produced only in a paint/print DC. GetDC after a
+        // native paint ignores its update region and can leave stale fragments
+        // when scrolling moves or clips the control between messages.
+        let custom_combo = matches!(
+            m,
+            WM_PAINT
+                | WM_PRINT
+                | WM_PRINTCLIENT
+                | CB_SETCURSEL
+                | CB_ADDSTRING
+                | CB_INSERTSTRING
+                | CB_DELETESTRING
+                | CB_RESETCONTENT
+                | WM_ENABLE
+                | WM_SETFOCUS
+                | WM_KILLFOCUS
+                | WM_SETTEXT
+        ) && is_dark_combo(hwnd);
+        if matches!(m, WM_PAINT | WM_PRINT | WM_PRINTCLIENT) && (is_checkbox(hwnd) || custom_combo)
+        {
             let mut paint: PAINTSTRUCT = std::mem::zeroed();
             let dc = if m == WM_PAINT {
                 BeginPaint(hwnd, &mut paint)
@@ -416,7 +445,11 @@ unsafe extern "system" fn control_proc(
                 w as HDC
             };
             if !dc.is_null() {
-                checkbox(hwnd, dc);
+                if custom_combo {
+                    combo(hwnd, dc);
+                } else {
+                    checkbox(hwnd, dc);
+                }
             }
             if m == WM_PAINT {
                 EndPaint(hwnd, &paint);
@@ -445,8 +478,8 @@ unsafe extern "system" fn control_proc(
             RemoveWindowSubclass(hwnd, Some(control_proc), id);
         }
         let result = DefSubclassProc(hwnd, m, w, l);
-        // The classic button paints its white box directly on click, check,
-        // focus and key state changes without WM_PAINT. Repaint over it at once.
+        // Native state changes still run normally. Queue one clipped repaint;
+        // never draw into hidden/offscreen children through an unbounded DC.
         if matches!(
             m,
             BM_SETCHECK
@@ -467,92 +500,100 @@ unsafe extern "system" fn control_proc(
                 | BM_SETSTYLE
         ) && is_checkbox(hwnd)
         {
-            let dc = GetDC(hwnd);
-            if !dc.is_null() {
-                checkbox(hwnd, dc);
-                ReleaseDC(hwnd, dc);
-            }
+            InvalidateRect(hwnd, ptr::null(), 0);
         }
         if matches!(m, WM_SETFOCUS | WM_KILLFOCUS) {
             InvalidateRect(hwnd, ptr::null(), 0);
         }
-        if matches!(m, WM_PAINT | WM_PRINTCLIENT) {
-            let mut class = [0u16; 32];
-            let n = GetClassNameW(hwnd, class.as_mut_ptr(), 32);
-            let mut hc: HIGHCONTRASTW = std::mem::zeroed();
-            hc.cbSize = size_of::<HIGHCONTRASTW>() as u32;
-            SystemParametersInfoW(
-                SPI_GETHIGHCONTRAST,
-                hc.cbSize,
-                (&mut hc as *mut HIGHCONTRASTW).cast(),
-                0,
-            );
-            if String::from_utf16_lossy(&class[..n.max(0) as usize])
-                .eq_ignore_ascii_case("combobox")
-                && hc.dwFlags & HCF_HIGHCONTRASTON == 0
-            {
-                let dc = if m == WM_PRINTCLIENT {
-                    w as HDC
-                } else {
-                    GetDC(hwnd)
-                };
-                if !dc.is_null() {
-                    let saved = SaveDC(dc);
-                    let mut r: RECT = std::mem::zeroed();
-                    GetClientRect(hwnd, &mut r);
-                    let fill = CreateSolidBrush(FIELD);
-                    FillRect(dc, &r, fill);
-                    DeleteObject(fill);
-                    let mut info: COMBOBOXINFO = std::mem::zeroed();
-                    info.cbSize = size_of::<COMBOBOXINFO>() as u32;
-                    if GetComboBoxInfo(hwnd, &mut info) != 0 {
-                        let index = SendMessageW(hwnd, CB_GETCURSEL, 0, 0);
-                        let length = SendMessageW(hwnd, CB_GETLBTEXTLEN, index as usize, 0);
-                        if (0..4096).contains(&length) {
-                            let mut value = vec![0u16; length as usize + 1];
-                            SendMessageW(
-                                hwnd,
-                                CB_GETLBTEXT,
-                                index as usize,
-                                value.as_mut_ptr() as isize,
-                            );
-                            let f = SendMessageW(hwnd, WM_GETFONT, 0, 0);
-                            if f != 0 {
-                                SelectObject(dc, f as HFONT);
-                            }
-                            SetBkMode(dc, TRANSPARENT as i32);
-                            SetTextColor(dc, FOREGROUND);
-                            let mut text = info.rcItem;
-                            text.left += 8;
-                            DrawTextW(
-                                dc,
-                                value.as_ptr(),
-                                length as i32,
-                                &mut text,
-                                DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
-                            );
-                        }
-                        let x = (info.rcButton.left + info.rcButton.right) / 2;
-                        let y = (info.rcButton.top + info.rcButton.bottom) / 2;
-                        let pen = CreatePen(PS_SOLID, 2, FOREGROUND);
-                        let old = SelectObject(dc, pen);
-                        MoveToEx(dc, x - 4, y - 2, ptr::null_mut());
-                        LineTo(dc, x, y + 2);
-                        LineTo(dc, x + 4, y - 2);
-                        SelectObject(dc, old);
-                        DeleteObject(pen);
-                    }
-                    let border = CreateSolidBrush(if GetFocus() == hwnd { ACCENT } else { BORDER });
-                    FrameRect(dc, &r, border);
-                    DeleteObject(border);
-                    RestoreDC(dc, saved);
-                    if m != WM_PRINTCLIENT {
-                        ReleaseDC(hwnd, dc);
-                    }
-                }
-            }
+        if custom_combo
+            && matches!(
+                m,
+                CB_SETCURSEL
+                    | CB_ADDSTRING
+                    | CB_INSERTSTRING
+                    | CB_DELETESTRING
+                    | CB_RESETCONTENT
+                    | WM_ENABLE
+                    | WM_SETFOCUS
+                    | WM_KILLFOCUS
+                    | WM_SETTEXT
+            )
+        {
+            InvalidateRect(hwnd, ptr::null(), 0);
         }
         result
+    }
+}
+
+unsafe fn is_dark_combo(hwnd: HWND) -> bool {
+    unsafe {
+        let mut class = [0u16; 32];
+        let n = GetClassNameW(hwnd, class.as_mut_ptr(), 32);
+        if !String::from_utf16_lossy(&class[..n.max(0) as usize]).eq_ignore_ascii_case("combobox") {
+            return false;
+        }
+        let mut hc: HIGHCONTRASTW = std::mem::zeroed();
+        hc.cbSize = size_of::<HIGHCONTRASTW>() as u32;
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            hc.cbSize,
+            (&mut hc as *mut HIGHCONTRASTW).cast(),
+            0,
+        );
+        hc.dwFlags & HCF_HIGHCONTRASTON == 0
+    }
+}
+unsafe fn combo(hwnd: HWND, dc: HDC) {
+    unsafe {
+        let saved = SaveDC(dc);
+        let mut r: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut r);
+        let fill = CreateSolidBrush(FIELD);
+        FillRect(dc, &r, fill);
+        DeleteObject(fill);
+        let mut info: COMBOBOXINFO = std::mem::zeroed();
+        info.cbSize = size_of::<COMBOBOXINFO>() as u32;
+        if GetComboBoxInfo(hwnd, &mut info) != 0 {
+            let index = SendMessageW(hwnd, CB_GETCURSEL, 0, 0);
+            let length = SendMessageW(hwnd, CB_GETLBTEXTLEN, index as usize, 0);
+            if (0..4096).contains(&length) {
+                let mut value = vec![0u16; length as usize + 1];
+                SendMessageW(
+                    hwnd,
+                    CB_GETLBTEXT,
+                    index as usize,
+                    value.as_mut_ptr() as isize,
+                );
+                let f = SendMessageW(hwnd, WM_GETFONT, 0, 0);
+                if f != 0 {
+                    SelectObject(dc, f as HFONT);
+                }
+                SetBkMode(dc, TRANSPARENT as i32);
+                SetTextColor(dc, FOREGROUND);
+                let mut text = info.rcItem;
+                text.left += 8;
+                DrawTextW(
+                    dc,
+                    value.as_ptr(),
+                    length as i32,
+                    &mut text,
+                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+                );
+            }
+            let x = (info.rcButton.left + info.rcButton.right) / 2;
+            let y = (info.rcButton.top + info.rcButton.bottom) / 2;
+            let pen = CreatePen(PS_SOLID, 2, FOREGROUND);
+            let old = SelectObject(dc, pen);
+            MoveToEx(dc, x - 4, y - 2, ptr::null_mut());
+            LineTo(dc, x, y + 2);
+            LineTo(dc, x + 4, y - 2);
+            SelectObject(dc, old);
+            DeleteObject(pen);
+        }
+        let border = CreateSolidBrush(if GetFocus() == hwnd { ACCENT } else { BORDER });
+        FrameRect(dc, &r, border);
+        DeleteObject(border);
+        RestoreDC(dc, saved);
     }
 }
 
@@ -663,13 +704,66 @@ unsafe fn checkbox(hwnd: HWND, dc: HDC) {
             right: rect.right,
             bottom: rect.bottom,
         };
-        DrawTextW(
-            dc,
-            label.as_ptr(),
-            n,
-            &mut label_rect,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-        );
+        let multiline = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & BS_MULTILINE as u32 != 0;
+        let flags = if multiline {
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX
+        } else {
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+        };
+        if multiline {
+            let mut measured = label_rect;
+            DrawTextW(dc, label.as_ptr(), n, &mut measured, flags | DT_CALCRECT);
+            label_rect.top = ((rect.bottom - (measured.bottom - measured.top)) / 2).max(0);
+        }
+        DrawTextW(dc, label.as_ptr(), n, &mut label_rect, flags);
         RestoreDC(dc, saved);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::{
+        System::LibraryLoader::GetModuleHandleW,
+        UI::Controls::{EM_GETSEL, EM_UNDO},
+    };
+
+    #[test]
+    fn ctrl_a_replaces_all_unicode_text_and_keeps_native_undo() {
+        unsafe {
+            let parent = CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                ptr::null(),
+                WS_OVERLAPPED,
+                0,
+                0,
+                400,
+                200,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                GetModuleHandleW(ptr::null()),
+                ptr::null(),
+            );
+            assert!(!parent.is_null());
+            let initial = "ÄÖ – Test 85 °C";
+            let edit = crate::native_ui::control(
+                parent,
+                ptr::null_mut(),
+                1,
+                "EDIT",
+                initial,
+                ES_AUTOHSCROLL as u32,
+            );
+            SendMessageW(edit, WM_CHAR, 1, 0);
+            let selection = SendMessageW(edit, EM_GETSEL, 0, 0) as u32;
+            assert_eq!(selection & 0xffff, 0);
+            assert_eq!(selection >> 16, initial.encode_utf16().count() as u32);
+            SendMessageW(edit, WM_CHAR, 'X' as usize, 0);
+            assert_eq!(crate::native_ui::value(edit), "X");
+            assert_ne!(SendMessageW(edit, EM_UNDO, 0, 0), 0);
+            assert_eq!(crate::native_ui::value(edit), initial);
+            DestroyWindow(parent);
+        }
     }
 }

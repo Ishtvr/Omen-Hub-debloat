@@ -6,7 +6,7 @@ Current status, reviewed **29 October 2026** against `0.9.0-dev.2`. This is the 
 
 HP OMEN 16-ap0xxx, **board 8E35 / BIOS F.13**, AMD Ryzen 9 **8940HX**, SMU **0x546F00**, PM table **0x540208**, NVIDIA **RTX 5070 Laptop** (not Ti), VBIOS **98.06.2a.40.da**.
 
-Private NVIDIA write contracts have separate entries for drivers **617.14** and **617.42**, with exact loaded-implementation hashes. Profiles bind device identity and GPU UUID where applicable. Other boards, firmware and GPU implementations do not inherit these private-control permissions. Public Windows/NVIDIA API availability is queried independently; it does not certify an untested system.
+Private NVIDIA write contracts were measured with drivers **617.14** and **617.42**. Since 29 October 2026 (user decision) any installed NVIDIA driver is accepted on this device without an implementation hash; other versions are unmeasured and rely on runtime ABI checks, readback and restore. Profiles bind device identity and GPU UUID where applicable, not the driver version. Other boards, firmware and GPU implementations do not inherit these private-control permissions. Public Windows/NVIDIA API availability is queried independently; it does not certify an untested system.
 
 ## Feature status
 
@@ -22,14 +22,13 @@ Private NVIDIA write contracts have separate entries for drivers **617.14** and 
 | Numeric GPU power limit | Public NVML adapter with original capture, bounds, journal and restore; simulated ABI tests | Configured original GET unsupported on this laptop, so no actual write qualification |
 | CPU PPT / Slow / TDC / EDC / Tctl | Fixed RSMU messages, small decreases, complete original readback/restore | PPT/Slow conflict with active HPOmenCap; broad allowed ranges are not measured safe envelopes |
 | CPU Curve Optimizer / PBO | Full 16-core images around −20; PBO 1× trial | CO steps are not fixed mV; allowed −50…+30 and PBO up to 10× are not fully stability-tested |
-| Windows processor policies / power mode / plan / refresh | Native SET/GET/restore, AC/DC and target-plan originals | Balanced plan required for the overlay mode; real power/display transitions pending |
+| Windows processor policies / power mode / plan / refresh | Native SET/GET/restore, AC/DC and target-plan originals | Overlay mode works only on Balanced (a preset without a plan selects it; another plan skips the mode); real power/display transitions pending |
 | CCD affinity | Saved preference and actual owned test process, both CCDs and original-mask release | Own helper needed; other user programs and real power transitions not qualified |
 | MUX | Hybrid/discrete boot preference set, read back and restored | Physical reboot switch and iGPU-only/dGPU-off battery operation unproven; dashboard shortcut has separate recovery limits |
 | Manual Max-Fan override | Full flag, table/topology checks, readback and persisted restore | Off releases the override only; it does not prove BIOS ownership |
 | Own fan curve / helper Max | Separate helper with CPU/GPU/IR protection; short trial reached 4800/4800 firmware RPM | Helper waits for original Hub; BIOS handover pending; embedded fan curves remain unsupported in profile transactions |
 | Four-zone static lighting / On-Off | Complete RGB/mode snapshots, readback/restore; visible On/Off confirmed by user | No brightness scale, animation, per-key support or independent hotkey/power lifecycle qualification |
 | Profile sign-in | Protected task and exact applied-revision approval implemented | Actual reboot and full independent operation pending; editing/binary replacement invalidates approval |
-| Intel tuning | Format/UI fields only | No integrated Intel backend or available Intel test device |
 
 ## Sign-in permission versus measured lifecycle
 
@@ -41,6 +40,6 @@ New CPU PPT/Slow sign-in approvals require HPOmenCap to be absent until startup 
 
 Full replacement of HP user-mode controllers, durable own ownership, safe BIOS cooling handover, automatic profile reapplication after resume/AC changes and broad model support remain unfinished. The TGP experiment must retain TPM and Secure Boot with user-mode app processes; see its [investigation plan](plans/NVPWRCONTROL_TGP_FORK_PLAN.md).
 
-Direct GPU/VRAM mV controls, FPS limiter, fixed CPU clocks/voltages and the removed APU menus are intentionally absent. The 91-key data catalog preserves compatibility; it is not a count of working controls.
+Direct GPU/VRAM mV controls, FPS limiter, fixed CPU clocks/voltages and the removed APU menus are intentionally absent. The current catalog contains 81 keys; it is not a count of working controls. Intel tuning was removed on 29 October at the user's request. Ten old Intel keys remain readable only through an isolated compatibility type, are absent from the UI/catalog, and block Apply until an explicit Save removes them.
 
 The tray working-set target is **50 MB total across all own resident helpers after sensor activation**. Open-window memory may exceed it. Previous short measurements do not qualify the current/future full helper stack. See [Validation](VALIDATION.md).

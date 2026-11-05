@@ -1,17 +1,15 @@
-//! Exact private control-state ABI, scoped to disassembled, hashed driver builds.
-//! Not a background telemetry source; only explicit curve operations initialize it.
+//! Private control-state ABI, disassembled in drivers 617.14/617.42. Any loaded
+//! driver may use it (user decision, 29 October 2026); missing interfaces, a
+//! different struct version, an implausible grid or failed readback still stop
+//! it. Not a background telemetry source; only explicit curve operations
+//! initialize it.
 use super::{
     gpu::NvidiaIdentity,
     nvidia::{system_library, text_buffer},
 };
 use libloading::Library;
 use omen_core::vf::{VfNode, VfState};
-use sha2::{Digest, Sha256};
-use std::{ffi::c_void, fs::File, io::Read, ptr};
-use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
-};
+use std::{ffi::c_void, ptr};
 
 type Handle = *mut c_void;
 type Query = unsafe extern "C" fn(u32) -> *const c_void;
@@ -40,7 +38,6 @@ pub(super) struct VfControl {
     curve: Buffer,
     control: Buffer,
     ranges: Buffer,
-    implementation_sha256: &'static str,
 }
 fn status(label: &str, result: i32) -> Result<(), String> {
     if result == 0 {
@@ -49,48 +46,9 @@ fn status(label: &str, result: i32) -> Result<(), String> {
         Err(format!("NVAPI V/F {label}: status {result}"))
     }
 }
-fn implementation_hash(address: *const c_void, expected: &str) -> Result<(), String> {
-    let mut module = ptr::null_mut();
-    // SAFETY: FROM_ADDRESS interprets the pointer as code, not a string. Library
-    // ownership and successful NVAPI init retain its module during this query.
-    if unsafe {
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            address.cast(),
-            &mut module,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let mut path = vec![0_u16; 32768];
-    // SAFETY: Live module and bounded writable UTF-16 buffer.
-    let count =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
-    if count == 0 || count >= path.len() {
-        return Err("Private NVIDIA implementation path unavailable".into());
-    }
-    let path = String::from_utf16(&path[..count]).map_err(|e| e.to_string())?;
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut hash = Sha256::new();
-    let mut chunk = [0; 8192];
-    loop {
-        let count = file.read(&mut chunk).map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&chunk[..count]);
-    }
-    if format!("{:x}", hash.finalize()) != expected {
-        return Err(
-            "Private V/F ABI evidence does not match the loaded NVIDIA implementation".into(),
-        );
-    }
-    Ok(())
-}
 impl VfControl {
     pub fn new(identity: &NvidiaIdentity) -> Result<Self, String> {
-        let evidence = super::gpu_support::driver_evidence(identity)?;
+        super::gpu_support::driver_evidence(identity)?;
         let library = system_library("nvapi64.dll")?;
         // SAFETY: Exact public QueryInterface and fixed public/private signatures.
         unsafe {
@@ -113,7 +71,6 @@ impl VfControl {
             let curve: Buffer = std::mem::transmute(get(0x21537ad4)?);
             let control: Buffer = std::mem::transmute(get(0x23f1b133)?);
             let ranges: Buffer = std::mem::transmute(get(0x64b43a6a)?);
-            let control_address = get(0x23f1b133)?;
             status("initialize", init())?;
             // RAII is armed before every further error path.
             let mut session = Self {
@@ -125,16 +82,7 @@ impl VfControl {
                 curve,
                 control,
                 ranges,
-                implementation_sha256: evidence.implementation_sha256,
             };
-            for address in [
-                control_address,
-                mask as *const c_void,
-                curve as *const c_void,
-                ranges as *const c_void,
-            ] {
-                implementation_hash(address, evidence.implementation_sha256)?;
-            }
             let mut handles = [ptr::null_mut(); 64];
             let mut count = 0;
             status(
@@ -283,13 +231,13 @@ impl VfControl {
             control[1 + index / 32] |= 1 << (index % 32);
             control[HEADER_WORDS + index * 9 + 5] = *delta as u32;
         }
-        // SAFETY: Setter signature and v1 layout are traced in the exact loaded
-        // driver. Only validated Graphics masks/frequency words differ from GET.
+        // SAFETY: Setter signature and v1 layout were traced in 617.14/617.42;
+        // GET echoed the same v1 size. Only validated Graphics masks/frequency
+        // words differ from GET, and the complete readback below must match.
         let address = unsafe { (self.query)(0x0733e009) };
         if address.is_null() {
             return Err("V/F frequency setter unavailable".into());
         }
-        implementation_hash(address, self.implementation_sha256)?;
         let setter: Buffer = unsafe { std::mem::transmute(address) };
         status("frequency SET", unsafe {
             setter(self.handle, control.as_mut_ptr())
@@ -325,7 +273,7 @@ impl Drop for VfControl {
 mod tests {
     use super::*;
     #[test]
-    fn exact_driver_v1_sizes_and_offsets() {
+    fn traced_v1_sizes_and_offsets() {
         assert_eq!(68 + 255 * 24, MASK_BYTES);
         assert_eq!(68 + 255 * 28, CURVE_BYTES);
         assert_eq!(68 + 255 * 36, CONTROL_BYTES);

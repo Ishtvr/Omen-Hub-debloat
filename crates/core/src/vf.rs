@@ -126,6 +126,27 @@ impl VfState {
     }
     /// Derive once from the durable capture, so recovery can reconstruct the
     /// exact controls even if boost observations change before or after SET.
+    /// The driver's own curve: every programmed frequency delta removed. At the
+    /// lowest anchors the driver clamps the reported frequency, so "reported
+    /// minus delta" can overshoot there (measured 30 October 2026: 903, 888,
+    /// then 386 MHz). Such points are lowered to the next higher anchor's
+    /// frequency, which keeps the curve non-decreasing as editors require.
+    pub fn factory(&self) -> Result<Self, String> {
+        let mut state = self.clone();
+        for node in &mut state.nodes {
+            node.frequency_khz =
+                u32::try_from(i64::from(node.frequency_khz) - i64::from(node.delta_khz))
+                    .map_err(|_| crate::message::msg("vf.err.frequency", &[]))?;
+            node.delta_khz = 0;
+        }
+        let mut ceiling = u32::MAX;
+        for node in state.nodes.iter_mut().rev() {
+            node.frequency_khz = node.frequency_khz.min(ceiling);
+            ceiling = node.frequency_khz;
+        }
+        state.validate()?;
+        Ok(state)
+    }
     pub fn target_state(&self, target: &[VfPoint]) -> Result<Self, String> {
         let deltas = self.target_deltas(target)?;
         let mut state = self.clone();
@@ -252,6 +273,40 @@ mod tests {
         assert!(state.target_deltas(&points[..2]).is_err());
         assert!(plateau(&state, 900, 999).is_err());
         assert!(plateau(&state, 900, u32::MAX).is_err());
+    }
+    #[test]
+    fn factory_curve_removes_every_programmed_delta() {
+        let factory = state().factory().unwrap();
+        assert!(factory.nodes.iter().all(|p| p.delta_khz == 0));
+        assert_eq!(
+            factory
+                .nodes
+                .iter()
+                .map(|p| p.frequency_khz)
+                .collect::<Vec<_>>(),
+            [985000, 1170000, 1355000]
+        );
+        assert!(state().domain_matches(&factory).unwrap());
+    }
+    #[test]
+    fn clamped_low_anchors_never_make_the_factory_curve_fall() {
+        // Measured shape: the driver reports a clamped low frequency, so
+        // "reported minus delta" overshoots at the first anchors.
+        let mut clamped = state();
+        clamped.nodes[0].frequency_khz = 400000;
+        clamped.nodes[0].delta_khz = -500000; // 900 MHz derived
+        clamped.nodes[1].frequency_khz = 570000;
+        clamped.nodes[1].delta_khz = 184000; // 386 MHz derived
+        clamped.nodes[2].frequency_khz = 1400000;
+        clamped.nodes[2].delta_khz = 0;
+        let factory = clamped.factory().unwrap();
+        let mhz: Vec<_> = factory
+            .nodes
+            .iter()
+            .map(|p| p.frequency_khz / 1000)
+            .collect();
+        assert_eq!(mhz, [386, 386, 1400]);
+        assert!(factory.value().is_ok());
     }
     #[test]
     fn incomplete_and_nonrepresentable_states_are_not_rounded() {

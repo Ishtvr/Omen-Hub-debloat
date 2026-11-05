@@ -20,6 +20,9 @@ fn print<T: Serialize>(value: &T) -> Result<(), String> {
 }
 
 fn parse_value(feature: Feature, text: &str) -> Result<Value, String> {
+    if feature.retired() {
+        return Err(crate::i18n::t("profile.err.removed_intel").into());
+    }
     match feature.descriptor().value_kind {
         ValueKind::Integer => text
             .parse::<i64>()
@@ -66,10 +69,13 @@ pub fn handles(command: &str) -> bool {
             | "profile-restore"
             | "profile-ui-apply"
             | "mode-ui-apply"
+            | "hp-performance-step"
             | "cpu-smu-probe"
             | "fan-service"
             | "fan-service-stop"
             | "mux-ui-apply"
+            | "hp-service-ui"
+            | "hp-service-restore"
             | "fan-service-install"
             | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
@@ -88,7 +94,7 @@ pub fn handles(command: &str) -> bool {
 /// failed trial may return to that checkpoint only after complete live restore
 /// and an exact, closed trial journal; a pending recovery is never hidden.
 fn gpu_qualification(store: &mut ProfileStore, command: &str) -> Result<(), String> {
-    let _lease = ControlLease::acquire()?;
+    let _lease = ControlLease::acquire_foreground()?;
     let checkpoint = store.checkpoint_completed_journal()?;
     let mut controller = Controller::new(true, None)?;
     let before_gpu = controller.gpu_report()?;
@@ -150,6 +156,55 @@ fn gpu_qualification(store: &mut ProfileStore, command: &str) -> Result<(), Stri
     final_check
 }
 
+/// Before a preset's transaction: the HP mode its Dynamic Boost field selects
+/// (the Hub's full mode sequence, incl. its TPP and PL1), then the preset's
+/// own TPP. The transaction then writes the preset's flags, curve, offsets,
+/// CPU limits and Windows values, so they win; CPU values the preset leaves
+/// out follow the mode. Neither step has a readback-based restore. The
+/// caller holds the control lease.
+fn apply_hp_prelude(
+    profile: &omen_core::profiles::PerformanceProfile,
+    inventory: &omen_core::Inventory,
+) -> Result<(), String> {
+    use omen_core::hp_mode::HpMode;
+    // Validate even the unconfirmed shared-budget request before any mode SET.
+    let shared_budget = HpMode::shared_budget_of_profile(profile)?;
+    let ac = omen_platform::power_status().ac_connected == Some(true);
+    if let Some(mode) = HpMode::of_preset(profile, ac) {
+        omen_platform::apply_hp_mode(inventory, mode)?;
+        // The firmware keeps the mode's PL1; make it the preset's Slow PPT.
+        if let Some(watts) = HpMode::cpu_pl1_of_profile(profile) {
+            omen_platform::write_hp_cpu_pl1(inventory, watts)?;
+        }
+    }
+    if let Some(watts) = shared_budget {
+        omen_platform::write_hp_shared_budget(inventory, watts)?;
+    }
+    Ok(())
+}
+
+fn prepare_apply(
+    profile: &omen_core::profiles::PerformanceProfile,
+    store: &ProfileStore,
+    startup: bool,
+) -> Result<Controller, String> {
+    // Recovery and preflight precede even the mode/TPP prelude.
+    if store.pending()? {
+        return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
+    }
+    let mut controller = Controller::for_profile(profile)?;
+    let checked = transaction::plan(profile, &mut controller, startup);
+    if !checked.applicable {
+        return Err(checked
+            .blockers
+            .iter()
+            .map(|b| b.reason.as_str())
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+    Ok(controller)
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let result = run_inner(args);
     // Return early errors (e.g. access/session/empty journal) to the matching UI
@@ -163,6 +218,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
             Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
             Some("mux-ui-apply") if args.len() == 3 => Some(("mux", args[2].as_str())),
+            Some("hp-service-ui") if args.len() == 3 => Some(("hp_service", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
             Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
             Some("profile-ui-startup-enable") if args.len() == 3 => {
@@ -192,7 +248,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
         Some("cpu-smu-calibrate-limits") if args.len() == 1 => {
             // Fixed approved qualification: lower each limit once, find its
             // PM-table cell, write the previous value back.
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let report = omen_platform::smu_calibrate_limits(&omen_platform::inventory())?;
             let store = ProfileStore::user_data()?;
             std::fs::write(
@@ -206,7 +262,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(Some(&args[2]))?;
             let mode = omen_core::quick_switch::GraphicsMode::parse(&args[1])
                 .ok_or("Unknown graphics mode")?;
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let report = omen_platform::apply_graphics_mode(&omen_platform::inventory(), mode)?;
             let store = ProfileStore::user_data()?;
             let now = std::time::SystemTime::now()
@@ -223,6 +279,28 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             store.save_graphics_mode(&record)?;
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"mux","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
+        }
+        Some("hp-service-ui") if args.len() == 3 => {
+            // Fixed target: only HPOmenCap, only its start type and run state.
+            validate_nonce(Some(&args[2]))?;
+            let disable = match args[1].as_str() {
+                "disable" => true,
+                "restore" => false,
+                _ => return Err("Unknown HP service action".into()),
+            };
+            let _lease = ControlLease::acquire_foreground()?;
+            let report = omen_platform::hp_control::set_oem_service_disabled(disable)?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"hp_service","nonce":args[2],"result":{"Ok":report}}))?;
+            return print(&report);
+        }
+        Some("hp-service-restore") if args.len() == 1 => {
+            // Uninstaller: return HPOmenCap only if this app disabled it.
+            if ProfileStore::user_data()?.hp_service_start_type().is_none() {
+                return print(&serde_json::json!({"restored":false}));
+            }
+            let _lease = ControlLease::acquire_foreground()?;
+            let report = omen_platform::hp_control::set_oem_service_disabled(false)?;
+            return print(&serde_json::json!({"restored":true,"service":report}));
         }
         Some("fan-service-stop") if args.len() == 1 => {
             return print(
@@ -263,10 +341,18 @@ fn run_inner(args: &[String]) -> Result<(), String> {
         Some("mode-ui-apply") if args.len() == 3 => {
             validate_nonce(Some(&args[2]))?;
             let mode = omen_core::hp_mode::HpMode::parse(&args[1])?;
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
             ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
+        }
+        Some("hp-performance-step") if args.len() == 2 => {
+            // Measurement only: the Hub's Performance slider step L5/L6 thermal
+            // byte. Run `mode-ui-apply performance` first for flags, TPP and PL1.
+            let _lease = ControlLease::acquire_foreground()?;
+            omen_platform::write_hp_performance_step(&omen_platform::inventory(), &args[1])?;
+            ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":null,"result":{"Ok":{"performance_step":args[1]}}}))?;
+            return print(&serde_json::json!({"performance_step":args[1],"readback":false}));
         }
         Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
             validate_nonce(Some(&args[1]))?;
@@ -297,7 +383,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             return print(&serde_json::json!({"directory":ProfileStore::user_data()?.root()}));
         }
         Some("profile-migrate-legacy") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let store = ProfileStore::user_data()?;
             return print(
                 &serde_json::json!({"copied_profiles":store.migrate_legacy()?,"directory":store.root(),"startup_enabled":false,"hardware_applied":false}),
@@ -323,7 +409,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
     let mut store = ProfileStore::user_data()?;
     match args.first().map(String::as_str) {
         Some("fan-validate-max") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             if store.pending()? {
                 return Err("Pending recovery blocks the fixed max-fan trial".into());
             }
@@ -357,7 +443,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             final_check
         }
         Some("keyboard-validate-colors" | "keyboard-validate-lighting") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             if store.pending()? {
                 return Err("Pending recovery blocks the fixed keyboard color trial".into());
             }
@@ -467,7 +553,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             print(&transaction::plan(&profile, &mut controller, false))
         }
         Some("profile-verify-current") if args.len() == 2 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let profile = store.load(&args[1])?;
             // The journal must describe a completed application of this exact
             // revision. Verification only GETs current targets; it never applies
@@ -482,7 +568,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
         Some("profile-apply" | "profile-apply-trace" | "profile-ui-apply")
             if args.len() == 2 || (args[0] == "profile-ui-apply" && args.len() == 3) =>
         {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let nonce = if args[0] == "profile-ui-apply" {
                 args.get(2).map(String::as_str)
             } else {
@@ -500,13 +586,27 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 // first so the saved selection takes effect.
                 crate::startup_setup::ensure_fan_service()?;
             }
-            let mut controller = Controller::for_profile(&profile)?;
+            let mut controller = prepare_apply(&profile, &store, false)?;
+            apply_hp_prelude(&profile, controller.inventory())?;
             let tracing = args[0] == "profile-apply-trace";
             if tracing {
                 controller.trace_cpu_readbacks();
             }
+            // Logged only: preset values overwrite the HP service's (user rule).
+            let notes: Vec<String> =
+                omen_platform::hp_control::check_cpu_power_settings(&profile.effective().settings)
+                    .err()
+                    .into_iter()
+                    .collect();
             let result = transaction::apply(&profile, &digest, &mut controller, &mut store, false);
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"result":result}))?;
+            // TPP has a SET contract but no exact GET. Do not include it in
+            // the verified transaction or imply a fully confirmed firmware state.
+            let unconfirmed: Vec<_> = profile
+                .settings
+                .iter()
+                .filter(|s| s.feature == Feature::HpSharedPowerMw)
+                .collect();
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"result":result}))?;
             if tracing {
                 print(
                     &serde_json::json!({"result":result,"cpu_readbacks":controller.cpu_readback_observations()}),
@@ -522,7 +622,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             if args.len() == 1
                 || (args[0] == "profile-ui-restore" && (args.len() == 2 || args.len() == 3)) =>
         {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let nonce = if args.len() == 3 {
                 args.get(2)
             } else {
@@ -541,13 +641,13 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result}))?;
             result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
             print(
-                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":if saved.requested.iter().any(|s|s.feature.descriptor().category==omen_core::features::Category::Gpu){Some(controller.gpu_report()?)}else{None}}),
+                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":if saved.requested.iter().any(|s|s.feature.needs_nvidia()){Some(controller.gpu_report()?)}else{None}}),
             )
         }
         Some("profile-startup-enable" | "profile-ui-startup-enable")
             if args.len() == 2 || (args[0] == "profile-ui-startup-enable" && args.len() == 3) =>
         {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let nonce = args.get(2).map(String::as_str);
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
@@ -569,12 +669,12 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             print(&store.startup()?)
         }
         Some("profile-startup-disable") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             store.disable_startup()?;
             print(&store.startup()?)
         }
         Some("profile-startup-apply") if args.len() == 1 => {
-            let _lease = ControlLease::acquire()?;
+            let _lease = ControlLease::acquire_foreground()?;
             let selection_at_start = store.startup()?;
             let result = (|| {
                 let Some(profile) = store.startup_profile()? else {
@@ -582,7 +682,8 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 };
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
-                let mut controller = Controller::for_profile(&profile)?;
+                let mut controller = prepare_apply(&profile, &store, true)?;
+                apply_hp_prelude(&profile, controller.inventory())?;
                 transaction::apply(&profile, &digest, &mut controller, &mut store, true)
                     .map(Some)
                     .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
@@ -630,4 +731,25 @@ fn validate_nonce(nonce: Option<&str>) -> Result<(), String> {
         return Err("Invalid UI operation token".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_cli_values_cannot_reintroduce_retired_settings() {
+        for name in [
+            "intel_pl1_mw",
+            "intel_cache_voltage_offset_mv",
+            "intel_core_ratios",
+        ] {
+            let feature = serde_json::from_value::<Feature>(serde_json::json!(name)).unwrap();
+            assert!(parse_value(feature, "45000").is_err());
+        }
+        assert_eq!(
+            parse_value(Feature::CpuPptLimitMw, "45000").unwrap(),
+            Value::Integer(45000)
+        );
+    }
 }

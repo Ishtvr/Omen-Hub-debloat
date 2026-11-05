@@ -1,4 +1,6 @@
-//! Adapter-independent preflight, readback and rollback. No partial profile success.
+//! Adapter-independent preflight, readback and rollback. A normal Apply
+//! applies every value it can and returns failed ones to their original;
+//! validation trials stay all-or-nothing.
 use crate::{
     features::Feature,
     profiles::{DeviceBinding, PerformanceProfile, Setting, Value},
@@ -9,7 +11,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Access {
     Unsupported,
-    ReadOnly,
     NeedsValidation,
     ReadWrite,
 }
@@ -35,24 +36,21 @@ impl Capability {
             startup_safe: false,
         }
     }
-    fn check(&self, setting: &Setting, context: &Context, startup: bool) -> Result<(), String> {
-        if self.feature != setting.feature || self.access != Access::ReadWrite {
+    /// Only missing hardware/driver support and values beyond the reported
+    /// range refuse a setting (user rule, 30 October 2026). Pending validation,
+    /// AC, sign-in use and unknown ranges no longer block: Apply writes and
+    /// verifies by readback, and the setting alone is skipped if that fails.
+    fn check(&self, setting: &Setting, _context: &Context, _startup: bool) -> Result<(), String> {
+        if self.feature != setting.feature || self.access == Access::Unsupported {
             return Err(self.reason.clone());
         }
-        if self.requires_ac && context.ac_connected != Some(true) {
-            return Err(crate::message::msg("transaction.err.ac_required", &[]));
-        }
-        if startup && !self.startup_safe {
-            return Err(crate::message::msg("transaction.err.startup", &[]));
-        }
-        if let Value::Integer(value) = setting.value {
-            let (minimum, maximum) = self
-                .integer_range
-                .ok_or(crate::message::msg("transaction.err.bounds_missing", &[]))?;
-            if minimum > maximum || !(minimum..=maximum).contains(&value) {
+        if let (Value::Integer(value), Some((minimum, maximum))) =
+            (&setting.value, self.integer_range)
+        {
+            if minimum > maximum || !(minimum..=maximum).contains(value) {
                 return Err(crate::message::msg(
                     "transaction.err.bounds",
-                    &[&value, &minimum, &maximum],
+                    &[value, &minimum, &maximum],
                 ));
             }
         }
@@ -112,6 +110,19 @@ pub trait Backend {
             ))
         }
     }
+    /// Verify the whole requested set. A partial list of matching values must
+    /// never become a successful current-preset or sign-in qualification.
+    fn verify_targets(&mut self, settings: &[Setting]) -> Result<Vec<Setting>, String> {
+        settings
+            .iter()
+            .map(|setting| {
+                self.verify_target(setting).map(|value| Setting {
+                    feature: setting.feature,
+                    value,
+                })
+            })
+            .collect()
+    }
     /// Capture every field this operation can affect, not only its displayed value.
     fn capture(&mut self, feature: Feature) -> Result<Captured<Self::RestoreState>, String>;
     /// Check every captured control again, including opaque coupled fields. A
@@ -160,6 +171,7 @@ pub struct Plan {
 }
 
 pub fn plan(profile: &PerformanceProfile, backend: &mut impl Backend, startup: bool) -> Plan {
+    let profile = &profile.effective();
     let mut result = Plan {
         profile_id: profile.id.clone(),
         applicable: false,
@@ -286,6 +298,11 @@ pub trait Journal<S> {
     fn resume_restore(&mut self, _transaction: &PendingTransaction<S>) -> Result<(), String> {
         Err(crate::message::msg("transaction.err.journal_recovery", &[]))
     }
+    /// Replace the originals of the pending transaction (same profile and
+    /// requested settings) before the affected setting is written.
+    fn update_original(&mut self, _transaction: &PendingTransaction<S>) -> Result<(), String> {
+        Err(crate::message::msg("transaction.err.journal_recovery", &[]))
+    }
 }
 
 /// Recovery is explicit. Unknown context/images fail before any restore write.
@@ -332,6 +349,12 @@ pub fn recover<B: Backend>(
     if result.rollback_errors.is_empty() {
         Ok(())
     } else {
+        // An explicit Restore reports the values it could not return, but
+        // closes the entry instead of leaving every later action blocked.
+        let mut result = result;
+        if let Err(reason) = journal.finish(Completion::Restored) {
+            result.rollback_errors.push(reason);
+        }
         Err(result)
     }
 }
@@ -343,6 +366,19 @@ pub struct Applied {
     pub verified: Vec<Setting>,
     pub observed: Vec<Setting>,
     pub restored_original: bool,
+    /// Settings left at (or returned to) their original; the rest applied.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
+    /// Settings that changed outside this transaction before their write;
+    /// their live value became the restore original.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub adopted: Vec<Skipped>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Skipped {
+    pub feature: Feature,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -424,6 +460,8 @@ fn apply_inner<B: Backend>(
     startup: bool,
     restore_after: bool,
 ) -> Result<Applied, ApplyFailure> {
+    // The journal records exactly the settings this transaction writes.
+    let profile = &profile.effective();
     let fail = |error| ApplyFailure {
         error,
         rollback_errors: vec![],
@@ -457,7 +495,7 @@ fn apply_inner<B: Backend>(
         .map_err(fail)?;
         original.push(saved);
     }
-    let transaction = PendingTransaction {
+    let mut transaction = PendingTransaction {
         schema: 1,
         profile_id: profile.id.clone(),
         profile_digest: digest.into(),
@@ -466,28 +504,72 @@ fn apply_inner<B: Backend>(
         requested: profile.settings.clone(),
     };
     journal.begin(&transaction).map_err(fail)?;
+    // A normal Apply does not stop at one value (user rule, 30 October 2026):
+    // a setting that fails is returned to its original and reported, the
+    // others stay applied. Validation trials keep all-or-nothing.
+    let lenient = !restore_after;
+    let mut skipped = vec![];
+    let mut adopted = vec![];
     let mut attempted = vec![];
     for index in order {
         let setting = &profile.settings[index];
         // Revalidate power, identity and limits immediately before every write.
-        let prewrite = (|| {
-            let context = backend.context()?;
-            if !profile
-                .binding
-                .for_settings(&profile.settings)
-                .matches(&context.binding)
-            {
-                return Err(crate::message::msg("transaction.err.context_changed", &[]));
-            }
-            backend
-                .capability(setting.feature)
-                .check(setting, &context, startup)?;
-            backend.validate_setting(setting)?;
-            backend.verify_captured(&original[index])?;
-            Ok(())
-        })();
-        if let Err(error) = prewrite {
+        // A different device always stops the whole preset.
+        let context = match backend.context() {
+            Ok(context) => context,
+            Err(error) => return Err(rollback(backend, journal, &original, &attempted, error)),
+        };
+        if !profile
+            .binding
+            .for_settings(&profile.settings)
+            .matches(&context.binding)
+        {
+            let error = crate::message::msg("transaction.err.context_changed", &[]);
             return Err(rollback(backend, journal, &original, &attempted, error));
+        }
+        let checked = backend
+            .capability(setting.feature)
+            .check(setting, &context, startup)
+            .and_then(|()| backend.validate_setting(setting));
+        if let Err(error) = checked {
+            if !lenient {
+                return Err(rollback(backend, journal, &original, &attempted, error));
+            }
+            skipped.push(Skipped {
+                feature: setting.feature,
+                reason: error,
+            });
+            continue;
+        }
+        if let Err(error) = backend.verify_captured(&original[index]) {
+            if !lenient {
+                return Err(rollback(backend, journal, &original, &attempted, error));
+            }
+            // Changed outside this transaction (firmware, user): the live value
+            // becomes the original Restore returns to; the preset still applies.
+            let fresh = match backend.capture(setting.feature) {
+                Ok(fresh) if fresh.feature == setting.feature => fresh,
+                Ok(_) => {
+                    let error = crate::message::msg("transaction.err.capture_mismatch", &[]);
+                    return Err(rollback(backend, journal, &original, &attempted, error));
+                }
+                Err(reason) => {
+                    skipped.push(Skipped {
+                        feature: setting.feature,
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            original[index] = fresh;
+            transaction.original = original.clone();
+            if let Err(reason) = journal.update_original(&transaction) {
+                return Err(rollback(backend, journal, &original, &attempted, reason));
+            }
+            adopted.push(Skipped {
+                feature: setting.feature,
+                reason: error,
+            });
         }
         let unchanged = match backend.captured_matches_target(&original[index], setting) {
             Ok(value) => value,
@@ -497,11 +579,31 @@ fn apply_inner<B: Backend>(
             continue;
         }
         attempted.push(index);
-        let write = backend
-            .write(setting)
-            .and_then(|()| backend.verify_target(setting).map(|_| ()));
-        if let Err(error) = write {
-            return Err(rollback(backend, journal, &original, &attempted, error));
+        let mut write = || {
+            backend
+                .write(setting)
+                .and_then(|()| backend.verify_target(setting).map(|_| ()))
+        };
+        // One more write for a value the firmware took over late.
+        let result = match write() {
+            Err(_) if lenient => write(),
+            result => result,
+        };
+        if let Err(error) = result {
+            if !lenient {
+                return Err(rollback(backend, journal, &original, &attempted, error));
+            }
+            if let Err(reason) = restore_one(backend, &original[index]) {
+                // This value cannot return to its original: full rollback, and
+                // the journal stays pending for recovery if that fails too.
+                let error = format!("{error}; {reason}");
+                return Err(rollback(backend, journal, &original, &attempted, error));
+            }
+            attempted.retain(|i| *i != index);
+            skipped.push(Skipped {
+                feature: setting.feature,
+                reason: error,
+            });
         }
     }
     // An AC disconnect or driver/context change during the last write must not
@@ -526,13 +628,39 @@ fn apply_inner<B: Backend>(
         return Err(rollback(backend, journal, &original, &attempted, error));
     }
     // A later operation can affect an earlier setting. Verify the complete target.
-    let mut observed = vec![];
-    for setting in &profile.settings {
+    for (index, setting) in profile.settings.iter().enumerate() {
+        if skipped
+            .iter()
+            .any(|s: &Skipped| s.feature == setting.feature)
+        {
+            continue;
+        }
         match backend.verify_target(setting) {
-            Ok(value) => observed.push(Setting {
-                feature: setting.feature,
-                value,
-            }),
+            Ok(_) => {}
+            Err(error) if lenient => {
+                // A later write moved this value: write it once more.
+                // Even a target skipped as initially equal can mutate here;
+                // include it in every subsequent rollback before the setter.
+                if !attempted.contains(&index) {
+                    attempted.push(index);
+                }
+                if backend
+                    .write(setting)
+                    .and_then(|()| backend.verify_target(setting))
+                    .is_ok()
+                {
+                    continue;
+                }
+                if let Err(reason) = restore_one(backend, &original[index]) {
+                    let error = format!("{error}; {reason}");
+                    return Err(rollback(backend, journal, &original, &attempted, error));
+                }
+                attempted.retain(|i| *i != index);
+                skipped.push(Skipped {
+                    feature: setting.feature,
+                    reason: error,
+                });
+            }
             Err(error) => {
                 return Err(rollback(
                     backend,
@@ -544,6 +672,26 @@ fn apply_inner<B: Backend>(
                         crate::message::msg("transaction.err.final_profile", &[])
                     ),
                 ));
+            }
+        }
+    }
+    // Correcting a later target (or restoring a skipped one) can invalidate
+    // an earlier observation. This final pass is read-only and bounded: no
+    // mutually coupled setters can produce a false successful Apply.
+    let verified: Vec<_> = profile
+        .settings
+        .iter()
+        .filter(|setting| !skipped.iter().any(|s| s.feature == setting.feature))
+        .cloned()
+        .collect();
+    let observed = match backend.verify_targets(&verified) {
+        Ok(observed) => observed,
+        Err(error) => return Err(rollback(backend, journal, &original, &attempted, error)),
+    };
+    for saved in &original {
+        if skipped.iter().any(|s| s.feature == saved.feature) {
+            if let Err(error) = backend.verify_captured(saved) {
+                return Err(rollback(backend, journal, &original, &attempted, error));
             }
         }
     }
@@ -564,10 +712,21 @@ fn apply_inner<B: Backend>(
     Ok(Applied {
         profile_id: profile.id.clone(),
         profile_digest: digest.into(),
-        verified: profile.settings.clone(),
+        verified,
         observed,
         restored_original: restore_after,
+        skipped,
+        adopted,
     })
+}
+
+/// Return one setting to its captured original and verify it.
+fn restore_one<B: Backend>(
+    backend: &mut B,
+    saved: &Captured<B::RestoreState>,
+) -> Result<(), String> {
+    backend.restore(saved)?;
+    backend.verify_captured(saved)
 }
 
 #[cfg(test)]
@@ -583,6 +742,7 @@ mod tests {
         fail_restore: bool,
         quantize_memory: bool,
         couple_last: bool,
+        couple_both: bool,
         disconnect_after_two_writes: bool,
         reject_adapter_target: bool,
         drift_after_capture: bool,
@@ -685,12 +845,19 @@ mod tests {
                 return Err("restore failure".into());
             }
             self.values.insert(setting.feature, setting.value.clone());
+            if self.couple_both
+                && setting.feature == Feature::GpuCoreOffsetMhz
+                && setting.value != Value::Integer(0)
+            {
+                self.values
+                    .insert(Feature::GpuMemoryOffsetMhz, Value::Integer(99));
+            }
             if setting.feature == Feature::GpuMemoryOffsetMhz && setting.value != Value::Integer(0)
             {
                 if self.quantize_memory {
                     self.values.insert(setting.feature, Value::Integer(14));
                 }
-                if self.couple_last {
+                if self.couple_last || self.couple_both {
                     self.values
                         .insert(Feature::GpuCoreOffsetMhz, Value::Integer(99));
                 }
@@ -733,6 +900,13 @@ mod tests {
             self.completed = Some(completion);
             Ok(())
         }
+        fn update_original(&mut self, saved: &PendingTransaction<Value>) -> Result<(), String> {
+            if !self.pending {
+                return Err("test journal inactive".into());
+            }
+            self.saved = Some(saved.clone());
+            Ok(())
+        }
     }
     fn fixture() -> (PerformanceProfile, FakeBackend, FakeJournal) {
         let features = [Feature::GpuCoreOffsetMhz, Feature::GpuMemoryOffsetMhz];
@@ -756,6 +930,7 @@ mod tests {
             fail_restore: false,
             quantize_memory: false,
             couple_last: false,
+            couple_both: false,
             disconnect_after_two_writes: false,
             reject_adapter_target: false,
             drift_after_capture: false,
@@ -796,6 +971,21 @@ mod tests {
         assert!(apply(&profile, "digest", &mut backend, &mut journal, false).is_err());
         assert!(backend.writes.is_empty());
         assert!(!journal.pending);
+    }
+    #[test]
+    fn retired_intel_intent_blocks_the_whole_profile_before_any_journal_or_write() {
+        let (mut profile, mut backend, mut journal) = fixture();
+        profile.settings.push(
+            serde_json::from_str(
+                r#"{"feature":"intel_pl1_mw","value":{"kind":"integer","value":45000}}"#,
+            )
+            .unwrap(),
+        );
+        profile.validate().unwrap();
+        let error = apply(&profile, "legacy", &mut backend, &mut journal, false).unwrap_err();
+        assert!(error.error.contains("profile.err.removed_intel"));
+        assert!(backend.writes.is_empty());
+        assert!(journal.saved.is_none());
     }
     #[test]
     fn hardware_specific_target_validation_blocks_all_domains_before_journaling() {
@@ -848,21 +1038,38 @@ mod tests {
         assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
     }
     #[test]
-    fn partial_failure_restores_failing_setter_then_previous_writes() {
+    fn a_failing_setter_returns_to_its_original_and_the_rest_stays_applied() {
         let (profile, mut backend, mut journal) = fixture();
         backend.fail_second = true;
-        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.rollback_errors.is_empty());
-        assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
+        let applied = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap();
+        assert_eq!(applied.skipped.len(), 1);
+        assert_eq!(applied.skipped[0].feature, Feature::GpuMemoryOffsetMhz);
+        assert_eq!(applied.verified, profile.settings[..1]);
+        assert_eq!(
+            backend.values[&Feature::GpuCoreOffsetMhz],
+            Value::Integer(15)
+        );
+        assert_eq!(
+            backend.values[&Feature::GpuMemoryOffsetMhz],
+            Value::Integer(0)
+        );
+        // Write, one more write, then the restore of only that setting.
         assert_eq!(
             backend.writes,
             [
                 Feature::GpuCoreOffsetMhz,
                 Feature::GpuMemoryOffsetMhz,
                 Feature::GpuMemoryOffsetMhz,
-                Feature::GpuCoreOffsetMhz
+                Feature::GpuMemoryOffsetMhz
             ]
         );
+        assert_eq!(journal.completed, Some(Completion::Applied));
+        // Validation trials stay all-or-nothing.
+        let (profile, mut backend, mut journal) = fixture();
+        backend.fail_second = true;
+        let error = trial(&profile, "digest", &mut backend, &mut journal).unwrap_err();
+        assert!(error.rollback_errors.is_empty());
+        assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
         assert_eq!(journal.completed, Some(Completion::Restored));
     }
     #[test]
@@ -876,19 +1083,29 @@ mod tests {
         assert!(journal.completed.is_none());
     }
     #[test]
-    fn external_drift_before_any_write_closes_the_journal_without_restoring() {
+    fn external_drift_becomes_the_restore_original_and_the_preset_still_applies() {
         let (profile, mut backend, mut journal) = fixture();
         backend.drift_after_capture = true;
-        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("transaction.err.original_changed"));
-        assert!(error.rollback_errors.is_empty());
-        assert!(backend.writes.is_empty());
-        assert!(!journal.pending);
-        assert_eq!(journal.completed, Some(Completion::Restored));
+        let applied = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap();
+        assert!(applied.skipped.is_empty());
+        assert_eq!(applied.adopted.len(), 1);
+        assert_eq!(applied.adopted[0].feature, Feature::GpuCoreOffsetMhz);
+        assert!(backend.values.values().all(|v| *v == Value::Integer(15)));
+        assert_eq!(journal.completed, Some(Completion::Applied));
+        let saved = journal.saved.clone().unwrap();
+        assert_eq!(saved.original[0].value, Value::Integer(7));
+        // Restore returns to the adopted value, not to the stale capture.
+        recover(&saved, &mut backend, &mut journal).unwrap();
         assert_eq!(
             backend.values[&Feature::GpuCoreOffsetMhz],
             Value::Integer(7)
         );
+        // A trial still refuses a control that changed under it.
+        let (profile, mut backend, mut journal) = fixture();
+        backend.drift_after_capture = true;
+        let error = trial(&profile, "digest", &mut backend, &mut journal).unwrap_err();
+        assert!(error.error.contains("transaction.err.original_changed"));
+        assert!(backend.writes.is_empty());
     }
     #[test]
     fn no_hardware_write_without_durable_original_snapshot() {
@@ -908,31 +1125,77 @@ mod tests {
         assert!(backend.writes.is_empty());
     }
     #[test]
-    fn driver_quantization_is_failure_and_restores_all_attempted_domains() {
+    fn driver_quantization_skips_that_domain_and_keeps_the_others() {
         let (profile, mut backend, mut journal) = fixture();
         backend.quantize_memory = true;
-        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
+        let applied = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap();
+        assert_eq!(applied.skipped.len(), 1);
+        assert!(
+            applied.skipped[0]
+                .reason
+                .contains("transaction.err.readback")
+        );
+        assert_eq!(
+            backend.values[&Feature::GpuCoreOffsetMhz],
+            Value::Integer(15)
+        );
+        assert_eq!(
+            backend.values[&Feature::GpuMemoryOffsetMhz],
+            Value::Integer(0)
+        );
+        let (profile, mut backend, mut journal) = fixture();
+        backend.quantize_memory = true;
+        let error = trial(&profile, "digest", &mut backend, &mut journal).unwrap_err();
         assert!(error.error.contains("transaction.err.readback"));
-        assert!(error.rollback_errors.is_empty());
         assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
     }
     #[test]
     fn complete_target_is_rechecked_after_coupled_writes() {
         let (profile, mut backend, mut journal) = fixture();
         backend.couple_last = true;
-        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
+        let applied = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap();
+        // The coupled write moved core away; the final check writes it again.
+        assert!(applied.skipped.is_empty());
+        assert!(backend.values.values().all(|v| *v == Value::Integer(15)));
+        let (profile, mut backend, mut journal) = fixture();
+        backend.couple_last = true;
+        let error = trial(&profile, "digest", &mut backend, &mut journal).unwrap_err();
         assert!(error.error.contains("transaction.err.final_profile"));
         assert!(error.rollback_errors.is_empty());
         assert!(backend.values.values().all(|v| *v == Value::Integer(0)));
     }
     #[test]
-    fn last_write_ac_disconnect_cannot_commit_success() {
+    fn a_partial_readback_cannot_verify_the_whole_preset() {
+        let (profile, mut backend, _) = fixture();
+        backend
+            .values
+            .insert(Feature::GpuCoreOffsetMhz, Value::Integer(15));
+        assert!(backend.verify_targets(&profile.settings).is_err());
+        backend
+            .values
+            .insert(Feature::GpuMemoryOffsetMhz, Value::Integer(15));
+        assert_eq!(
+            backend.verify_targets(&profile.settings).unwrap(),
+            profile.settings
+        );
+    }
+    #[test]
+    fn corrective_writes_cannot_commit_stale_earlier_readbacks() {
+        let (profile, mut backend, mut journal) = fixture();
+        backend.couple_both = true;
+        assert!(apply(&profile, "coupled", &mut backend, &mut journal, false).is_err());
+        assert_ne!(journal.completed, Some(Completion::Applied));
+        // This is a bounded correction, never an endless fight with firmware.
+        assert!(backend.writes.len() <= 8);
+    }
+    #[test]
+    fn an_ac_disconnect_during_apply_no_longer_undoes_the_preset() {
+        // AC is no longer a precondition (user rule, 30 October 2026).
         let (profile, mut backend, mut journal) = fixture();
         backend.disconnect_after_two_writes = true;
-        let error = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap_err();
-        assert!(error.error.contains("transaction.err.ac_required"));
-        assert!(error.rollback_errors.is_empty());
-        assert_eq!(journal.completed, Some(Completion::Restored));
+        let applied = apply(&profile, "digest", &mut backend, &mut journal, false).unwrap();
+        assert!(applied.skipped.is_empty());
+        assert_eq!(journal.completed, Some(Completion::Applied));
     }
     #[test]
     fn trial_verifies_target_but_leaves_original_state() {

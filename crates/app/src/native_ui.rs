@@ -93,7 +93,7 @@ pub unsafe fn control(
             0,
             wide(class).as_ptr(),
             wide(label).as_ptr(),
-            WS_CHILD | WS_VISIBLE | style,
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style,
             0,
             0,
             10,
@@ -110,8 +110,74 @@ pub unsafe fn control(
 }
 pub unsafe fn place(handle: HWND, x: i32, y: i32, w: i32, h: i32) {
     unsafe {
-        MoveWindow(handle, x, y, w.max(1), h.max(1), 1);
+        SetWindowPos(
+            handle,
+            ptr::null_mut(),
+            x,
+            y,
+            w.max(1),
+            h.max(1),
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
+        );
     }
+}
+
+/// Apply a complete sibling layout without copying stale child pixels or
+/// painting intermediate positions. No window visibility is changed here.
+pub struct Layout {
+    parent: HWND,
+    items: Vec<(HWND, [i32; 4])>,
+}
+impl Layout {
+    pub fn new(parent: HWND) -> Self {
+        Self {
+            parent,
+            items: Vec::new(),
+        }
+    }
+    pub fn place(&mut self, child: HWND, x: i32, y: i32, w: i32, h: i32) {
+        if !child.is_null() {
+            self.items.push((child, [x, y, w.max(1), h.max(1)]));
+        }
+    }
+    pub fn apply(self) {
+        unsafe {
+            let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW;
+            let mut batch = BeginDeferWindowPos(self.items.len() as i32);
+            for (child, [x, y, w, h]) in &self.items {
+                if batch.is_null() {
+                    break;
+                }
+                batch = DeferWindowPos(batch, *child, ptr::null_mut(), *x, *y, *w, *h, flags);
+            }
+            let complete = !batch.is_null() && EndDeferWindowPos(batch) != 0;
+            if !complete {
+                for (child, [x, y, w, h]) in self.items {
+                    SetWindowPos(child, ptr::null_mut(), x, y, w, h, flags);
+                }
+            }
+            RedrawWindow(
+                self.parent,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
+            );
+        }
+    }
+}
+
+/// Reserve enough space for every native dropdown option, including its arrow.
+pub unsafe fn dropdown_width(hwnd: HWND, font: HFONT, labels: &[&str]) -> i32 {
+    let width = labels
+        .iter()
+        .map(|label| unsafe { text_width(hwnd, font, label) })
+        .max()
+        .unwrap_or(0)
+        + 48;
+    unsafe {
+        SendMessageW(hwnd, CB_SETDROPPEDWIDTH, width.max(176) as usize, 0);
+    }
+    width.max(176)
 }
 pub unsafe fn fill(dc: HDC, rect: &RECT, color: COLORREF) {
     unsafe {

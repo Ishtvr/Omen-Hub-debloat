@@ -1,12 +1,13 @@
 # GPU controls
 
-The private-control reference is HP **8E35/F.13**, RTX **5070 Laptop**, VBIOS **98.06.2a.40.da**, with exact qualified NVIDIA **617.14** or **617.42** implementations. Another driver or readable ABI does not automatically grant writes. [617.42 evidence](NVIDIA_61742.md), [hardware matrix](HARDWARE_MATRIX.md).
+The private-control reference is HP **8E35/F.13**, RTX **5070 Laptop**, VBIOS **98.06.2a.40.da**, measured with NVIDIA **617.14** and **617.42**. By the user's decision of 29 October 2026 any installed NVIDIA driver may write on this device; other versions are unmeasured. Missing interfaces, another struct version, an implausible grid or failed readback still stop the write and restore the original. Without an NVIDIA driver these controls are unavailable. [617.42 evidence](NVIDIA_61742.md), [hardware matrix](HARDWARE_MATRIX.md).
 
 ## Offsets and V/F
 
 - Public NVML core and memory offsets use the fixed 24-byte v1 clock-offset ABI, Graphics/Memory domains and P0. Small negative/positive probes verified exact target readback and complete restore.
-- Private Graphics V/F uses full current masks, anchors, deltas and ranges. All **127 measured voltage anchors** stay immutable; only frequency targets change. Live implementation hashes and complete images are checked.
-- A nonuniform or independent V/F curve blocks a global core offset. Profile intent cannot contradict itself.
+- Private Graphics V/F uses full current masks, anchors, deltas and ranges. All **127 measured voltage anchors** stay immutable; only frequency targets change. Interface presence, the v1 struct version and complete images are checked.
+- A nonuniform or independent live V/F curve blocks a global core offset. Within a preset, a V/F curve wins over a global core offset instead of blocking Apply.
+- Offset ranges come from the driver: NVML reports core −1000…+1000 MHz and VRAM −2000…+6000 MHz on the reference device; the app adds no tighter cap. Higher values are not stability-checked.
 - A memory offset SET can clear Graphics tuning on the measured driver. The controller captures the full coupled Graphics state, writes Memory first, then establishes the final Graphics target and checks the entire result.
 
 The curve is useful for frequency-at-voltage tuning; it is not a direct mV offset, hard physical voltage ceiling or stability guarantee. [Curve editor](CURVE_EDITOR.md).

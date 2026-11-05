@@ -64,24 +64,39 @@ pub struct Curve {
     redo: Vec<Snapshot>,
     gesture: Option<Snapshot>,
 }
-impl Curve {
-    pub fn gpu(state: VfState, value: Option<&Value>) -> Result<Self, String> {
-        let value = value.cloned().map_or_else(|| state.value(), Ok)?;
-        let Value::VfCurve(points) = value else {
-            return Err(msg("curve.err.incomplete_gpu", &[]));
-        };
-        state.target_deltas(&points)?;
-        let points = points
-            .iter()
-            .map(|p| {
-                Ok(Point {
-                    x: i32::try_from(p.voltage_mv)
-                        .map_err(|_| msg("curve.err.anchor_too_large", &[]))?,
-                    y: i32::try_from(p.frequency_mhz)
-                        .map_err(|_| msg("curve.err.frequency_too_large", &[]))?,
-                })
+/// Chart points of a GPU V/F curve (mV, MHz).
+fn vf_points(points: &[crate::profiles::VfPoint]) -> Result<Vec<Point>, String> {
+    points
+        .iter()
+        .map(|p| {
+            Ok(Point {
+                x: i32::try_from(p.voltage_mv)
+                    .map_err(|_| msg("curve.err.anchor_too_large", &[]))?,
+                y: i32::try_from(p.frequency_mhz)
+                    .map_err(|_| msg("curve.err.frequency_too_large", &[]))?,
             })
-            .collect::<Result<Vec<_>, String>>()?;
+        })
+        .collect()
+}
+/// The driver's factory curve: the live curve with every delta removed.
+fn factory_points(state: &VfState) -> Result<Vec<Point>, String> {
+    let Value::VfCurve(points) = state.factory()?.value()? else {
+        return Err(msg("curve.err.incomplete_gpu", &[]));
+    };
+    vf_points(&points)
+}
+impl Curve {
+    /// A saved preset curve, or without one the driver's factory curve. The
+    /// live curve may carry an applied undervolt and is never the default.
+    pub fn gpu(state: VfState, value: Option<&Value>) -> Result<Self, String> {
+        let points = match value {
+            Some(Value::VfCurve(points)) => {
+                state.target_deltas(points)?;
+                vf_points(points)?
+            }
+            Some(_) => return Err(msg("curve.err.incomplete_gpu", &[])),
+            None => factory_points(&state)?,
+        };
         Ok(Self {
             kind: Kind::Gpu,
             original: points.clone(),
@@ -335,10 +350,18 @@ impl Curve {
         self.select(self.selected.min(self.points.len() - 1), false);
         Ok(())
     }
-    pub fn reset(&mut self) {
-        // The original was validated when loaded and uses the same GPU grid.
-        let _ = self.replace(self.original.clone());
+    /// GPU: the driver's factory curve, without any programmed delta, so an
+    /// applied undervolt never becomes the default (user report, 30 October
+    /// 2026). Fan curves return to the loaded curve. One undoable step; a
+    /// failure is reported, never replaced by the loaded curve.
+    pub fn reset(&mut self) -> Result<bool, String> {
+        let target = match &self.gpu {
+            Some(state) => factory_points(state)?,
+            None => self.original.clone(),
+        };
+        let changed = self.replace(target)?;
         self.select(self.selected.min(self.points.len() - 1), false);
+        Ok(changed)
     }
     pub fn reference(&self) -> &[Point] {
         &self.original
@@ -619,6 +642,52 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+    #[test]
+    fn an_applied_undervolt_is_never_the_default_or_reset_curve() {
+        // Live curve with an applied plateau: deltas raise the low anchors and
+        // flatten the top at 1400 MHz. The driver's base is 1000…1600 MHz.
+        let live = VfState {
+            nodes: [
+                (0, 1100, 100),
+                (1, 1300, 100),
+                (2, 1400, 0),
+                (3, 1400, -200),
+            ]
+            .iter()
+            .map(|&(i, mhz, delta)| crate::vf::VfNode {
+                index: i,
+                voltage_uv: 800000 + u32::from(i) * 100000,
+                frequency_khz: mhz * 1000,
+                delta_khz: delta * 1000,
+            })
+            .collect(),
+            minimum_delta_khz: -400000,
+            maximum_delta_khz: 400000,
+            first_index: 0,
+            last_index: 3,
+        };
+        let base = [1000, 1200, 1400, 1600];
+        let mut curve = Curve::gpu(live.clone(), None).unwrap();
+        assert_eq!(curve.points.iter().map(|p| p.y).collect::<Vec<_>>(), base);
+        // A saved preset curve loads as saved; Reset still goes to the base.
+        let saved = live.value().unwrap();
+        let mut curve_saved = Curve::gpu(live, Some(&saved)).unwrap();
+        assert_eq!(
+            curve_saved.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1100, 1300, 1400, 1400]
+        );
+        assert_eq!(curve_saved.reset(), Ok(true));
+        assert_eq!(
+            curve_saved.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            base
+        );
+        assert!(curve_saved.can_undo());
+        curve.set(1, Point { x: 900, y: 1250 }, false).unwrap();
+        assert_eq!(curve.reset(), Ok(true));
+        assert_eq!(curve.points.iter().map(|p| p.y).collect::<Vec<_>>(), base);
+        // Already at the factory curve: nothing to undo, and no error.
+        assert_eq!(curve.reset(), Ok(false));
     }
     #[test]
     fn shift_reference_and_alt_current_offsets_have_distinct_shapes() {

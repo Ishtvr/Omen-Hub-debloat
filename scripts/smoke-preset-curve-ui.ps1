@@ -135,9 +135,11 @@ try{
   $taskValue=switch($taskFeature){'gpu_voltage_limit_mv'{'900'}'gpu_frame_rate_limit'{'60'}'gpu_power_limit_mw'{'80000'}'gpu_temperature_limit_c'{'87'}'gpu_core_clock_limit_mhz'{'2000'}'gpu_memory_clock_limit_mhz'{'7000'}'gpu_unleashed'{'true'}'gpu_dynamic_boost'{'true'}'gpu_custom_tgp'{'true'}'omen_performance_mode'{'balanced'}default{'0'}}
   Read-CurveJson @('profile-set',$taskId,$taskFeature,$taskValue)|Out-Null
  }
- $taskApu=[ordered]@{cpu_stapm_limit_mw=55000;cpu_skin_temperature_limit_c=45;cpu_fast_ppt_limit_mw=55000;cpu_stapm_time_seconds=28;cpu_slow_ppt_time_seconds=28;soc_tdc_ma=15000;soc_edc_ma=25000;gfx_tdc_ma=15000;gfx_edc_ma=25000;gfx_curve_optimizer=0;amd_igpu_clock_mhz=800;igpu_soft_min_mhz=400;igpu_soft_max_mhz=1200;cpu_soft_min_mhz=1000;cpu_soft_max_mhz=4000;data_soft_min_mhz=800;data_soft_max_mhz=1600;fabric_soft_min_mhz=800;fabric_soft_max_mhz=1600;vcn_soft_min_mhz=400;vcn_soft_max_mhz=1000;soc_soft_min_mhz=400;soc_soft_max_mhz=1000;intel_gpu_power_balance=0;intel_gpu_voltage_offset_mv=0}
+ $taskApu=[ordered]@{cpu_stapm_limit_mw=55000;cpu_skin_temperature_limit_c=45;cpu_fast_ppt_limit_mw=55000;cpu_stapm_time_seconds=28;cpu_slow_ppt_time_seconds=28;soc_tdc_ma=15000;soc_edc_ma=25000;gfx_tdc_ma=15000;gfx_edc_ma=25000;gfx_curve_optimizer=0;amd_igpu_clock_mhz=800;igpu_soft_min_mhz=400;igpu_soft_max_mhz=1200;cpu_soft_min_mhz=1000;cpu_soft_max_mhz=4000;data_soft_min_mhz=800;data_soft_max_mhz=1600;fabric_soft_min_mhz=800;fabric_soft_max_mhz=1600;vcn_soft_min_mhz=400;vcn_soft_max_mhz=1000;soc_soft_min_mhz=400;soc_soft_max_mhz=1000}
  foreach($taskEntry in $taskApu.GetEnumerator()){Read-CurveJson @('profile-set',$taskId,[string]$taskEntry.Key,[string]$taskEntry.Value)|Out-Null}
  $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
+ # Legacy inputs are injected as old file data: new CLI edits reject retired keys.
+ $taskProfile.settings+=@([pscustomobject]@{feature='intel_gpu_power_balance';value=[pscustomobject]@{kind='integer';value=0}},[pscustomobject]@{feature='intel_gpu_voltage_offset_mv';value=[pscustomobject]@{kind='integer';value=-10}})
  $taskProfile.settings+=@([pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}})
  foreach($taskBoostKey in @('gpu_unleashed','gpu_dynamic_boost')){$taskProfile.settings+=@([pscustomobject]@{feature=$taskBoostKey;value=[pscustomobject]@{kind='boolean';value=$true}})}
  [IO.File]::WriteAllText($taskFile,($taskProfile|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
@@ -149,6 +151,7 @@ try{
  $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
  if(@($taskProfile.settings|Where-Object {$_.feature-in$taskRetired}).Count-ne0){throw 'Retired controls remain in saved preset.'}
  if(@($taskProfile.settings|Where-Object {$_.feature-in@($taskApu.Keys)}).Count-ne0){throw 'Removed APU/iGPU instructions remain after explicit Save.'}
+ if(@($taskProfile.settings|Where-Object feature -like 'intel_*').Count-ne0){throw 'Removed Intel instructions remain after explicit Save.'}
  foreach($taskBoostKey in @('gpu_unleashed','gpu_dynamic_boost')){$taskBoostSetting=@($taskProfile.settings|Where-Object feature -eq $taskBoostKey);if($taskBoostSetting.Count-ne1-or$taskBoostSetting[0].value.value-ne$true){throw 'Save removed a required Dynamic Boost instruction.'}}
  if((@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value.value|ConvertTo-Json -Depth 6 -Compress)-cne$taskCurveImage-or@($taskProfile.settings|Where-Object feature -eq 'keyboard_colors').Count-ne1){throw 'Legacy cleanup changed full curve or hidden settings.'}
  Close-CurvePreset

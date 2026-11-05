@@ -19,6 +19,8 @@ pub enum Action {
     Mode(omen_core::hp_mode::HpMode),
     FanService,
     Graphics(omen_core::quick_switch::GraphicsMode),
+    /// `true` stops and disables HPOmenCap, `false` restores it.
+    HpService(bool),
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -29,6 +31,7 @@ impl Action {
             Self::Mode(_) => "mode",
             Self::FanService => "fan",
             Self::Graphics(_) => "mux",
+            Self::HpService(_) => "hp_service",
         }
     }
 }
@@ -57,6 +60,10 @@ pub fn run(
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
         Action::FanService => format!("fan-service-install {nonce}"),
         Action::Graphics(mode) => format!("mux-ui-apply {} {nonce}", mode.key()),
+        Action::HpService(disable) => format!(
+            "hp-service-ui {} {nonce}",
+            if disable { "disable" } else { "restore" }
+        ),
     };
     let arguments = format!("--lang {} {arguments}", crate::i18n::language_code());
     let file = wide(
@@ -110,27 +117,13 @@ pub fn run(
             return Err(t("elevation.no_record").into());
         }
         if code != 0 || record["result"].get("Err").is_some() {
-            // Show the child's message, not the JSON envelope around it.
-            let error = &record["result"]["Err"];
-            let rollback: Vec<String> = error["rollback_errors"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|e| {
-                    e.as_str()
-                        .map_or_else(|| e.to_string(), crate::i18n::error_message)
-                })
-                .collect();
-            let detail = match error["error"].as_str() {
-                Some(text) if rollback.is_empty() => crate::i18n::error_message(text),
-                Some(text) => format!(
-                    "{} ({})",
-                    crate::i18n::error_message(text),
-                    rollback.join("; ")
-                ),
-                None => error.to_string(),
-            };
-            return Err(tf("elevation.failed", &[&detail]));
+            // The user sees one short translated line; the complete error and
+            // rollback details stay in the recorded control result (journal).
+            // The marker is translated once, where the caller shows it.
+            return Err(match record["result"]["Err"]["error"].as_str() {
+                Some(text) if text.contains(omen_core::message::OPEN) => text.to_owned(),
+                _ => omen_core::message::msg("elevation.failed_logged", &[]),
+            });
         }
         if record["result"].get("Ok").is_none() {
             return Err(t("elevation.unverified").into());
@@ -142,4 +135,43 @@ pub fn run(
         CloseHandle(execute.hProcess);
     }
     result
+}
+
+/// Status line for a successful preset Apply: values that were left at their
+/// original are named, translated; raw technical reasons stay in the journal.
+pub fn applied_status(record: &serde_json::Value) -> String {
+    let skipped: Vec<String> = record["result"]["Ok"]["skipped"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            let reason = item["reason"].as_str().unwrap_or_default();
+            if reason.contains(omen_core::message::OPEN) {
+                crate::i18n::message(reason)
+            } else {
+                item["feature"]
+                    .as_str()
+                    .and_then(|key| serde_json::from_value(key.into()).ok())
+                    .map_or_else(
+                        || reason.to_owned(),
+                        |feature: omen_core::features::Feature| {
+                            t(&format!("field.{feature:?}")).to_owned()
+                        },
+                    )
+            }
+        })
+        .collect();
+    let mut status = if skipped.is_empty() {
+        t("preset.applied").into()
+    } else {
+        tf("preset.applied_except", &[&skipped.join("; ")])
+    };
+    if record["unconfirmed"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        status.push(' ');
+        status.push_str(t("preset.applied_unconfirmed"));
+    }
+    status
 }

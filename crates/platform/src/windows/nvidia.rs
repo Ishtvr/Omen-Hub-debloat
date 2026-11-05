@@ -338,6 +338,74 @@ impl GpuTemperature {
     }
 }
 
+/// Enforced power limit and draw only, for "Keep preset". A separate small NVML
+/// session: the dashboard's telemetry sessions live on another thread.
+pub struct GpuLimitProbe {
+    _library: Library,
+    shutdown: StatusFn,
+    gpu: Handle,
+    enforced: NvmlValue,
+    power: NvmlValue,
+}
+impl GpuLimitProbe {
+    pub fn new() -> Result<Self, String> {
+        let library = system_library("nvml.dll")?;
+        // SAFETY: Documented NVML C signatures; the DLL lifetime is retained.
+        unsafe {
+            let init: StatusFn = *library.get(b"nvmlInit_v2\0").map_err(|e| e.to_string())?;
+            let shutdown: StatusFn = *library.get(b"nvmlShutdown\0").map_err(|e| e.to_string())?;
+            let device: NvmlDevice = *library
+                .get(b"nvmlDeviceGetHandleByIndex_v2\0")
+                .map_err(|e| e.to_string())?;
+            let enforced: NvmlValue = *library
+                .get(b"nvmlDeviceGetEnforcedPowerLimit\0")
+                .map_err(|e| e.to_string())?;
+            let power: NvmlValue = *library
+                .get(b"nvmlDeviceGetPowerUsage\0")
+                .map_err(|e| e.to_string())?;
+            let status = init();
+            if status != 0 {
+                return Err(format!("NVML initialization: {status}"));
+            }
+            let mut gpu = ptr::null_mut();
+            let status = device(0, &mut gpu);
+            if status != 0 || gpu.is_null() {
+                shutdown();
+                return Err(format!("NVML GPU enumeration: {status}"));
+            }
+            Ok(Self {
+                _library: library,
+                shutdown,
+                gpu,
+                enforced,
+                power,
+            })
+        }
+    }
+    /// (enforced limit, draw) in milliwatts.
+    pub fn read(&self) -> Result<(u32, u32), String> {
+        let (mut limit, mut draw) = (0, 0);
+        // SAFETY: Live handle and exact documented u32 out parameters.
+        let status = unsafe { (self.enforced)(self.gpu, &mut limit) };
+        if status != 0 {
+            return Err(format!("NVML enforced power limit unavailable: {status}"));
+        }
+        // SAFETY: As above.
+        let status = unsafe { (self.power)(self.gpu, &mut draw) };
+        if status != 0 {
+            return Err(format!("NVML power unavailable: {status}"));
+        }
+        Ok((limit, draw))
+    }
+}
+impl Drop for GpuLimitProbe {
+    fn drop(&mut self) {
+        unsafe {
+            (self.shutdown)();
+        }
+    }
+}
+
 /// Construct and use on a single worker thread. No unsafe Send/Sync implementation.
 pub struct Nvidia {
     nvapi: Option<Nvapi>,

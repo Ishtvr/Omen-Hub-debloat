@@ -479,6 +479,74 @@ pub fn write_hp_gpu_power(
     Ok(status)
 }
 
+/// Sets the shared CPU+GPU budget (TPP) like the Hub's `SetConcurrentTdp`:
+/// [FF, FF, FF, watts]; FF leaves Slow/STAPM/PL4 unchanged. The firmware has
+/// no TPP readback, so this write cannot be confirmed or restored exactly.
+pub fn write_hp_shared_budget(inventory: &Inventory, watts: u8) -> Result<(), String> {
+    use omen_core::hp_mode::POWER_LIMITS_TYPE;
+    if watts == 0 || watts == 0xFF {
+        return Err(omen_core::message::msg("hp.err.tpp_range", &[]));
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("TPP", e))?;
+    bios.set_mode_payload(POWER_LIMITS_TYPE, [0xFF, 0xFF, 0xFF, watts])
+        .map_err(|e| query_error("TPP SET", e))
+}
+
+/// Writes only the Hub's `0x1A` thermal-mode payload of `mode`, which the BIOS
+/// cannot read back. "Keep preset" uses it when the mode of a Dynamic Boost
+/// preset was lost; flags and CPU limits are kept separately.
+pub fn write_hp_thermal_mode(
+    inventory: &Inventory,
+    mode: omen_core::hp_mode::HpMode,
+) -> Result<(), String> {
+    use omen_core::hp_mode::{self, HpMode, THERMAL_MODE_TYPE};
+    if mode == HpMode::Unleashed && super::power_status().ac_connected != Some(true) {
+        return Err(omen_core::message::msg("mode.err.ac_required", &[]));
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
+    bios.set_mode_payload(THERMAL_MODE_TYPE, hp_mode::thermal_payload(mode))
+        .map_err(|e| query_error("mode SET 0x1a", e))
+}
+
+/// Writes the firmware CPU PL1 like the Hub's `SetPowerLimit` after a mode
+/// change: [PL1, PL1, FF, FF] (byte 0 slow, byte 1 STAPM), then waits until
+/// the SMU reports it. The firmware applies it with a delay (measured 30
+/// October 2026); a transaction captured before that would see the limit
+/// change under it.
+pub fn write_hp_cpu_pl1(inventory: &Inventory, watts: u8) -> Result<(), String> {
+    use omen_core::hp_mode::POWER_LIMITS_TYPE;
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(6);
+    if watts == 0 || watts == 0xFF {
+        return Err(omen_core::message::msg("hp.err.tpp_range", &[]));
+    }
+    let bios = HpBios::new(inventory).map_err(|e| query_error("PL1", e))?;
+    bios.set_mode_payload(POWER_LIMITS_TYPE, [watts, watts, 0xFF, 0xFF])
+        .map_err(|e| query_error("PL1 SET", e))?;
+    let start = std::time::Instant::now();
+    loop {
+        let (_, slow) = super::cpu_tuning::hp_limits_w(inventory)?;
+        if slow == i64::from(watts) {
+            return Ok(());
+        }
+        if start.elapsed() >= DEADLINE {
+            return Err(omen_core::message::msg(
+                "cpu.err.not_settled",
+                &[&"@field.CpuSlowPptLimitMw", &format!("{slow} W")],
+            ));
+        }
+    }
+}
+
+/// Diagnostic: writes only the thermal byte of a Hub Performance slider step
+/// (`omen_core::hp_mode::performance_step_payload`). No readback exists.
+pub fn write_hp_performance_step(inventory: &Inventory, step: &str) -> Result<(), String> {
+    use omen_core::hp_mode::{THERMAL_MODE_TYPE, performance_step_payload};
+    let payload = performance_step_payload(step)?;
+    let bios = HpBios::new(inventory).map_err(|e| query_error("mode", e))?;
+    bios.set_mode_payload(THERMAL_MODE_TYPE, payload)
+        .map_err(|e| query_error("mode SET 0x1a", e))
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct HpModeReport {
     pub plan: omen_core::hp_mode::ModePlan,

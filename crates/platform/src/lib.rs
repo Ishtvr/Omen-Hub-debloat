@@ -20,3 +20,5 @@ mod cooling_store;
 #[cfg(any(windows, test))]
 mod ownership_store;
 pub mod profile_store;
+#[cfg(any(windows, test))]
+mod tray_task;

@@ -33,6 +33,9 @@ use windows_sys::Win32::{
     },
 };
 
+#[cfg(test)]
+mod tests;
+
 const UPDATE: u32 = WM_APP + 32;
 const SELECT: usize = 501;
 const NAME: usize = 502;
@@ -368,6 +371,7 @@ struct State {
     allowed: [bool; 3],
     busy: Cell<bool>,
     rendering: Cell<bool>,
+    point_list: RefCell<Option<(Kind, Vec<Point>)>>,
     dirty: Cell<bool>,
     graph_only: Cell<bool>,
     background: Cell<HBRUSH>,
@@ -421,25 +425,84 @@ fn shared_fan_rows(rows: &[Row; 3]) -> [Row; 3] {
     };
     rows
 }
+/// The canvas owns the live draft and history. Copy them only when leaving the
+/// current curve or saving; presentation updates need just the visible points.
+fn capture(s: &State) {
+    let Some(c) = s.controls.get() else {
+        return;
+    };
+    if let Some(view) = s.view.borrow_mut().as_mut() {
+        view.rows[s.mode.get()].curve = plot::curve(c.canvas);
+    }
+}
 fn sync(s: &State) {
     let Some(c) = s.controls.get() else {
         return;
     };
-    let model = plot::curve(c.canvas);
-    if let Some(view) = s.view.borrow_mut().as_mut() {
-        view.rows[s.mode.get()].curve = model.clone();
-    }
+    let model = plot::inspect(c.canvas, |model| {
+        (model.kind, model.points.clone(), model.selected)
+    });
     s.rendering.set(true);
-    // SAFETY: Owned controls copy strings; item data is a bounded integer index.
-    unsafe {
-        SendMessageW(c.points, CB_RESETCONTENT, 0, 0);
-    }
-    if let Some(model) = model {
-        let p = model.points[model.selected];
-        let (x, y) = model.kind.units();
+    if let Some((kind, points, selected)) = model {
+        let p = points[selected];
+        let (x, y) = kind.units();
+        let previous = s.point_list.borrow();
+        let mut rebuild = previous
+            .as_ref()
+            .is_none_or(|(old_kind, old)| *old_kind != kind || old.len() != points.len());
+        let changed_count = previous.as_ref().map_or(points.len(), |(_, old)| {
+            old.iter().zip(&points).filter(|(a, b)| a != b).count()
+        });
+        let changed = rebuild || changed_count != 0;
+        // Repeated delete/insert recalculates the native list layout. Keep it
+        // for a single point; group transforms use one batched rebuild.
+        rebuild |= changed_count > 1;
+        // Only update changed entries; selecting a point does not rebuild the
+        // complete list or reset its dropdown/scroll position.
+        unsafe {
+            let redraw = changed && IsWindowVisible(c.points) != 0;
+            if redraw {
+                SendMessageW(c.points, WM_SETREDRAW, 0, 0);
+            }
+            if rebuild {
+                SendMessageW(c.points, CB_RESETCONTENT, 0, 0);
+            }
+            if changed {
+                for (i, point) in points.iter().enumerate() {
+                    if !rebuild && previous.as_ref().is_some_and(|(_, old)| old[i] == *point) {
+                        continue;
+                    }
+                    if !rebuild {
+                        SendMessageW(c.points, CB_DELETESTRING, i, 0);
+                    }
+                    SendMessageW(
+                        c.points,
+                        CB_INSERTSTRING,
+                        i,
+                        wide(&format!("{} {} · {} {}", point.x, x, point.y, y)).as_ptr() as isize,
+                    );
+                }
+            }
+            if SendMessageW(c.points, CB_GETCURSEL, 0, 0) != selected as isize {
+                SendMessageW(c.points, CB_SETCURSEL, selected, 0);
+            }
+            // WM_SETREDRAW(TRUE) can unhide a control. Pair it only when the
+            // control was visible, preserving the chart-only layout.
+            if redraw {
+                SendMessageW(c.points, WM_SETREDRAW, 1, 0);
+                RedrawWindow(
+                    c.points,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN,
+                );
+            }
+        }
+        drop(previous);
+        *s.point_list.borrow_mut() = Some((kind, points));
         text(
             c.xlabel,
-            if model.kind == Kind::Gpu {
+            if kind == Kind::Gpu {
                 t("curve.x_voltage")
             } else {
                 t("curve.x_temperature")
@@ -447,7 +510,7 @@ fn sync(s: &State) {
         );
         text(
             c.ylabel,
-            if model.kind == Kind::Gpu {
+            if kind == Kind::Gpu {
                 t("curve.y_frequency")
             } else {
                 t("curve.y_fan")
@@ -456,18 +519,14 @@ fn sync(s: &State) {
         text(c.x, &p.x.to_string());
         text(c.y, &p.y.to_string());
         unsafe {
-            for p in &model.points {
-                SendMessageW(
-                    c.points,
-                    CB_ADDSTRING,
-                    0,
-                    wide(&format!("{} {} · {} {}", p.x, x, p.y, y)).as_ptr() as isize,
-                );
-            }
-            SendMessageW(c.points, CB_SETCURSEL, model.selected, 0);
-            SendMessageW(c.x, EM_SETREADONLY, usize::from(model.kind == Kind::Gpu), 0);
+            SendMessageW(c.x, EM_SETREADONLY, usize::from(kind == Kind::Gpu), 0);
         }
     } else {
+        if s.point_list.borrow_mut().take().is_some() {
+            unsafe {
+                SendMessageW(c.points, CB_RESETCONTENT, 0, 0);
+            }
+        }
         text(c.x, "");
         text(c.y, "");
     }
@@ -495,15 +554,9 @@ fn enabled(s: &State) {
             EnableWindow(h, (ready && s.mode.get() != 0) as i32);
         }
         EnableWindow(c.plateau, (ready && s.mode.get() == 0) as i32);
-        let model = plot::curve(c.canvas);
-        EnableWindow(
-            c.undo,
-            (ready && model.as_ref().is_some_and(Curve::can_undo)) as i32,
-        );
-        EnableWindow(
-            c.redo,
-            (ready && model.as_ref().is_some_and(Curve::can_redo)) as i32,
-        );
+        let history = plot::inspect(c.canvas, |c| (c.can_undo(), c.can_redo())).unwrap_or_default();
+        EnableWindow(c.undo, (ready && history.0) as i32);
+        EnableWindow(c.redo, (ready && history.1) as i32);
         for h in c.zoom {
             EnableWindow(h, ready as i32);
         }
@@ -514,17 +567,15 @@ fn enabled(s: &State) {
         );
     }
 }
-fn mode(s: &State, index: usize, capture: bool) {
+fn mode(s: &State, index: usize, capture_current: bool) {
     if !s.allowed.get(index).copied().unwrap_or(false) {
         return;
     }
     let Some(c) = s.controls.get() else {
         return;
     };
-    if capture {
-        if let Some(view) = s.view.borrow_mut().as_mut() {
-            view.rows[s.mode.get()].curve = plot::curve(c.canvas);
-        }
+    if capture_current {
+        capture(s);
     }
     s.mode.set(index);
     let row = {
@@ -559,7 +610,7 @@ fn mode(s: &State, index: usize, capture: bool) {
         );
     }
     text(c.source, &row.source);
-    plot::set(c.canvas, row.curve.clone());
+    plot::set(c.canvas, row.curve);
     sync(s);
 }
 /// Shows a message in the status line, or as a box in the fan window, which
@@ -736,6 +787,8 @@ fn layout(hwnd: HWND, s: &State) {
     if minimal {
         unsafe {
             ShowWindow(c.open, SW_SHOW);
+            // Reset (GPU: the driver's factory curve) stays reachable here.
+            ShowWindow(c.reset, SW_SHOW);
             ShowWindow(c.help, if s.draft { SW_SHOW } else { SW_HIDE });
             // The fan window has no status line; errors use a message box.
             ShowWindow(c.status, if s.fans_merged { SW_HIDE } else { SW_SHOW });
@@ -746,6 +799,7 @@ fn layout(hwnd: HWND, s: &State) {
                 (c.save, [20, h - 54, 150, 36]),
                 (c.undo, [182, h - 54, 150, 36]),
                 (c.open, [344, h - 54, 150, 36]),
+                (c.reset, [506, h - 54, 150, 36]),
                 (c.help, [w - 170, h - 54, 150, 36]),
             ] {
                 MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
@@ -762,6 +816,7 @@ fn layout(hwnd: HWND, s: &State) {
             (c.save, [if narrow { 20 } else { 400 }, toolbar, 115, 30]),
             (c.undo, [if narrow { 150 } else { 530 }, toolbar, 125, 30]),
             (c.redo, [if narrow { 290 } else { 670 }, toolbar, 135, 30]),
+            (c.reset, [if narrow { 435 } else { 815 }, toolbar, 135, 30]),
             (c.help, [w - 300, 14, 135, 30]),
             (c.focus, [w - 155, 14, 135, 30]),
             (c.status, [20, h - 42, w - 375, 32]),
@@ -785,6 +840,7 @@ fn layout(hwnd: HWND, s: &State) {
             boxes.push((c.open, [180, 14, 140, 30]));
         }
         unsafe {
+            ShowWindow(c.reset, SW_SHOW);
             for (handle, b) in boxes {
                 MoveWindow(handle, b[0], b[1], b[2], b[3], 1);
             }
@@ -1231,16 +1287,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         curve.remove()?;
                         Ok(true)
                     }),
-                    RESET => edit(s, |curve| {
-                        curve.reset();
-                        Ok(true)
-                    }),
+                    RESET => edit(s, Curve::reset),
                     SAVE => {
+                        capture(s);
                         sync(s);
                         if s.draft {
-                            match plot::curve(c.canvas)
+                            match plot::inspect(c.canvas, Curve::value)
                                 .ok_or_else(|| t("curve.gpu_unavailable").to_string())
-                                .and_then(|curve| curve.value())
+                                .and_then(|value| value)
                             {
                                 Ok(value) => {
                                     *s.draft_result.borrow_mut() = Some(value);
@@ -1447,6 +1501,7 @@ fn run_editor(
         },
         busy: Cell::new(false),
         rendering: Cell::new(false),
+        point_list: RefCell::new(None),
         dirty: Cell::new(false),
         graph_only: Cell::new(preview.as_ref().is_none_or(|p| !p.regular)),
         background: Cell::new(unsafe { CreateSolidBrush(plot::BACKGROUND) }),

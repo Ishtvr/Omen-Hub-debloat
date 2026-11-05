@@ -52,6 +52,8 @@ The script creates a fresh versioned staging directory under `target/package-sta
 - `target/OmenHubPlusPlus-<version>-SHA256SUMS.txt`;
 - packaged `build-info.json` with source commit, dirty state, executable hash and CPU-module flags.
 
+When Inno Setup 6.3 or newer is installed (`winget install JRSoftware.InnoSetup`), the script also compiles [installer/OmenHubPlusPlus.iss](../installer/OmenHubPlusPlus.iss) into `target/OmenHubPlusPlus-<version>-Setup.exe`, copies it to `dist/` and adds its SHA-256 to the checksum file. The setup stages the same executable and install scripts, runs them elevated and logs to `C:\Program Files\OmenHubPlusPlus\setup\setup-log.txt`. Its optional PawnIO task downloads the pinned official PawnIO 2.2.0 setup with SHA-256 verification; PawnIO is never bundled. `.cargo/config.toml` links the C runtime statically, so no Visual C++ Redistributable is required.
+
 The archive includes the EXE, installers, recovery/support notes and third-party licenses. Embedded CPU modules require their corresponding source archive and LGPL notice. Existing unrelated files in `dist/` are not included in the fresh archive. The checksum file records the ZIP's SHA-256; it detects mismatches and is not a publisher signature.
 
 The package contains selected guides, not the entire documentation tree. Additional linked topics and historical records are available in the [repository documentation](https://github.com/Ishtvr/Omen-Hub-debloat/tree/main/docs).

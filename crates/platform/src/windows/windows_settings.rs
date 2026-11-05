@@ -343,15 +343,8 @@ pub fn requested_scheme(settings: &[omen_core::profiles::Setting]) -> Result<Opt
             plan_scheme(choice).ok_or_else(|| "Unknown target power plan".to_owned())
         })
         .transpose()?;
-    if settings
-        .iter()
-        .any(|setting| setting.feature == Feature::WindowsEnergyMode)
-    {
-        let effective = target.map_or_else(active_scheme, Ok)?;
-        if effective != PLAN_BALANCED {
-            return Err(msg("windows.err.overlay_plan", &[]));
-        }
-    }
+    // A power mode never blocks: PerformanceProfile::effective pairs it with
+    // the Balanced plan or skips it when the preset selects another plan.
     Ok(target)
 }
 
@@ -426,9 +419,6 @@ pub fn verify_target(
             return Err("Power mode target is not a choice".into());
         };
         let expected = overlay_guid(*choice).ok_or("Unknown power mode")?;
-        if active_scheme()? != PLAN_BALANCED {
-            return Err(msg("windows.err.overlay_plan", &[]));
-        }
         for attempt in 0..5 {
             if read_overlay()? == expected && read_effective_overlay()? == expected {
                 return Ok(true);
@@ -644,8 +634,15 @@ pub fn write(feature: Feature, original: &WindowsImage, value: &Value) -> Result
             )
         }
         (WindowsImage::ConfiguredOverlay { .. }, Value::Choice(c)) => {
+            // Windows applies power modes only on Balanced. The transaction
+            // normally activates it first and owns the plan's original.
             if active_scheme()? != PLAN_BALANCED {
-                return Err(msg("windows.err.overlay_plan", &[]));
+                let balanced = guid(PLAN_BALANCED);
+                // SAFETY: Valid GUID pointer.
+                check(
+                    unsafe { PowerSetActiveScheme(ptr::null_mut(), &balanced) },
+                    "Activate power plan",
+                )?;
             }
             write_overlay(overlay_guid(*c).ok_or("Unknown power mode")?)
         }

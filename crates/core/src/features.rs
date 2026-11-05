@@ -1,6 +1,9 @@
 //! Semantic feature catalog. No hardware commands, addresses or executable strings.
 use serde::{Deserialize, Serialize};
 
+mod retired;
+pub use retired::RetiredFeature;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
@@ -25,9 +28,6 @@ pub enum Feature {
     CpuFastPptLimitMw,
     CpuSlowPptLimitMw,
     CpuPptLimitMw,
-    IntelPl1Mw,
-    IntelPl2Mw,
-    IntelPl4Mw,
     CpuStapmTimeSeconds,
     CpuSlowPptTimeSeconds,
     CpuTdcMa,
@@ -36,19 +36,12 @@ pub enum Feature {
     SocEdcMa,
     GfxTdcMa,
     GfxEdcMa,
-    IntelIccMaxMa,
     CpuCurveOptimizerAllCore,
     GfxCurveOptimizer,
     CpuCurveOptimizerPerCore,
     CpuPboScalar,
-    IntelCpuPowerBalance,
-    IntelGpuPowerBalance,
     CpuAllCoreVoltageOffsetMv,
-    IntelGpuVoltageOffsetMv,
-    IntelCacheVoltageOffsetMv,
-    IntelSystemAgentVoltageOffsetMv,
     AmdCpuVoltageMv,
-    IntelCoreRatios,
     AmdCpuClockMhz,
     AmdIgpuClockMhz,
     IgpuSoftMinMhz,
@@ -95,6 +88,12 @@ pub enum Feature {
     KeyboardColors,
     KeyboardBrightness,
     KeyboardEffect,
+    /// HP shared CPU+GPU budget (TPP, `0x29` byte 3) in mW of whole watts.
+    /// Write-only on this firmware: no readback exists.
+    HpSharedPowerMw,
+    /// Serialized legacy input only; never a current feature.
+    #[serde(untagged)]
+    Retired(RetiredFeature),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -147,6 +146,7 @@ pub struct Descriptor {
 impl Feature {
     pub fn descriptor(self) -> Descriptor {
         let (category, value_kind, unit) = match self {
+            Self::Retired(feature) => (Category::Cpu, feature.kind(), feature.unit()),
             Self::GpuCoreOffsetMhz => (Category::Gpu, ValueKind::Integer, Unit::Mhz),
             Self::GpuMemoryOffsetMhz => (Category::Gpu, ValueKind::Integer, Unit::Mhz),
             Self::GpuCoreClockLimitMhz => (Category::Gpu, ValueKind::Integer, Unit::Mhz),
@@ -168,9 +168,6 @@ impl Feature {
             Self::CpuFastPptLimitMw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
             Self::CpuSlowPptLimitMw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
             Self::CpuPptLimitMw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
-            Self::IntelPl1Mw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
-            Self::IntelPl2Mw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
-            Self::IntelPl4Mw => (Category::Cpu, ValueKind::Integer, Unit::Milliwatt),
             Self::CpuStapmTimeSeconds => (Category::Cpu, ValueKind::Integer, Unit::Seconds),
             Self::CpuSlowPptTimeSeconds => (Category::Cpu, ValueKind::Integer, Unit::Seconds),
             Self::CpuTdcMa => (Category::Cpu, ValueKind::Integer, Unit::Milliampere),
@@ -179,21 +176,12 @@ impl Feature {
             Self::SocEdcMa => (Category::Cpu, ValueKind::Integer, Unit::Milliampere),
             Self::GfxTdcMa => (Category::Cpu, ValueKind::Integer, Unit::Milliampere),
             Self::GfxEdcMa => (Category::Cpu, ValueKind::Integer, Unit::Milliampere),
-            Self::IntelIccMaxMa => (Category::Cpu, ValueKind::Integer, Unit::Milliampere),
             Self::CpuCurveOptimizerAllCore => (Category::Cpu, ValueKind::Integer, Unit::CurveStep),
             Self::GfxCurveOptimizer => (Category::Cpu, ValueKind::Integer, Unit::CurveStep),
             Self::CpuCurveOptimizerPerCore => (Category::Cpu, ValueKind::PerCore, Unit::CurveStep),
             Self::CpuPboScalar => (Category::Cpu, ValueKind::Integer, Unit::None),
-            Self::IntelCpuPowerBalance => (Category::Cpu, ValueKind::Integer, Unit::None),
-            Self::IntelGpuPowerBalance => (Category::Cpu, ValueKind::Integer, Unit::None),
             Self::CpuAllCoreVoltageOffsetMv => (Category::Cpu, ValueKind::Integer, Unit::Millivolt),
-            Self::IntelGpuVoltageOffsetMv => (Category::Cpu, ValueKind::Integer, Unit::Millivolt),
-            Self::IntelCacheVoltageOffsetMv => (Category::Cpu, ValueKind::Integer, Unit::Millivolt),
-            Self::IntelSystemAgentVoltageOffsetMv => {
-                (Category::Cpu, ValueKind::Integer, Unit::Millivolt)
-            }
             Self::AmdCpuVoltageMv => (Category::Cpu, ValueKind::Integer, Unit::Millivolt),
-            Self::IntelCoreRatios => (Category::Cpu, ValueKind::CoreRatios, Unit::None),
             Self::AmdCpuClockMhz => (Category::Cpu, ValueKind::Integer, Unit::Mhz),
             Self::AmdIgpuClockMhz => (Category::Cpu, ValueKind::Integer, Unit::Mhz),
             Self::IgpuSoftMinMhz => (Category::Cpu, ValueKind::Integer, Unit::Mhz),
@@ -244,6 +232,7 @@ impl Feature {
             Self::KeyboardColors => (Category::Omen, ValueKind::Colors, Unit::None),
             Self::KeyboardBrightness => (Category::Omen, ValueKind::Integer, Unit::Percent),
             Self::KeyboardEffect => (Category::Omen, ValueKind::Choice, Unit::None),
+            Self::HpSharedPowerMw => (Category::Omen, ValueKind::Integer, Unit::Milliwatt),
         };
         Descriptor {
             feature: self,
@@ -275,9 +264,6 @@ impl Feature {
             Self::CpuFastPptLimitMw,
             Self::CpuSlowPptLimitMw,
             Self::CpuPptLimitMw,
-            Self::IntelPl1Mw,
-            Self::IntelPl2Mw,
-            Self::IntelPl4Mw,
             Self::CpuStapmTimeSeconds,
             Self::CpuSlowPptTimeSeconds,
             Self::CpuTdcMa,
@@ -286,19 +272,12 @@ impl Feature {
             Self::SocEdcMa,
             Self::GfxTdcMa,
             Self::GfxEdcMa,
-            Self::IntelIccMaxMa,
             Self::CpuCurveOptimizerAllCore,
             Self::GfxCurveOptimizer,
             Self::CpuCurveOptimizerPerCore,
             Self::CpuPboScalar,
-            Self::IntelCpuPowerBalance,
-            Self::IntelGpuPowerBalance,
             Self::CpuAllCoreVoltageOffsetMv,
-            Self::IntelGpuVoltageOffsetMv,
-            Self::IntelCacheVoltageOffsetMv,
-            Self::IntelSystemAgentVoltageOffsetMv,
             Self::AmdCpuVoltageMv,
-            Self::IntelCoreRatios,
             Self::AmdCpuClockMhz,
             Self::AmdIgpuClockMhz,
             Self::IgpuSoftMinMhz,
@@ -345,12 +324,20 @@ impl Feature {
             Self::KeyboardColors,
             Self::KeyboardBrightness,
             Self::KeyboardEffect,
+            Self::HpSharedPowerMw,
         ]
     }
-    pub fn needs_ac(self) -> bool {
-        matches!(
-            self,
-            Self::GpuUnleashed | Self::GpuDynamicBoost | Self::GpuCustomTgp
-        )
+    pub fn retired(self) -> bool {
+        matches!(self, Self::Retired(_))
+    }
+    /// GPU settings written through the NVIDIA driver. cTGP and Dynamic Boost
+    /// are HP firmware flags (WMI `0x22`): they need no NVIDIA identity and
+    /// never wake the discrete GPU.
+    pub fn needs_nvidia(self) -> bool {
+        self.descriptor().category == Category::Gpu
+            && !matches!(
+                self,
+                Self::GpuUnleashed | Self::GpuDynamicBoost | Self::GpuCustomTgp
+            )
     }
 }

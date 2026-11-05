@@ -176,11 +176,7 @@ fn targets(name: &str, controller: &mut Controller) -> Result<Vec<Setting>, Stri
 
 fn run_case(name: &str, store: &mut ProfileStore) -> Result<Json, String> {
     let checkpoint = store.checkpoint_completed_journal()?;
-    let mut controller = if name == "cpu-slow-qualification" {
-        Controller::for_slow_limit_qualification()?
-    } else {
-        Controller::new(true, None)?
-    };
+    let mut controller = Controller::new(true, None)?;
     let before_gpu = controller.gpu_report()?;
     let before_curve = controller.gpu_curve()?;
     if controller.context()?.ac_connected != Some(true) {

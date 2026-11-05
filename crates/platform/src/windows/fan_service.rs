@@ -731,6 +731,26 @@ pub fn run_until(
             updated_unix_s: updated_unix_ms / 1000,
             updated_unix_ms,
         });
+    } else if let Err(error) = &result {
+        // The loop ended with an error after a safe release: record why, so a
+        // stale "curve" status cannot outlive the process.
+        report(&FanServiceStatus {
+            schema: 1,
+            process_id: instance.id,
+            process_started: instance.started,
+            last_heartbeat_unix_ms,
+            state: "failed",
+            detail: error.clone(),
+            cpu_c: None,
+            gpu_c: None,
+            ir_c: None,
+            protection: 0,
+            cpu_level: 0,
+            gpu_level: 0,
+            ccd_pinned: 0,
+            updated_unix_s: updated_unix_ms / 1000,
+            updated_unix_ms,
+        });
     }
     match (result, release) {
         (Ok(()), Ok(_)) => Ok(()),

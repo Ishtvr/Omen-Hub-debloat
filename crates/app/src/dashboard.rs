@@ -268,20 +268,15 @@ pub unsafe fn create(hwnd: HWND, th: &Theme) {
             false,
             false,
         );
-        for (id, label) in [
-            (190, t("settings.autostart")),
-            (191, t("settings.close_to_tray")),
-        ] {
-            control(
-                id,
-                "BUTTON",
-                label,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-                th.body,
-                false,
-                false,
-            );
-        }
+        control(
+            192,
+            "BUTTON",
+            t("settings.title"),
+            WS_TABSTOP,
+            th.body,
+            false,
+            false,
+        );
         control(
             180,
             "EDIT",
@@ -384,25 +379,15 @@ pub unsafe fn layout(hwnd: HWND) {
             (161, [right, bottom, mode_label, 28]),
             (182, [right + mode_label + 6, bottom + 2, 24, 24]),
             (102, [right, bottom + 34, panel - 136, 220]),
-            (181, [right, bottom + 78, panel, 44]),
+            // Room for a wrapped multi-line result instead of a cut-off line.
+            (181, [right, bottom + 78, panel, 110]),
         ]);
-        // Settings row under the system details; each box fits its label.
-        let settings_top = bottom + 128;
-        let mut x = 28;
-        for id in [190, 191] {
-            let check = GetDlgItem(hwnd, id);
-            let font = SendMessageW(check, WM_GETFONT, 0, 0) as HFONT;
-            let mut label = [0u16; 128];
-            let n = GetWindowTextW(check, label.as_mut_ptr(), 128).max(0) as usize;
-            let width =
-                crate::native_ui::text_width(check, font, &String::from_utf16_lossy(&label[..n]))
-                    + 36;
-            boxes.push((id, [x, settings_top, width, 26]));
-            x += width + 32;
-        }
+        boxes.push((192, [width - 178, 12, 150, 34]));
+        let mut layout = crate::native_ui::Layout::new(hwnd);
         for (id, b) in boxes {
-            MoveWindow(GetDlgItem(hwnd, id), b[0], b[1], b[2], b[3], 1);
+            layout.place(GetDlgItem(hwnd, id), b[0], b[1], b[2], b[3]);
         }
+        layout.apply();
         // The Apply button matches the closed selector's real height.
         let mut combo: RECT = std::mem::zeroed();
         GetWindowRect(GetDlgItem(hwnd, 102), &mut combo);

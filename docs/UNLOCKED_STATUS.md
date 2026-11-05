@@ -12,6 +12,6 @@ The request for an “unlocked” release includes implementing missing hardware
 - Real reboot, sleep/resume, AC/DC, failure recovery and longer stability/RAM acceptance.
 - A verified numeric GPU-TGP path. The public NVML adapter exists, but its configured original cannot be read on this laptop. The alternate [TGP investigation](plans/NVPWRCONTROL_TGP_FORK_PLAN.md) remains research only.
 - Physical MUX/iGPU-only operation and independent keyboard/hotkey lifecycle.
-- Intel backend and additional models, each with suitable hardware evidence.
+- Additional AMD/OMEN models, each with suitable hardware evidence. Intel tuning is removed from scope.
 
 Qualified offsets/V/F, static lighting, short fan trials and CPU/Windows controls retain their documented scope. Intentionally removed voltage/FPS/APU controls are not pending accidental unlocks. Latest checks and their limits: [Validation](VALIDATION.md). Detailed code findings: [Project review](PROJECT_REVIEW.md).

@@ -145,9 +145,9 @@ try{
  $taskProfile=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
  if(@($taskProfile.settings|Where-Object feature -eq 'gpu_unleashed').Count-ne0){throw 'Unchecked Dynamic Boost was not omitted.'}
  Close-Preset $taskWindow
- # Import a complete custom curve and an unrelated lighting setting as metadata.
+ # Import a full curve, hidden lighting, a retired Intel entry and unsupported brightness as metadata.
  $taskPoints=@($taskBeforeCurve.nodes|ForEach-Object{[ordered]@{voltage_mv=[uint32]($_.voltage_uv/1000);frequency_mhz=[uint32]($_.frequency_khz/1000)}})
- $taskProfile.settings=@($taskProfile.settings)+@([pscustomobject]@{feature='gpu_vf_curve';value=[pscustomobject]@{kind='vf_curve';value=$taskPoints}},[pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}},[pscustomobject]@{feature='intel_pl1_mw';value=[pscustomobject]@{kind='integer';value=45000}},[pscustomobject]@{feature='windows_power_plan';value=[pscustomobject]@{kind='choice';value='balanced'}})
+ $taskProfile.settings=@($taskProfile.settings)+@([pscustomobject]@{feature='gpu_vf_curve';value=[pscustomobject]@{kind='vf_curve';value=$taskPoints}},[pscustomobject]@{feature='keyboard_colors';value=[pscustomobject]@{kind='colors';value=@(@(1,2,3),@(4,5,6),@(7,8,9),@(10,11,12))}},[pscustomobject]@{feature='intel_pl1_mw';value=[pscustomobject]@{kind='integer';value=45000}},[pscustomobject]@{feature='keyboard_brightness';value=[pscustomobject]@{kind='integer';value=50}},[pscustomobject]@{feature='windows_power_plan';value=[pscustomobject]@{kind='choice';value='balanced'}})
  $taskCurveJson=$taskPoints|ConvertTo-Json -Depth 6 -Compress
  [IO.File]::WriteAllText($taskFile,($taskProfile|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
  Read-Json @('profile-create',$taskOtherId,'Other preset for discard check')|Out-Null;$taskOtherCreated=$true
@@ -174,19 +174,19 @@ try{
  $taskFresh=Get-Content -LiteralPath $taskFile -Raw|ConvertFrom-Json
  @($taskFresh.settings|Where-Object feature -eq 'keyboard_colors')[0].value.value[0][0]=22
  [IO.File]::WriteAllText($taskFile,($taskFresh|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
- Click $taskWindow 1202
+ Click $taskWindow 1201
  $taskPpt=[OmenPresetSmoke]::Labeled($taskWindow,'Fast-Limit (PPT) (W)')
  if($taskPpt-eq[IntPtr]::Zero){throw 'CPU PPT field is missing.'}
  $taskPptId=[OmenPresetSmoke]::Id($taskPpt)
  [void][OmenPresetSmoke]::Message($taskPpt,0x00F1,1);Click $taskWindow $taskPptId
  [OmenPresetSmoke]::SetWindowText([OmenPresetSmoke]::Control($taskWindow,($taskPptId+1)),'45,125')
- Click $taskWindow 1209
+ Click $taskWindow 1205
  $taskEpp=[OmenPresetSmoke]::Labeled($taskWindow,'Energiepräferenz (EPP) (%)')
  if($taskEpp-eq[IntPtr]::Zero){throw 'Windows EPP field is missing.'}
  $taskEppId=[OmenPresetSmoke]::Id($taskEpp)
  [void][OmenPresetSmoke]::Message($taskEpp,0x00F1,1);Click $taskWindow $taskEppId
  [OmenPresetSmoke]::SetWindowText([OmenPresetSmoke]::Control($taskWindow,($taskEppId+1)),'74')
- Click $taskWindow 1210
+ Click $taskWindow 1206
  $taskEnergy=[OmenPresetSmoke]::Labeled($taskWindow,'Windows-Energiemodus')
  if($taskEnergy-eq[IntPtr]::Zero){throw 'Windows energy mode is missing.'}
  $taskEnergyId=[OmenPresetSmoke]::Id($taskEnergy)
@@ -202,6 +202,7 @@ try{
  if((@($taskProfile.settings|Where-Object feature -eq 'gpu_vf_curve')[0].value.value|ConvertTo-Json -Depth 6 -Compress)-cne$taskCurveJson){throw 'Full custom curve was changed by unrelated editing.'}
  if(@($taskProfile.settings|Where-Object feature -eq 'keyboard_colors')[0].value.value[0][0]-ne22){throw 'Concurrent hidden setting was overwritten.'}
  if($taskProfile.id-cne$taskId-or(Get-FileHash -LiteralPath $taskOtherFile).Hash-cne$taskOtherHash){throw 'Save after declined switch changed the wrong preset.'}
+ if(@($taskProfile.settings|Where-Object feature -like 'intel_*').Count-ne0){throw 'Explicit Save retained removed Intel settings.'}
  $taskInvalidPlan=Read-Json @('profile-plan',$taskId)
  if($taskInvalidPlan.applicable-or[OmenPresetSmoke]::IsWindowEnabled([OmenPresetSmoke]::Control($taskWindow,705))){throw 'Unsupported full preset became applicable.'}
  # The startup checkbox permits choosing intent; the worker must reject this

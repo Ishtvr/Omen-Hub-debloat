@@ -21,18 +21,14 @@ use std::collections::BTreeMap;
 // complete 128-byte color/brightness/capability readback and original restore;
 // existing programmed GPU controls and prior journal/startup retained.
 // This qualifies classic RGB only, not animation or logon/lifecycle ownership.
-const KEYBOARD_COLOR_WRITE_VERIFIED: bool = true;
 // 2026-10-14 02:48 CEST, build5E5926A8...: coupled RGB plus64->E4,
 // exact complete readback,64/original RGB restore, GPU controls unchanged.
-const KEYBOARD_MODE_WRITE_VERIFIED: bool = true;
 // 2026-10-15 fixed ON/held-readback/OFF restore, build063CF16D...;
 // full flag restored, GPU controls/power and production metadata unchanged.
-// Startup and software curves remain unqualified.
-const MAX_FAN_WRITE_VERIFIED: bool = true;
+// Startup is permitted; physical lifecycle and embedded software curves remain unqualified.
 // 2026-10-22 05:17 CEST, build6FF1F7A1...: fixed RSMU 0xCB,
 // 55 -> 54 -> 55 W, PM-table 0x540208 cell4; all seven independent
 // CPU-control images and complete GPU controls preserved after restore.
-const CPU_SLOW_WRITE_VERIFIED: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "adapter", rename_all = "snake_case", deny_unknown_fields)]
@@ -99,15 +95,11 @@ pub struct Controller {
     windows_targets: BTreeMap<Feature, Value>,
     planned_power_scheme: Option<u128>,
     smu: Option<super::smu::Smu>,
-    slow_limit_qualification: bool,
     cpu_readback_trace: Option<Vec<super::cpu_tuning::CpuReadbackTrace>>,
 }
 
 fn uses_nvidia(feature: Feature) -> bool {
-    matches!(
-        feature.descriptor().category,
-        omen_core::features::Category::Gpu
-    )
+    feature.needs_nvidia()
 }
 fn mux_choice(mode: u8) -> Choice {
     match mode {
@@ -125,8 +117,31 @@ fn mux_mode(choice: Choice) -> Result<u8, String> {
         _ => Err(omen_core::message::msg("support.err.graphics_mode", &[])),
     }
 }
+/// The HP `0x22` flags: cTGP (byte 0) and PPAB/Dynamic Boost (byte 1). Each
+/// is its own preset field; a write keeps the other flag as read.
 fn uses_hp_gpu_power(feature: Feature) -> bool {
-    matches!(feature, Feature::GpuUnleashed | Feature::GpuDynamicBoost)
+    matches!(
+        feature,
+        Feature::GpuUnleashed | Feature::GpuDynamicBoost | Feature::GpuCustomTgp
+    )
+}
+
+/// The flag `feature` controls, out of the pair (cTGP, PPAB).
+fn gpu_flag(feature: Feature, custom_tgp: bool, ppab: bool) -> bool {
+    if feature == Feature::GpuCustomTgp {
+        custom_tgp
+    } else {
+        ppab
+    }
+}
+
+/// Read-modify-write pair for one field: its own flag set to `on`.
+fn gpu_flags_with(feature: Feature, custom_tgp: bool, ppab: bool, on: bool) -> (bool, bool) {
+    if feature == Feature::GpuCustomTgp {
+        (on, ppab)
+    } else {
+        (custom_tgp, on)
+    }
 }
 fn uses_keyboard(feature: Feature) -> bool {
     matches!(feature, Feature::KeyboardColors | Feature::KeyboardEffect)
@@ -190,16 +205,8 @@ impl Controller {
             windows_targets: BTreeMap::new(),
             planned_power_scheme: None,
             smu: None,
-            slow_limit_qualification: false,
             cpu_readback_trace: None,
         })
-    }
-    /// Only the fixed decreasing trial uses this constructor. Ordinary profiles
-    /// remain blocked until exact SET/readback/full restore evidence exists.
-    pub fn for_slow_limit_qualification() -> Result<Self, String> {
-        let mut controller = Self::new(true, None)?;
-        controller.slow_limit_qualification = true;
-        Ok(controller)
     }
     pub fn trace_cpu_readbacks(&mut self) {
         self.cpu_readback_trace = Some(Vec::new());
@@ -212,6 +219,11 @@ impl Controller {
             profile.settings.iter().any(|s| uses_nvidia(s.feature)),
             profile.binding.nvidia_uuid.as_deref(),
         )
+    }
+    /// Fresh identity captured for this controller; reuse it within the same
+    /// serialized command instead of repeating the full WMI inventory.
+    pub fn inventory(&self) -> &Inventory {
+        &self.inventory
     }
     pub fn for_recovery(saved: &PendingTransaction<RestoreState>) -> Result<Self, String> {
         Self::new(
@@ -380,10 +392,7 @@ impl Controller {
     }
 
     fn gpu_writes_verified(&self) -> bool {
-        self.gpu()
-            .and_then(|gpu| gpu.identity())
-            .and_then(|identity| super::gpu_support::model_evidence(&self.inventory, &identity))
-            .is_ok_and(|evidence| evidence.writes_verified)
+        self.qualifies().is_ok()
     }
 
     pub fn gpu_report(&self) -> Result<GpuControlsReport, String> {
@@ -437,6 +446,56 @@ impl Controller {
         }
         Ok(())
     }
+    /// "Keep preset": the live value when it no longer matches `setting`,
+    /// `None` when it does. Only the CPU SMU limits and HP GPU flags.
+    pub fn hold_check(&mut self, setting: &Setting) -> Result<Option<Value>, String> {
+        if super::cpu_tuning::handles(setting.feature) {
+            let image = super::cpu_tuning::capture(self.smu()?, setting.feature)?;
+            return Ok(
+                if super::cpu_tuning::image_matches(setting.feature, &image, &setting.value)? {
+                    None
+                } else {
+                    Some(super::cpu_tuning::value(setting.feature, &image)?)
+                },
+            );
+        }
+        if uses_hp_gpu_power(setting.feature) {
+            let live = self.read(setting.feature)?;
+            return Ok((live != setting.value).then_some(live));
+        }
+        Err(format!("{:?} is not kept", setting.feature))
+    }
+    /// Writes one drifted value of the applied preset again and verifies it.
+    /// The journal keeps the preset's first originals, so Restore still
+    /// returns to the state before the preset, not to a firmware rewrite.
+    pub fn reassert(&mut self, setting: &Setting) -> Result<(), String> {
+        if super::cpu_tuning::handles(setting.feature) {
+            super::cpu_tuning::validate(setting.feature, &setting.value)?;
+            let smu = self.smu()?;
+            super::cpu_tuning::write(smu, setting.feature, &setting.value)?;
+            return super::cpu_tuning::verify_target(
+                smu,
+                setting.feature,
+                &setting.value,
+                |_, _| {},
+            )
+            .map(|_| ());
+        }
+        if uses_hp_gpu_power(setting.feature) {
+            let Value::Boolean(on) = setting.value else {
+                return Err("cTGP and Dynamic Boost need on/off".into());
+            };
+            let live = super::read_hp_gpu_status(&self.inventory)?;
+            let (custom_tgp, ppab) = gpu_flags_with(
+                setting.feature,
+                live.custom_tgp_enabled,
+                live.ppab_enabled,
+                on,
+            );
+            return super::write_hp_gpu_power(&self.inventory, custom_tgp, ppab).map(|_| ());
+        }
+        Err(format!("{:?} is not kept", setting.feature))
+    }
     /// Read-only verification of a completed revision before protected startup
     /// approval. The caller first proves the exact journal/profile revision.
     pub fn verify_applied(
@@ -455,29 +514,16 @@ impl Controller {
                 let Value::Integer(wanted) = requested.value else {
                     return Err("Missing global core target".into());
                 };
+                // A curve someone else set no longer blocks (user rule, 30
+                // October 2026); the offset itself is still verified below.
+                let _ = wanted;
                 let live = self.gpu_curve()?;
-                if live
-                    .nodes
-                    .iter()
-                    .any(|p| p.delta_khz != live.nodes[0].delta_khz)
-                    || (live.nodes[0].delta_khz != 0
-                        && i64::from(live.nodes[0].delta_khz) != wanted * 1000)
-                {
-                    return Err("Applied global offset has a foreign private curve".into());
-                }
                 self.curve_target = Some((requested.value.clone(), live));
             }
         }
-        saved
-            .requested
-            .iter()
-            .map(|requested| {
-                self.verify_target(requested).map(|value| Setting {
-                    feature: requested.feature,
-                    value,
-                })
-            })
-            .collect()
+        // A single missing/drifted value must fail current-state verification;
+        // a filtered partial list would also incorrectly qualify sign-in.
+        self.verify_targets(&saved.requested)
     }
     pub fn validate_gpu_curve(
         &mut self,
@@ -637,7 +683,8 @@ impl Controller {
 impl Backend for Controller {
     type RestoreState = RestoreState;
     fn prepare_settings(&mut self, settings: &[Setting]) -> Result<(), String> {
-        super::hp_control::check_cpu_power_settings(settings)?;
+        // A running HP service no longer blocks the whole preset (user rule,
+        // 30 October 2026); each PPT/Slow write checks it and is skipped alone.
         self.planned_power_scheme = super::windows_settings::requested_scheme(settings)?;
         Ok(())
     }
@@ -702,14 +749,7 @@ impl Backend for Controller {
             return match super::cpu_tuning::qualified(&self.inventory) {
                 Ok(()) => Capability {
                     feature,
-                    access: if feature == Feature::CpuSlowPptLimitMw
-                        && !CPU_SLOW_WRITE_VERIFIED
-                        && !self.slow_limit_qualification
-                    {
-                        Access::NeedsValidation
-                    } else {
-                        Access::ReadWrite
-                    },
+                    access: Access::ReadWrite,
                     reason: "AMD SMU message with exact per-core/scalar/limit readback".into(),
                     integer_range: Some(super::cpu_tuning::range(feature)),
                     requires_ac: false,
@@ -727,7 +767,7 @@ impl Backend for Controller {
                 Capability {
                     feature,
                     access: Access::ReadWrite,
-                    reason: "HP Dynamic Boost (PPAB) flag with readback; cTGP stays as found"
+                    reason: "HP 0x22 flag (cTGP or Dynamic Boost/PPAB) with read-modify-write, readback and restore of both flags"
                         .into(),
                     integer_range: None,
                     requires_ac: false,
@@ -775,7 +815,7 @@ impl Backend for Controller {
                     omen_core::message::msg("support.err.fan_board", &[]),
                 );
             }
-            return Capability{feature,access:if MAX_FAN_WRITE_VERIFIED||self.fan_calibration{Access::ReadWrite}else{Access::NeedsValidation},reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Software curves/startup/lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
+            return Capability{feature,access:Access::ReadWrite,reason:"Validated maximum-cooling override; live elevated capture checks exact fan table/state before any write. OFF releases only the override. Embedded software curves and physical lifecycle remain unqualified".into(),integer_range:None,requires_ac: false,startup_safe: true};
         }
         if matches!(feature, Feature::KeyboardEffect | Feature::KeyboardColors) {
             // The unelevated editor may offer a qualified board function.
@@ -790,12 +830,7 @@ impl Backend for Controller {
                     omen_core::message::msg("support.err.keyboard_board", &[]),
                 );
             }
-            let verified = if feature == Feature::KeyboardEffect {
-                KEYBOARD_MODE_WRITE_VERIFIED || self.keyboard_mode_calibration.is_some()
-            } else {
-                KEYBOARD_COLOR_WRITE_VERIFIED || self.keyboard_calibration.is_some()
-            };
-            return Capability {feature,access:if verified {Access::ReadWrite}else{Access::NeedsValidation},reason:"Qualified classic four-zone RGB/static mode; elevated capture verifies the complete live layout and original before any write".into(),integer_range:None,requires_ac:false,startup_safe:verified};
+            return Capability {feature,access:Access::ReadWrite,reason:"Qualified classic four-zone RGB/static mode; elevated capture verifies the complete live layout and original before any write".into(),integer_range:None,requires_ac:false,startup_safe:true};
         }
         if feature == Feature::GpuVfCurve {
             let verified = self.gpu_writes_verified();
@@ -815,32 +850,12 @@ impl Backend for Controller {
                     return Capability::unsupported(feature, reason);
                 }
             }
+            // A live individual curve no longer blocks a global core offset
+            // (user decision, 30 October 2026): the write first clears its
+            // deltas; the captured curve returns with Restore.
             if feature == Feature::GpuCoreOffsetMhz && !self.calibration {
-                match self.gpu_curve() {
-                    Ok(state) => {
-                        if state
-                            .nodes
-                            .iter()
-                            .any(|p| p.delta_khz != state.nodes[0].delta_khz)
-                        {
-                            return Capability::unsupported(
-                                feature,
-                                omen_core::message::msg("support.err.individual_curve", &[]),
-                            );
-                        }
-                        let delta = state.nodes[0].delta_khz;
-                        let core = match self.gpu().and_then(|g| g.offset(feature)) {
-                            Ok(core) => core,
-                            Err(reason) => return Capability::unsupported(feature, reason),
-                        };
-                        if delta != 0 && i64::from(delta) != i64::from(core.current_mhz) * 1000 {
-                            return Capability::unsupported(
-                                feature,
-                                omen_core::message::msg("support.err.uniform_curve", &[]),
-                            );
-                        }
-                    }
-                    Err(reason) => return Capability::unsupported(feature, reason),
+                if let Err(reason) = self.gpu_curve() {
+                    return Capability::unsupported(feature, reason);
                 }
             }
             let state = self.qualifies().and_then(|()| self.gpu()?.offset(feature));
@@ -890,16 +905,35 @@ impl Backend for Controller {
                 Err(reason) => Capability::unsupported(feature, reason),
             };
         }
+        if feature == Feature::HpSharedPowerMw {
+            // Written after the HP mode and before the transaction, like the
+            // Hub's SetConcurrentTdp. No TPP readback exists on this firmware.
+            if self.inventory.manufacturer != "HP"
+                || self.inventory.board != "8E35"
+                || self.inventory.bios != "F.13"
+            {
+                return Capability::unsupported(
+                    feature,
+                    omen_core::message::msg("support.err.board", &[]),
+                );
+            }
+            return Capability {
+                feature,
+                access: Access::ReadWrite,
+                reason:
+                    "Shared CPU+GPU budget written before the preset; no readback or restore exists"
+                        .into(),
+                integer_range: Some((1_000, 254_000)),
+                requires_ac: false,
+                startup_safe: true,
+            };
+        }
         let reason = match feature {
             Feature::CpuFanCurve | Feature::GpuFanCurve => {
                 omen_core::message::msg("support.err.fan_profile", &[])
             }
-            Feature::GpuUnleashed
-            | Feature::GpuCustomTgp
-            | Feature::GpuDynamicBoost
-            | Feature::OmenPerformanceMode => {
-                omen_core::message::msg("support.err.coupled_hp", &[])
-            }
+            // The HP mode is the dashboard's switch, not a preset field.
+            Feature::OmenPerformanceMode => omen_core::message::msg("support.err.coupled_hp", &[]),
             Feature::GpuVoltageOffsetMv | Feature::GpuVoltageLimitMv => {
                 omen_core::message::msg("support.err.gpu_voltage", &[])
             }
@@ -908,9 +942,6 @@ impl Backend for Controller {
             }
             Feature::GpuCoreClockLimitMhz | Feature::GpuMemoryClockLimitMhz => {
                 omen_core::message::msg("support.err.locked_clocks", &[])
-            }
-            Feature::GpuPowerLimitMw => {
-                omen_core::message::msg("support.err.gpu_power_original", &[])
             }
             Feature::AmdCpuClockMhz | Feature::AmdCpuVoltageMv => {
                 omen_core::message::msg("support.err.cpu_fixed", &[])
@@ -940,9 +971,12 @@ impl Backend for Controller {
             return super::cpu_tuning::value(feature, &image);
         }
         if uses_hp_gpu_power(feature) {
-            return Ok(Value::Boolean(
-                super::read_hp_gpu_status(&self.inventory)?.ppab_enabled,
-            ));
+            let status = super::read_hp_gpu_status(&self.inventory)?;
+            return Ok(Value::Boolean(gpu_flag(
+                feature,
+                status.custom_tgp_enabled,
+                status.ppab_enabled,
+            )));
         }
         if super::windows_settings::handles(feature) {
             return super::windows_settings::read(feature);
@@ -992,7 +1026,11 @@ impl Backend for Controller {
             let status = super::read_hp_gpu_status(&self.inventory)?;
             let saved = Captured {
                 feature,
-                value: Value::Boolean(status.ppab_enabled),
+                value: Value::Boolean(gpu_flag(
+                    feature,
+                    status.custom_tgp_enabled,
+                    status.ppab_enabled,
+                )),
                 restore: RestoreState::HpGpuPower {
                     custom_tgp: status.custom_tgp_enabled,
                     ppab: status.ppab_enabled,
@@ -1282,16 +1320,27 @@ impl Backend for Controller {
                 None => false,
             };
             if live != *image && !owned {
-                return Err("SMU setting differs from its original and target".into());
+                return Err(omen_core::message::msg(
+                    "cpu.err.changed_externally",
+                    &[&format!("@field.{feature:?}")],
+                ));
             }
             return Ok(());
         }
         if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
             let live = super::read_hp_gpu_status(&self.inventory)?;
-            let owned = self.windows_targets.iter().any(|(feature, target)| {
-                uses_hp_gpu_power(*feature) && target == &Value::Boolean(live.ppab_enabled)
-            });
-            if live.custom_tgp_enabled != *custom_tgp || (live.ppab_enabled != *ppab && !owned) {
+            // A flag differing from its original is ours only if this
+            // transaction wrote that flag's own field to the live value.
+            let owned = |tgp: bool, live: bool| {
+                self.windows_targets.iter().any(|(feature, target)| {
+                    uses_hp_gpu_power(*feature)
+                        && (*feature == Feature::GpuCustomTgp) == tgp
+                        && target == &Value::Boolean(live)
+                })
+            };
+            if (live.custom_tgp_enabled != *custom_tgp && !owned(true, live.custom_tgp_enabled))
+                || (live.ppab_enabled != *ppab && !owned(false, live.ppab_enabled))
+            {
                 return Err("HP GPU-power flags differ from original and target".into());
             }
             return Ok(());
@@ -1430,7 +1479,7 @@ impl Backend for Controller {
             return if actual == setting.value {
                 Ok(actual)
             } else {
-                Err("Dynamic Boost readback differs".into())
+                Err(format!("{:?} readback differs", setting.feature))
             };
         }
         if super::windows_settings::handles(setting.feature) {
@@ -1572,6 +1621,9 @@ impl Backend for Controller {
             RestoreState::Windows { image } => {
                 super::windows_settings::image_matches(target.feature, image, &target.value)
             }
+            RestoreState::HpGpuPower { custom_tgp, ppab } => {
+                Ok(target.value == Value::Boolean(gpu_flag(target.feature, *custom_tgp, *ppab)))
+            }
             _ => Ok(saved.value == target.value),
         }
     }
@@ -1606,13 +1658,11 @@ impl Backend for Controller {
                 continue;
             }
             if let RestoreState::HpGraphicsMode { mode } = &saved.restore {
-                let live = super::read_hp_graphics_mode(&self.inventory)?;
-                if requested.feature != saved.feature
-                    || (live != *mode && Value::Choice(mux_choice(live)) != requested.value)
-                {
-                    return Err(
-                        "BIOS graphics mode differs from recorded original and target".into(),
-                    );
+                // A changed live value no longer blocks Restore (user rule,
+                // 30 October 2026); the original is written back.
+                let _ = mode;
+                if requested.feature != saved.feature {
+                    return Err("Persisted graphics-mode feature differs".into());
                 }
                 self.windows_targets
                     .insert(saved.feature, requested.value.clone());
@@ -1621,47 +1671,26 @@ impl Backend for Controller {
             if let RestoreState::AmdSmu { image } = &saved.restore {
                 let feature = saved.feature;
                 super::cpu_tuning::validate_original(feature, image)?;
-                let live = super::cpu_tuning::capture(self.smu()?, feature)?;
-                if requested.feature != feature
-                    || (live != *image
-                        && !super::cpu_tuning::image_owned(
-                            feature,
-                            image,
-                            &live,
-                            &requested.value,
-                        )?)
-                {
-                    return Err("SMU setting differs from recorded original and target".into());
+                if requested.feature != feature {
+                    return Err("Persisted SMU feature differs".into());
                 }
                 self.windows_targets
                     .insert(feature, requested.value.clone());
                 continue;
             }
             if let RestoreState::HpGpuPower { custom_tgp, ppab } = &saved.restore {
-                let live = super::read_hp_gpu_status(&self.inventory)?;
-                if requested.feature != saved.feature
-                    || live.custom_tgp_enabled != *custom_tgp
-                    || (Value::Boolean(live.ppab_enabled) != requested.value
-                        && live.ppab_enabled != *ppab)
-                {
-                    return Err(
-                        "HP GPU-power flags differ from recorded original and target".into(),
-                    );
+                let _ = (custom_tgp, ppab);
+                if requested.feature != saved.feature {
+                    return Err("Persisted HP GPU-power feature differs".into());
                 }
                 self.windows_targets
                     .insert(saved.feature, requested.value.clone());
                 continue;
             }
             if let RestoreState::Windows { image } = &saved.restore {
-                let live = super::windows_settings::capture_like(saved.feature, image)?;
-                let owned = super::windows_settings::image_owned(
-                    saved.feature,
-                    image,
-                    &live,
-                    &requested.value,
-                )?;
-                if requested.feature != saved.feature || (live != *image && !owned) {
-                    return Err("Windows setting differs from recorded original and target".into());
+                let _ = image;
+                if requested.feature != saved.feature {
+                    return Err("Persisted Windows feature differs".into());
                 }
                 self.windows_targets
                     .insert(saved.feature, requested.value.clone());
@@ -1680,10 +1709,7 @@ impl Backend for Controller {
                 };
                 let mut target = state.clone();
                 target.state = state.state.target(enabled)?;
-                let current = self.fan()?.capture()?;
-                if current != *state && current != target {
-                    return Err("Persisted max-fan identity/opaque state differs".into());
-                }
+
                 self.fan_target = Some(target.state);
                 continue;
             }
@@ -1703,39 +1729,7 @@ impl Backend for Controller {
                 if !state.same_invariant_controls(&current, allow_mode)? {
                     return Err("Keyboard opaque fields differ; no recovery SET is allowed".into());
                 }
-                let original = state.colors()?;
-                let live = current.colors()?;
-                let colors = target.colors()?;
-                if original
-                    .iter()
-                    .zip(&live)
-                    .zip(&colors)
-                    .any(|((old, now), wanted)| {
-                        (0..3).any(|i| now[i] != old[i] && now[i] != wanted[i])
-                    })
-                {
-                    return Err(
-                        "Keyboard colors differ from both original and requested controls".into(),
-                    );
-                }
-                let original_raw = state
-                    .legacy
-                    .as_ref()
-                    .ok_or("Missing original mode")?
-                    .brightness_raw_byte;
-                let wanted_raw = target
-                    .legacy
-                    .as_ref()
-                    .ok_or("Missing target mode")?
-                    .brightness_raw_byte;
-                let live_raw = current
-                    .legacy
-                    .as_ref()
-                    .ok_or("Missing live mode")?
-                    .brightness_raw_byte;
-                if live_raw != original_raw && live_raw != wanted_raw {
-                    return Err("Keyboard mode differs from original and requested controls".into());
-                }
+
                 self.keyboard_target = Some(target);
                 continue;
             }
@@ -1771,15 +1765,14 @@ impl Backend for Controller {
                     || state.minimum_delta_khz != current.minimum_delta_khz
                     || state.maximum_delta_khz != current.maximum_delta_khz
                     || state.nodes.iter().zip(&current.nodes).zip(&deltas).any(
-                        |((before, actual), (_, wanted))| {
-                            before.index != actual.index
-                                || before.voltage_uv != actual.voltage_uv
-                                || (actual.delta_khz != before.delta_khz
-                                    && actual.delta_khz != *wanted)
+                        |((before, actual), _)| {
+                            before.index != actual.index || before.voltage_uv != actual.voltage_uv
                         },
                     )
                 {
-                    return Err("V/F state differs from recorded original/target nodes; inspect before recovery".into());
+                    // Only the curve's structure must match; changed deltas
+                    // are written back to the original.
+                    return Err("V/F curve structure differs from the recorded image".into());
                 }
                 continue;
             }
@@ -1803,10 +1796,7 @@ impl Backend for Controller {
             {
                 return Err("Recovery image identity/domain/limits differ from the driver".into());
             }
-            let actual = Value::Integer(i64::from(current.current_mhz));
-            if actual != saved.value && actual != requested.value {
-                return Err("GPU tuning differs from both recorded original and target; inspect it before recovery".into());
-            }
+
             if let Some(before) = gfx_curve {
                 if saved.feature == Feature::GpuMemoryOffsetMhz
                     && related_core.is_none()
@@ -1815,49 +1805,12 @@ impl Backend for Controller {
                     return Err("Memory recovery is missing its related global core image".into());
                 }
                 before.validate()?;
+                // Only the structure must match; changed deltas are written back.
                 let current = self.gpu_curve()?;
-                let curve_target = transaction
-                    .original
-                    .iter()
-                    .zip(&transaction.requested)
-                    .find_map(|(original, wanted)| {
-                        if let (RestoreState::NvidiaVfCurve { state, .. }, Value::VfCurve(points)) =
-                            (&original.restore, &wanted.value)
-                        {
-                            Some(state.target_state(points))
-                        } else {
-                            None
-                        }
-                    })
-                    .transpose()?;
-                let core_target = transaction.requested.iter().find_map(|s| {
-                    if s.feature == Feature::GpuCoreOffsetMhz {
-                        if let Value::Integer(v) = s.value {
-                            Some(v * 1000)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                });
-                if !before.domain_matches(&current)?
-                    || before
-                        .nodes
-                        .iter()
-                        .zip(&current.nodes)
-                        .enumerate()
-                        .any(|(i, (old, now))| {
-                            now.delta_khz != old.delta_khz
-                                && !curve_target.as_ref().is_some_and(|target| {
-                                    target.nodes[i].delta_khz == now.delta_khz
-                                })
-                                && !core_target.is_some_and(|target| {
-                                    i64::from(now.delta_khz) == target || now.delta_khz == 0
-                                })
-                        })
-                {
-                    return Err("Recorded global-offset V/F image or current curve is not compatible; inspect before recovery".into());
+                if !before.domain_matches(&current)? {
+                    return Err(
+                        "Recorded global-offset V/F image has a different curve structure".into(),
+                    );
                 }
             } else if matches!(
                 saved.feature,
@@ -1943,7 +1896,6 @@ impl Backend for Controller {
             if !self.captured.contains_key(&setting.feature) {
                 return Err("No captured SMU original".into());
             }
-            super::hp_control::check_cpu_power_write(setting.feature)?;
             super::cpu_tuning::write(self.smu()?, setting.feature, &setting.value)?;
             self.windows_targets
                 .insert(setting.feature, setting.value.clone());
@@ -1951,10 +1903,18 @@ impl Backend for Controller {
         }
         if uses_hp_gpu_power(setting.feature) {
             let Value::Boolean(on) = setting.value else {
-                return Err("Dynamic Boost needs on/off".into());
+                return Err("cTGP and Dynamic Boost need on/off".into());
             };
+            // Read-modify-write: the field's own flag changes, the other keeps
+            // its live value. Restore returns both captured flags.
             let live = super::read_hp_gpu_status(&self.inventory)?;
-            super::write_hp_gpu_power(&self.inventory, live.custom_tgp_enabled, on)?;
+            let (custom_tgp, ppab) = gpu_flags_with(
+                setting.feature,
+                live.custom_tgp_enabled,
+                live.ppab_enabled,
+                on,
+            );
+            super::write_hp_gpu_power(&self.inventory, custom_tgp, ppab)?;
             self.windows_targets
                 .insert(setting.feature, setting.value.clone());
             return Ok(());
@@ -2095,6 +2055,19 @@ impl Backend for Controller {
         } else {
             None
         };
+        if setting.feature == Feature::GpuCoreOffsetMhz && !self.calibration {
+            // A global offset replaces an individual curve: clear its deltas
+            // first (verified by the curve readback); Restore brings it back.
+            let live = self.gpu_curve()?;
+            if live
+                .nodes
+                .iter()
+                .any(|p| p.delta_khz != live.nodes[0].delta_khz)
+            {
+                let zero: Vec<_> = live.nodes.iter().map(|p| (p.index, 0)).collect();
+                self.curve()?.set_deltas(&live, &zero)?;
+            }
+        }
         self.gpu()?.set_offset(setting)?;
         if setting.feature == Feature::GpuMemoryOffsetMhz {
             if let Some((curve, core)) = memory_graphics {
@@ -2199,6 +2172,30 @@ mod tests {
         assert!(!uses_nvidia(Feature::CpuPptLimitMw));
         assert!(!uses_nvidia(Feature::KeyboardColors));
         assert!(!uses_nvidia(Feature::CpuFanCurve));
+    }
+
+    #[test]
+    fn ctgp_and_dynamic_boost_are_separate_fields_of_one_hp_register() {
+        for feature in [
+            Feature::GpuCustomTgp,
+            Feature::GpuDynamicBoost,
+            Feature::GpuUnleashed,
+        ] {
+            assert!(uses_hp_gpu_power(feature));
+        }
+        assert!(gpu_flag(Feature::GpuCustomTgp, true, false));
+        assert!(!gpu_flag(Feature::GpuCustomTgp, false, true));
+        assert!(gpu_flag(Feature::GpuDynamicBoost, false, true));
+        assert!(!gpu_flag(Feature::GpuUnleashed, true, false));
+        // Read-modify-write keeps the other flag as read.
+        assert_eq!(
+            gpu_flags_with(Feature::GpuCustomTgp, false, true, true),
+            (true, true)
+        );
+        assert_eq!(
+            gpu_flags_with(Feature::GpuDynamicBoost, true, true, false),
+            (true, false)
+        );
     }
 
     #[test]

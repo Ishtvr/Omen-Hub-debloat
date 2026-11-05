@@ -57,16 +57,42 @@ fn take_language_argument(args: &mut Vec<String>) -> Result<Option<Language>, St
 /// Select once, before any UI/helper threads start. Fixed UAC commands carry
 /// this option explicitly because shell elevation need not inherit our env.
 pub fn configure(args: &mut Vec<String>) -> Result<(), String> {
-    if let Some(language) = take_language_argument(args)? {
-        LANGUAGE
-            .set(language)
-            .map_err(|_| omen_core::message::msg("language.already_selected", &[]))?;
-    }
-    Ok(())
+    let explicit = take_language_argument(args)?;
+    let environment = std::env::var("OMEN_HUB_LANG")
+        .ok()
+        .and_then(|code| Language::from_code(&code));
+    let stored = if explicit.is_none() && environment.is_none() {
+        omen_platform::profile_store::ProfileStore::user_data()
+            .and_then(|store| store.app_settings())
+            .map(|settings| settings.language)
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
+    let selected = select_language(explicit, environment, stored, detect_system_language());
+    LANGUAGE
+        .set(selected)
+        .map_err(|_| omen_core::message::msg("language.already_selected", &[]))
+}
+fn select_language(
+    explicit: Option<Language>,
+    environment: Option<Language>,
+    stored: omen_core::app_settings::LanguagePreference,
+    system: Language,
+) -> Language {
+    use omen_core::app_settings::LanguagePreference;
+    explicit.or(environment).unwrap_or(match stored {
+        LanguagePreference::German => Language::German,
+        LanguagePreference::English => Language::English,
+        LanguagePreference::System => system,
+    })
 }
 
 pub fn language_code() -> &'static str {
     LANGUAGE.get_or_init(detect_language).code()
+}
+pub fn preference_code(preference: omen_core::app_settings::LanguagePreference) -> &'static str {
+    select_language(None, None, preference, detect_system_language()).code()
 }
 
 /// Localize display numbers only. Persistence and driver units stay invariant.
@@ -91,6 +117,9 @@ fn detect_language() -> Language {
             return language;
         }
     }
+    detect_system_language()
+}
+fn detect_system_language() -> Language {
     #[cfg(windows)]
     {
         // SAFETY: Parameterless query of the user's UI language.
@@ -250,6 +279,36 @@ fn message_in(language: Language, text: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn persisted_language_follows_explicit_environment_and_system_precedence() {
+        use omen_core::app_settings::LanguagePreference as P;
+        assert_eq!(
+            select_language(
+                Some(Language::English),
+                Some(Language::German),
+                P::German,
+                Language::German
+            ),
+            Language::English
+        );
+        assert_eq!(
+            select_language(None, Some(Language::German), P::English, Language::English),
+            Language::German
+        );
+        assert_eq!(
+            select_language(None, None, P::English, Language::German),
+            Language::English
+        );
+        assert_eq!(
+            select_language(None, None, P::System, Language::German),
+            Language::German
+        );
+        assert_eq!(
+            select_language(None, None, P::System, Language::English),
+            Language::English
+        );
+    }
 
     fn keys(source: &str) -> BTreeSet<String> {
         strict_keys(source).expect("Language catalogs need unique, nonempty string entries")

@@ -74,6 +74,11 @@ if ($Mode -eq 'Remove') {
 $taskSource = if([string]::IsNullOrWhiteSpace($SourceBinary)){Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\Omen Hub++.exe'}else{[IO.Path]::GetFullPath($SourceBinary)}
 if (-not (Test-Path -LiteralPath $taskSource -PathType Leaf)) { throw 'Build the release executable before installing startup.' }
 $taskSourceHash = (Get-FileHash -LiteralPath $taskSource -Algorithm SHA256).Hash
+# The build the existing sign-in approval belongs to (see the carry-over below).
+$taskPreviousHash = $null
+if (Test-Path -LiteralPath $taskReceipt) {
+    try { $taskPreviousHash = [string](Get-Content -LiteralPath $taskReceipt -Raw | ConvertFrom-Json).sha256 } catch { $taskPreviousHash = $null }
+}
 New-Item -ItemType Directory -Force -Path $taskInstallRoot | Out-Null
 $taskAcl = [Security.AccessControl.DirectorySecurity]::new()
 $taskAcl.SetAccessRuleProtection($true,$false)
@@ -116,7 +121,20 @@ try {
     Assert-OmenTaskAction $taskVerified
     if ($taskVerified.Principal.RunLevel -ne 'Highest' -or $taskVerified.Principal.LogonType -ne 'Interactive') { throw 'Task principal readback differs.' }
     [ordered]@{ schema = 1; executable = $taskBinary; sha256 = $taskSourceHash; task_name = $taskName; user_sid = $taskSid; installed_at = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $taskReceipt -Encoding UTF8
-    [pscustomobject]@{ Installed = $true; TaskName = $taskName; Executable = $taskBinary; SHA256 = $taskSourceHash; ProfileSelected = $false; HardwareApplied = $false } | ConvertTo-Json
+    # Updates keep the sign-in preset: an approval this user gave for the
+    # previously installed build moves to the new build. Profile revision and
+    # device binding stay as approved; this elevated installer was confirmed
+    # by the user, and only administrators can write the approval file.
+    $taskCarried = $false
+    if ($taskPreviousHash -and (Test-Path -LiteralPath $taskApproval) -and ((Get-Item -LiteralPath $taskApproval).Length -le 65536)) {
+        $taskApproved = Get-Content -LiteralPath $taskApproval -Raw | ConvertFrom-Json
+        if ($taskApproved.schema -eq 1 -and $taskApproved.user_sid -ceq $taskSid -and ([string]$taskApproved.binary_sha256).Equals($taskPreviousHash, [StringComparison]::OrdinalIgnoreCase)) {
+            $taskApproved.binary_sha256 = $taskSourceHash
+            [IO.File]::WriteAllText($taskApproval, ($taskApproved | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+            $taskCarried = $true
+        }
+    }
+    [pscustomobject]@{ Installed = $true; TaskName = $taskName; Executable = $taskBinary; SHA256 = $taskSourceHash; ProfileSelected = $false; HardwareApplied = $false; ApprovalCarriedOver = $taskCarried } | ConvertTo-Json
 } catch {
     if ($taskRegistered) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
     throw

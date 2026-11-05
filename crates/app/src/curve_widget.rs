@@ -74,7 +74,13 @@ unsafe fn state<'a>(hwnd: HWND) -> Option<&'a State> {
     unsafe { p.as_ref() }
 }
 pub fn curve(hwnd: HWND) -> Option<Curve> {
-    unsafe { state(hwnd) }?.model.borrow().clone()
+    inspect(hwnd, Clone::clone)
+}
+/// Read a projection without copying driver data or the undo/redo history.
+/// The callback must only inspect data, not send reentrant window messages.
+pub fn inspect<T>(hwnd: HWND, read: impl FnOnce(&Curve) -> T) -> Option<T> {
+    let s = unsafe { state(hwnd) }?;
+    s.model.borrow().as_ref().map(read)
 }
 pub fn error(hwnd: HWND) -> String {
     unsafe { state(hwnd) }.map_or(String::new(), |s| s.error.borrow().clone())
@@ -103,7 +109,7 @@ pub fn mutate(
     result
 }
 fn refresh(hwnd: HWND) {
-    let caption = curve(hwnd).map_or(t("widget.unavailable").into(), |c| {
+    let caption = inspect(hwnd, |c| {
         let p = c.points[c.selected];
         let (x, y) = c.kind.units();
         let view = unsafe { state(hwnd) }
@@ -131,7 +137,8 @@ fn refresh(hwnd: HWND) {
                 &view,
             ],
         )
-    });
+    })
+    .unwrap_or_else(|| t("widget.unavailable").into());
     // SAFETY: Our native control copies the bounded terminated caption.
     unsafe {
         SetWindowTextW(hwnd, wide(&caption).as_ptr());
@@ -531,6 +538,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 0
             }
             WM_LBUTTONUP => {
+                // The release can carry a newer position than WM_MOUSEMOVE.
+                // A cancelled/lost gesture must never be restarted here.
+                if s.drag.borrow().is_some() {
+                    let (x, y) = coordinate(l);
+                    interact(hwnd, x, y);
+                }
                 finish_drag(hwnd, false);
                 0
             }

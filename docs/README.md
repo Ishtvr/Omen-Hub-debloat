@@ -1,6 +1,6 @@
 # Documentation
 
-Reviewed **29 October 2026** against source `251fff6`, version `0.9.0-dev.2`. This refresh changes documentation only. Hardware observations remain tied to their recorded device, date and build.
+Documentation structure refreshed **29 October 2026**; latest local software check **5 November 2026**, `0.9.0-beta.3`, working tree based on `2efca79`. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
 
 ## Start here
 

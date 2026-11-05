@@ -1,8 +1,28 @@
 # Validation
 
-Current summary reviewed **29 October 2026**, version **`0.9.0-dev.2`**, Windows x64 / Rust-Cargo 1.99.0. The localization follow-up below supersedes the earlier software-check count. No new hardware-control qualification is introduced.
+Current software summary updated **5 November 2026**. Latest source tested: the preserved working tree based on **`2efca79`**, version **`0.9.0-beta.3`**, Windows x64. It includes the existing native UI/curve/localization/controller changes and the control responsiveness/verification repair described below. Earlier dated sections identify their own artifacts and remain historical. No new hardware write qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Control responsiveness and local update — 5 November 2026
+
+The release executable has SHA-256 **`B00BC0B101D9F6F82F5B35587EA952DDB48D3F0989A77205852FDCA87A2E9639`**, source `2efca798ed58367323b4e562b39832126949f0ca` plus preserved/uncommitted work. The full private source and user-data snapshots are retained under ignored `.local/`. [Causes, changes and read-only evidence](history/RESPONSIVENESS_2026-11-05.md).
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo test --workspace --locked` | **295 passed**: 152 Core / 86 Platform / 57 App; one manual timing test ignored |
+| Guardian real-process/file fixtures | **14 passed**, without real services/drivers |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed |
+| `cargo build --release --locked -p omen-hub-plus-plus` | Passed with both prepared CPU modules |
+| New regressions | High priority readback; foreground/background lease contention; old/reapplied/pending/disabled hold revisions; exclusion of skipped targets; complete rather than partial verification; stale observations after coupled correction |
+| PowerShell diagnostic/build scripts | Parser checks passed; package/launch checks recorded below |
+
+The live beta.2 dashboard and CPU reader were explicitly set to **High** and read back as High. The new executable requests High for its own processes at startup. Neither requests realtime.
+
+Three GET-only samples confirmed **85 °C Tctl limit / 65 W Slow / 80 W PPT**. Separately measured package power was **66.5 / 66.1 / 66.6 W**, Tctl **82.5 / 80.5 / 77.25 °C**. Effective clocks were unavailable because acquisition exceeded its timing bound. The historical full-load/1,700 MHz incident was not reproduced. HPOmenCap was already stopped/disabled; TPM and Secure Boot remained enabled. No Apply or hardware limit change was performed. This short observation does not qualify durable 85 °C enforcement or full HP-independent operation.
+
+The actual desktop shortcut targeted the matching dist executable with `--show`. A single warm launch produced a responding main window after **1,029 ms** (including launch/elevation and process polling); the new native dashboard was inspected with live sensor data and the historical Apply result. The user stopped Computer Use with Escape before the remaining preset/scroll/resize acceptance. This is not a repeated cold-start benchmark. The total **50-MB tray-idle budget remains unaccepted**. Profiles, app preferences, startup authorization and the control/recovery journal stayed byte-identical; only the live fan status and GET diagnostic probe file changed. The installed beta.2 fan helper stayed running, and the protected beta.2 sign-in binary/approval were not replaced.
 
 ## German/English localization — 29 October 2026
 
@@ -21,17 +41,27 @@ No real sign-in/reboot/sleep, hardware tuning or new memory acceptance is claime
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all -- --check` | Passed |
-| `cargo test --workspace --locked` | 233 unit tests: 130 Core / 74 Platform / 29 App |
+| `cargo test --workspace --locked` | 246 tests: 133 Core / 75 Platform / 38 App; one manual timing test ignored |
 | Standalone guardian process fixtures | 14 scenarios passed with actual processes and file-simulated service/cooling state |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed |
 | `cargo build --release --locked` | Passed with both pinned CPU modules staged |
-| Installer recovery guard fixtures | 60 passed, no real installer/service action |
-| Power-lifecycle evidence fixtures | 18 passed, no standby/reboot requested |
-| [GitHub Rust checks for `251fff6`](https://github.com/Ishtvr/Omen-Hub-debloat/actions/runs/40361700174) | Passed |
+| Native curve regression fixtures | Seven passed: release coordinates, cancel/capture loss, GPU anchors/history, list contents/visibility, curve switching and live draft save; synthetic data only |
+| Intel retirement/compatibility fixtures | Six passed; exact old serialization, no partial Apply, explicit cleanup, stable remaining control IDs and CLI rejection |
+| Earlier curve release timing (`74B9662B…`) | Three final runs; [method and comparison](history/CURVE_PERFORMANCE_2026-10-29.md), not repeated after catalog cleanup |
+| Native release previews | GPU and CPU presets at 1100 × 900, Windows section at 920 × 720; visually inspected with read-only GPU access |
+| Catalog/capability query | 81 catalog entries, zero Intel entries; live availability/remaining blockers in the [cleanup record](history/CODE_CLEANUP_2026-10-29.md) |
+| Changed preset smoke scripts | PowerShell parsing passed; interactive/hardware-adjacent flows not run |
+| Earlier installer recovery guard fixtures (`251fff6`) | 60 passed; not rerun for this UI change |
+| Earlier power-lifecycle evidence fixtures (`251fff6`) | 18 passed; not rerun for this UI change |
+| [Earlier GitHub Rust checks for `251fff6`](https://github.com/Ishtvr/Omen-Hub-debloat/actions/runs/40361700174) | Passed; does not qualify the current working tree |
 
-The 29 October local candidate is **3,125,760 bytes**, SHA-256 **`6A23EABADA60C2077370E995DBD1A2543723F03764790AFC18520694B9720E89`**. It was not installed or used for hardware writes. No new package ZIP, visual/DPI acceptance, memory measurement or physical power transition was performed in this review.
+The current 29 October local candidate is **3,123,200 bytes**, SHA-256 **`C4E4DEA4D864827DF3C9E6A333756819B75611F5DB7C5D526EF5C4F3832A2B1A`**. It was not installed or used for hardware writes. No new package ZIP, full DPI/accessibility acceptance, total tray-memory measurement or physical power transition was performed.
 
-The documentation-only refresh checked 47 Markdown files, 327 local links, fenced blocks, module hashes and documentation-only change scope. Three historical report bodies were preserved from `251fff6`, with only their relative links rebased and an archive notice added. No runtime source, scripts, permissions or hardware state changed.
+The preceding curve-optimization candidate was **3,126,784 bytes**, SHA-256 `74B9662B0CBB7C953CFDC1F974E4B65C1BAF512CAC885FC223A0EBE546E6D27C`, with 240 tests. Its native curve timing/preview observations remain tied to that artifact.
+
+The earlier 29 October candidate from `251fff6` was **3,125,760 bytes**, SHA-256 `6A23EABADA60C2077370E995DBD1A2543723F03764790AFC18520694B9720E89`. Its original check summary had 233 unit tests and no new native visual review. Do not mix its artifact identity with the optimized candidate.
+
+The earlier documentation-only refresh (`b58d62c`) checked 47 Markdown files, 327 local links, fenced blocks, module hashes and documentation-only change scope. Three historical report bodies were preserved from `251fff6`, with only their relative links rebased and an archive notice added. That refresh did not change runtime source, scripts, permissions or hardware state.
 
 The 26 October candidate with the same version had SHA-256 `AD74D4F6DCBF583EE47D5432290A194CA015B51297C3FDF2C28651967AB6786D`; its native metadata checks covered exact watt-to-milliwatt storage and preset-to-chart editing without Apply. The different hashes identify distinct artifacts; their measurements must not be mixed.
 

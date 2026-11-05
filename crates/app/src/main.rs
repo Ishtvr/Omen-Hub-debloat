@@ -13,6 +13,8 @@ mod dashboard;
 #[cfg(windows)]
 mod elevation;
 #[cfg(windows)]
+mod fan_watch;
+#[cfg(windows)]
 mod i18n;
 #[cfg(windows)]
 mod inventory;
@@ -25,13 +27,25 @@ mod power_events;
 #[cfg(windows)]
 mod preset_fields;
 #[cfg(windows)]
+mod preset_hold;
+#[cfg(windows)]
+mod preset_layout;
+#[cfg(windows)]
 mod preset_ui;
 #[cfg(windows)]
 mod profile_commands;
 #[cfg(windows)]
 mod read_process;
+#[cfg(windows)]
+mod runtime_priority;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod segments;
+#[cfg(windows)]
+mod settings;
+#[cfg(windows)]
+mod settings_ui;
+#[cfg(windows)]
+mod single_instance;
 #[cfg(windows)]
 mod startup_setup;
 #[cfg(windows)]
@@ -62,7 +76,7 @@ fn main() {
             } else {
                 &args[..]
             };
-            args.is_empty() || args == ["--tray"]
+            args.is_empty() || args == ["--tray"] || args == ["--show"] || args == ["settings-ui"]
         };
         #[cfg(windows)]
         if show_error_dialog {
@@ -106,6 +120,7 @@ fn run() -> Result<(), String> {
     let args = {
         let mut args = args;
         i18n::configure(&mut args)?;
+        runtime_priority::configure()?;
         args
     };
     // GDI scaling renders text and shapes at the monitor resolution while the
@@ -128,8 +143,40 @@ fn run() -> Result<(), String> {
         }
     }
     #[cfg(windows)]
-    if args.is_empty() || args == ["--tray"] {
-        return ui::run(!args.is_empty());
+    if args.is_empty() || args == ["--tray"] || args == ["--show"] {
+        let tray = args == ["--tray"];
+        // A second launch only brings the running dashboard forward; a
+        // second sign-in start stays silent.
+        let existing = || {
+            if !tray {
+                single_instance::activate(ui::CLASS, true);
+            }
+            Ok(())
+        };
+        if !single_instance::elevated() {
+            if single_instance::running(ui::KIND) {
+                return existing();
+            }
+            // Hardware actions need administrator rights: restart with them.
+            // Declining the prompt keeps the dashboard with prompts per action.
+            let arguments = format!("--lang {} {}", i18n::language_code(), args.join(" "));
+            if single_instance::relaunch_elevated(arguments.trim()) {
+                return Ok(());
+            }
+        }
+        let Some(_instance) = single_instance::claim(ui::KIND) else {
+            return existing();
+        };
+        // Opening the dashboard needs local preferences, not a synchronous
+        // Task Scheduler COM connection. --show also overrides tray startup.
+        let stored = omen_platform::profile_store::ProfileStore::user_data()
+            .and_then(|store| store.app_settings())
+            .unwrap_or_default();
+        return ui::run(tray || (args.is_empty() && stored.start_in_tray));
+    }
+    #[cfg(windows)]
+    if args == ["settings-ui"] {
+        return settings_ui::run(std::ptr::null_mut());
     }
     #[cfg(windows)]
     if args
@@ -137,6 +184,10 @@ fn run() -> Result<(), String> {
         .is_some_and(|a| matches!(a.as_str(), "gpu-ui" | "presets-ui"))
         && args.len() <= 2
     {
+        let Some(_instance) = single_instance::claim("Presets") else {
+            single_instance::activate(preset_ui::CLASS, false);
+            return Ok(());
+        };
         return preset_ui::run(args.get(1).cloned());
     }
     #[cfg(windows)]
@@ -153,6 +204,10 @@ fn run() -> Result<(), String> {
     }
     #[cfg(windows)]
     if args == ["keyboard-ui"] {
+        let Some(_instance) = single_instance::claim("Keyboard") else {
+            single_instance::activate(keyboard_ui::CLASS, false);
+            return Ok(());
+        };
         return keyboard_ui::run(None);
     }
     #[cfg(windows)]
@@ -224,6 +279,28 @@ fn run() -> Result<(), String> {
     match args.first().map(String::as_str) {
         #[cfg(windows)]
         Some("startup-setup") if args.len() == 1 => startup_setup::ensure_current_installation()?,
+        #[cfg(windows)]
+        Some("tray-task-set") if args.len() == 2 => {
+            // Installer: "Start with Windows" for this executable, or remove it.
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            let entry = match args[1].as_str() {
+                "window" => Some(Some(autostart::command(&executable, false))),
+                "tray" => Some(Some(autostart::command(&executable, true))),
+                "off" => Some(None),
+                // Update: an existing entry moves to this executable with its
+                // own tray choice; without one, nothing is created.
+                "keep" => autostart::entry()?.map(|existing| {
+                    Some(autostart::command(
+                        &executable,
+                        existing.ends_with(" --tray"),
+                    ))
+                }),
+                _ => return Err(omen_core::message::msg("cli.unknown", &[])),
+            };
+            if let Some(entry) = entry {
+                autostart::set_entry(entry.as_deref())?;
+            }
+        }
         #[cfg(windows)]
         Some("cpu-sensor-status") if args.len() == 1 => {
             let record = omen_platform::profile_store::ProfileStore::user_data()?.cpu_error()?;

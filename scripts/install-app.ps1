@@ -158,11 +158,58 @@ foreach ($appShortcut in $(if ($NoDesktopShortcut) { @($appShortcuts[0]) } else 
     $appLink.Save()
     $appCreated += $appShortcut
 }
+# Updates: the installed executable is the app. An existing desktop shortcut
+# (for example to a development build) moves to it, and a same-named shortcut
+# to an Omen Hub++ executable on the public desktop is removed, so exactly one
+# desktop shortcut remains.
+if ($NoDesktopShortcut -and (Test-Path -LiteralPath $appShortcuts[1])) {
+    $appLink = $appShell.CreateShortcut($appShortcuts[1])
+    $appLink.TargetPath = $appBinary
+    $appLink.WorkingDirectory = $appRoot
+    $appLink.IconLocation = "$appBinary,0"
+    $appLink.Save()
+    $appCreated += $appShortcuts[1]
+}
+$appPublic = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) "$appName.lnk"
+$appPublicLink = Get-OmenShortcut $appPublic
+if ($null -ne $appPublicLink -and $appPublicLink.Target -like "*\$appName.exe") {
+    Remove-Item -LiteralPath $appPublic
+}
+
+# Orphans of earlier builds: Omen Hub++ shortcuts and OmenHubPP tasks whose
+# program no longer exists, and files in the installation directory that do
+# not belong to the current installation. Nothing else is touched.
+$appOrphans = @()
+foreach ($appFolder in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonPrograms'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
+    foreach ($appLinkFile in @(Get-ChildItem -LiteralPath $appFolder -Filter "$appName*.lnk" -File -ErrorAction SilentlyContinue)) {
+        $appLinkInfo = Get-OmenShortcut $appLinkFile.FullName
+        if ($null -ne $appLinkInfo -and $appLinkInfo.Target -and -not (Test-Path -LiteralPath $appLinkInfo.Target)) {
+            Remove-Item -LiteralPath $appLinkFile.FullName
+            $appOrphans += $appLinkFile.FullName
+        }
+    }
+}
+foreach ($appTaskItem in @(Get-ScheduledTask -TaskName 'OmenHubPP-*' -ErrorAction SilentlyContinue)) {
+    $appTaskExe = [string]$appTaskItem.Actions[0].Execute
+    if ($appTaskExe -and -not (Test-Path -LiteralPath $appTaskExe.Trim('"'))) {
+        Unregister-ScheduledTask -TaskName $appTaskItem.TaskName -Confirm:$false
+        $appOrphans += "task:$($appTaskItem.TaskName)"
+    }
+}
+$appKeep = @('Omen Hub++.exe', 'Omen Hub++ Fan.exe', 'installation.json', 'controller-ownership.json', 'controller-cooling.json')
+foreach ($appFile in @(Get-ChildItem -LiteralPath $appRoot -File -Force)) {
+    $appCurrent = ($appKeep -contains $appFile.Name) -or ($appFile.Name -like 'fan-service-S-*.json') -or ($appFile.Name -like 'startup-authorized-S-*.json') -or ($appFile.Name -like 'unins*')
+    if (-not $appCurrent -and $appFile.Extension -in @('.exe', '.json', '.dll', '.cmd', '.ps1', '.tmp', '.old')) {
+        Remove-Item -LiteralPath $appFile.FullName
+        $appOrphans += $appFile.FullName
+    }
+}
 [pscustomobject]@{
     Installed = $true
     Executable = $appBinary
     SHA256 = $appSourceHash
     Shortcuts = $appCreated
+    OrphansRemoved = $appOrphans
     # A changed binary no longer matches an earlier startup approval; the app
     # then labels it invalid until it is applied and approved again.
     StartupApprovalInvalidated = ($null -ne $appPreviousHash -and $appPreviousHash -ne $appSourceHash -and (Test-Path -LiteralPath $appStartupReceipt))

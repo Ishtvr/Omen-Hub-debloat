@@ -34,11 +34,7 @@ pub fn edit(curve: &mut Curve, key: Key, m: Modifiers) -> Result<bool, String> {
             curve.clear_selection();
             return Ok(changed);
         }
-        Key::Reset => {
-            let before = curve.points.clone();
-            curve.reset();
-            return Ok(before != curve.points);
-        }
+        Key::Reset => return curve.reset(),
         Key::All if gpu => {
             curve.select_all();
             return Ok(false);

@@ -4,7 +4,7 @@
 use super::smu::{Message, Smu, core_mask, margin_arg, margin_value};
 use omen_core::{
     Inventory,
-    features::Feature,
+    features::{Feature, Unit},
     message::msg,
     profiles::{CoreDelta, Value},
 };
@@ -18,7 +18,8 @@ pub const PBO_RANGE: (i64, i64) = (1, 10);
 
 /// Limit, its setter, measured PM-table cell (version 0x540208), the factor from
 /// the table unit to the profile unit and the allowed profile range. Upper
-/// bounds are the fused PPT/TDC, the observed EDC and a 95 °C Tctl ceiling.
+/// bounds are the fused PPT/TDC, the observed EDC and AMD's 100 °C Tjmax,
+/// which is also this firmware's stock Tctl limit (29 October 2026).
 type LimitSpec = (Feature, Message, usize, f32, (i64, i64));
 const LIMITS: [LimitSpec; 5] = [
     (
@@ -54,7 +55,7 @@ const LIMITS: [LimitSpec; 5] = [
         Message::SetTctlMax,
         10,
         1.0,
-        (60, 95),
+        (60, 100),
     ),
 ];
 // Both the original 16 October probe and the new 22 October probe returned
@@ -380,8 +381,21 @@ fn observe_until(
         match settling.observe(elapsed, matched) {
             Decision::Matched => return Ok(live),
             Decision::TimedOut => {
-                return Err(format!(
-                    "SMU readback did not settle for {feature:?} within 2 seconds: observed {live:?}"
+                // Short, translated user message; the image stays in its argument.
+                let held = match &live {
+                    SmuImage::RsmuLimit { value, .. } | SmuImage::Limit { value, .. } => {
+                        match feature.descriptor().unit {
+                            Unit::Milliwatt => format!("{} W", value / 1000),
+                            Unit::Milliampere => format!("{} A", value / 1000),
+                            Unit::Celsius => format!("{value} °C"),
+                            _ => value.to_string(),
+                        }
+                    }
+                    other => format!("{other:?}"),
+                };
+                return Err(omen_core::message::msg(
+                    "cpu.err.not_settled",
+                    &[&format!("@field.{feature:?}"), &held],
                 ));
             }
             Decision::Wait => std::thread::sleep(std::time::Duration::from_millis(50)),
@@ -401,7 +415,14 @@ pub fn verify_target(
         |live| image_matches(feature, live, target),
         sample,
     )
-    .map_err(|error| format!("{error}; requested {target:?}"))
+    .map_err(|error| {
+        // A translated message already names the setting and the held value.
+        if error.contains(omen_core::message::OPEN) {
+            error
+        } else {
+            format!("{error}; requested {target:?}")
+        }
+    })
 }
 
 pub fn image_owned(
@@ -501,7 +522,14 @@ pub fn validate_original(feature: Feature, original: &SmuImage) -> Result<(), St
             value,
             table_version,
         } if *table_version == PM_TABLE_VERSION && limit(feature).is_some() => {
-            validate(feature, &Value::Integer(*value))
+            // The firmware's own value is restored as found, even outside the
+            // range a preset may request; only implausible values are refused.
+            let (lo, hi) = range(feature);
+            if (lo / 4..=hi * 2).contains(value) {
+                Ok(())
+            } else {
+                Err("SMU limit original is implausible; no automatic restore is attempted".into())
+            }
         }
         _ => Err("SMU original type, shape or range does not belong to this feature".into()),
     }
@@ -710,7 +738,7 @@ mod tests {
         assert_eq!(range(Feature::CpuPptLimitMw), (15_000, 160_000));
         assert_eq!(range(Feature::CpuTdcMa), (30_000, 108_000));
         assert_eq!(range(Feature::CpuEdcMa), (30_000, 160_000));
-        assert_eq!(range(Feature::CpuTemperatureLimitC), (60, 95));
+        assert_eq!(range(Feature::CpuTemperatureLimitC), (60, 100));
         assert_eq!(range(Feature::CpuCurveOptimizerAllCore), (-50, 30));
     }
 
@@ -736,7 +764,18 @@ mod tests {
 
         assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(85)).is_ok());
         assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(50)).is_err());
-        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(100)).is_err());
+        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(100)).is_ok());
+        assert!(validate(Feature::CpuTemperatureLimitC, &Value::Integer(101)).is_err());
+
+        // A stock firmware original outside the preset range stays restorable.
+        let original = |value| SmuImage::RsmuLimit {
+            value,
+            table_version: PM_TABLE_VERSION,
+        };
+        assert!(validate_original(Feature::CpuTemperatureLimitC, &original(100)).is_ok());
+        assert!(validate_original(Feature::CpuEdcMa, &original(200_000)).is_ok());
+        assert!(validate_original(Feature::CpuTemperatureLimitC, &original(0)).is_err());
+        assert!(validate_original(Feature::CpuTemperatureLimitC, &original(250)).is_err());
 
         // Type mismatches
         assert!(

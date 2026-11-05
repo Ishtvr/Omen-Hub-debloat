@@ -134,16 +134,45 @@ try {
     # files in the archive. Only the clean staging directory is packaged.
     $taskLocalDist = Join-Path $taskRepo 'dist'
     New-Item -ItemType Directory -Force -Path $taskLocalDist | Out-Null
-    Get-ChildItem -LiteralPath $taskDist -Force | Copy-Item -Destination $taskLocalDist -Recurse -Force
+    foreach ($taskEntry in Get-ChildItem -LiteralPath $taskDist -Force) {
+        $taskDestination = Join-Path $taskLocalDist $taskEntry.Name
+        # An already running, byte-identical executable need not be opened
+        # for writing just to refresh documentation/package receipts. A changed
+        # locked executable still fails explicitly; no controller is stopped.
+        if (-not $taskEntry.PSIsContainer -and $taskEntry.Name -eq 'Omen Hub++.exe' -and
+            (Test-Path -LiteralPath $taskDestination -PathType Leaf) -and
+            (Get-FileHash -LiteralPath $taskEntry.FullName -Algorithm SHA256).Hash -eq
+            (Get-FileHash -LiteralPath $taskDestination -Algorithm SHA256).Hash) { continue }
+        Copy-Item -LiteralPath $taskEntry.FullName -Destination $taskLocalDist -Recurse -Force
+    }
     $taskChecksum = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-SHA256SUMS.txt"
     $taskZipHash = (Get-FileHash -LiteralPath $taskZip -Algorithm SHA256).Hash
-    [IO.File]::WriteAllText($taskChecksum,($taskZipHash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($taskZip) + "`n"),[Text.UTF8Encoding]::new($false))
+    $taskSums = $taskHash.ToLowerInvariant() + '  Omen Hub++.exe' + "`n"
+    $taskSums += $taskZipHash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($taskZip) + "`n"
+    # Setup.exe from the same staging directory, when Inno Setup 6 is installed.
+    $taskSetup = $null
+    $taskIscc = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if ($taskIscc) {
+        & $taskIscc /Q "/DAppVersion=$taskVersion" "/DStageDir=$taskDist" "/O$(Join-Path $taskRepo 'target')" (Join-Path $taskRepo 'installer\OmenHubPlusPlus.iss')
+        if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+        $taskSetup = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-Setup.exe"
+        $taskSums += (Get-FileHash -LiteralPath $taskSetup -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($taskSetup) + "`n"
+        Copy-Item -LiteralPath $taskSetup -Destination $taskLocalDist -Force
+    } else {
+        Write-Warning 'Inno Setup 6 not found; the Setup.exe was not built (winget install JRSoftware.InnoSetup).'
+    }
+    [IO.File]::WriteAllText($taskChecksum,$taskSums,[Text.UTF8Encoding]::new($false))
     [pscustomobject]@{
         File = Join-Path $taskLocalDist 'Omen Hub++.exe'
         Bytes = (Get-Item -LiteralPath $taskOutput).Length
         SHA256 = $taskHash
         Package = $taskZip
         PackageSHA256 = $taskZipHash
+        Setup = $taskSetup
         Checksums = $taskChecksum
     } | Format-List
 } finally { Pop-Location }

@@ -2,7 +2,7 @@
 
 A lightweight, native Windows control tool for HP OMEN laptops, written in Rust. Built to bring hardware monitoring and tuning into one clean, offline app—without ads, telemetry, accounts or a background updater.
 
-**In development · `0.9.0-dev.2` · Windows x64**
+**In development · `0.9.0-beta.3` · Windows x64**
 
 ## Features
 
@@ -13,9 +13,9 @@ A lightweight, native Windows control tool for HP OMEN laptops, written in Rust.
 - Fan curves, maximum cooling and four-zone keyboard lighting.
 - A native dark interface in German and English, with system tray integration.
 
-**Hardware support is currently limited to the tested HP OMEN 16-ap0xxx, board 8E35, BIOS F.13, Ryzen 9 8940HX and RTX 5070 Laptop configuration.** Private GPU controls require the qualified NVIDIA 617.14 or 617.42 implementation. CPU hardware features require the separately installed, verified PawnIO driver.
+**Hardware support is currently limited to the tested HP OMEN 16-ap0xxx, board 8E35, BIOS F.13, Ryzen 9 8940HX and RTX 5070 Laptop configuration.** Private GPU controls were qualified with NVIDIA 617.14 and 617.42 and accept any installed NVIDIA driver; readback and restore guard each write. CPU hardware features require the separately installed, verified PawnIO driver.
 
-This is an experimental application. Full replacement of HP's background services, real reboot/sleep recovery and freely adjustable GPU TGP are still in progress. See the [hardware matrix](docs/HARDWARE_MATRIX.md) and [roadmap](docs/ROADMAP.md). The first beta was withdrawn; no replacement release is currently published.
+This is an experimental application. Full replacement of HP's background services, real reboot/sleep recovery and freely adjustable GPU TGP are still in progress. See the [hardware matrix](docs/HARDWARE_MATRIX.md) and [roadmap](docs/ROADMAP.md). The first beta was withdrawn; the current prerelease is [0.9.0-beta.3](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.9.0-beta.3).
 
 ## Build
 

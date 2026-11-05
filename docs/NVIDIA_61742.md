@@ -6,7 +6,7 @@ Recorded **22 October 2026** on **HP 8E35/F.13**, RTX **5070 Laptop**, VBIOS **9
 
 The installed implementation `nvapi64_impl.dll` was **5,688,768 bytes**, SHA-256 **`C6A2014763C3662512B5D420DFC7632B777338881A13AEAB3F21D8033EAE6C71`**. The System32 loader hash was **`912AC885975DA8D8DF80AA0D1C04704E7DD2CA42FA2A02D341AE70237890E9BB`**.
 
-The runtime checks resolved private function ownership against the version-specific implementation hash. Ghidra/PyGhidra compared the five function regions and alternate RID entries to 617.14; these regions were byte-identical, while whole sections were not. Interface-table/QueryInterface mapping was also checked. This is not a blanket compatibility claim for other versions.
+At the time of this trial the runtime checked resolved private function ownership against the version-specific implementation hash; since 29 October 2026 that hash no longer gates writes. Ghidra/PyGhidra compared the five function regions and alternate RID entries to 617.14; these regions were byte-identical, while whole sections were not. Interface-table/QueryInterface mapping was also checked. This is not a blanket compatibility claim for other versions.
 
 | Function | Interface ID | Analyzed image address | v1 contract |
 | --- | --- | --- | --- |
@@ -35,8 +35,8 @@ Afterburner was restarted and the original curve/offsets remained intact at 03:2
 
 ## Boundary and reproduction
 
-These are control/readback/restore tests, not load-stability, direct voltage, hard voltage ceiling, real reboot/resume or sustained 115-W acceptance. Profiles remain bound to their saved driver; changing driver does not silently migrate or reauthorize them.
+These are control/readback/restore tests, not load-stability, direct voltage, hard voltage ceiling, real reboot/resume or sustained 115-W acceptance. Presets record the driver version but no longer bind to it: a driver update alone does not block a preset. Since 29 October 2026 (user decision) the private GPU controls accept any installed NVIDIA driver on this device; only a missing driver blocks them. Versions other than 617.14/617.42 are unmeasured; readback and restore remain the protection.
 
 `scripts/check-gpu-driver.ps1 -ExpectedBinarySha256 '<exact-built-hash>'` is an elevated **hardware-writing** developer check with small offsets/curves and restore. It refuses competing Afterburner/global-offset conditions rather than closing programs or installing drivers itself. Do not run it as routine status verification.
 
-Current source accepts both exact **617.14 and 617.42** entries. Public telemetry/offset contracts: [NVML queries](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html), [commands](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceCommands.html). Private contracts are limited by this own image analysis and measured evidence. [GPU controls](GPU_PROFILES.md), [Validation](VALIDATION.md).
+Measured drivers: **617.14 and 617.42**; current source accepts any installed driver on the qualified device. Public telemetry/offset contracts: [NVML queries](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html), [commands](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceCommands.html). Private contracts are limited by this own image analysis and measured evidence. [GPU controls](GPU_PROFILES.md), [Validation](VALIDATION.md).

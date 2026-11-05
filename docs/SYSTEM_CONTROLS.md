@@ -16,7 +16,7 @@ The original Rust SMU transport uses the pinned signed **RyzenSMU 0.2.11** modul
 | PBO scalar | SET 0x5B / GET 0x6D | Full scalar bit image |
 | Curve Optimizer | All-core 0x07 / per-core 0x06 / GET 0xD5 | Full 16-core margin image |
 
-CO margins are signed 16-bit steps, with CCD/core masks from the exact module contract. All-core and per-core instructions cannot coexist in a preset. Their step size is not a fixed mV conversion.
+CO margins are signed 16-bit steps, with CCD/core masks from the exact module contract. If a preset contains both all-core and per-core instructions, per-core wins and all-core is skipped. Their step size is not a fixed mV conversion.
 
 Independent STAPM was removed after the HP path could not preserve the paired limits independently. New limit journals use `rsmu_limit` plus the exact table version. Old HP limit images remain decodable but cannot select the new transport or invent a restore. The corrected PM-table version is **0x540208**, not the earlier erroneous 0x540108.
 
@@ -24,11 +24,11 @@ After a limit SET, bounded fixed GETs must agree for at least 100 ms within two 
 
 ### Accepted values are not a measured stability envelope
 
-Current constants allow PPT/Slow **15–160 W**, TDC **30–108 A**, EDC **30–160 A**, Tctl **60–95 °C**, CO **−50…+30** and PBO **1–10×**. Recorded trials used small decreases, CO around −20 and PBO 1×. They do not prove the complete allowed range stable or suitable. Raw fuse GETs are diagnostics, not currently a dynamic verified cap. This remains a [high-priority review finding](PROJECT_REVIEW.md).
+Current constants allow PPT/Slow **15–160 W**, TDC **30–108 A**, EDC **30–160 A**, Tctl **60–100 °C** (100 °C is AMD's Tjmax and this firmware's stock limit), CO **−50…+30** and PBO **1–10×**. Captured firmware originals are restored as found even outside these preset ranges; only implausible originals (below a quarter of the minimum or above twice the maximum) are refused. Recorded trials used small decreases, CO around −20 and PBO 1×. They do not prove the complete allowed range stable or suitable. Raw fuse GETs are diagnostics, not currently a dynamic verified cap. This remains a [high-priority review finding](PROJECT_REVIEW.md).
 
 New PPT/Slow applications are blocked before capture/SET while HPOmenCap runs or its state is unknown. Writes recheck this condition. Startup needs the OEM service absent until own startup handover is qualified; a temporary stop is insufficient. Existing original recovery remains possible. [HP control](HP_CONTROL.md).
 
-Intel PL1/PL2/PL4 and related preset fields have no integrated backend. There is no available Intel test device. Fixed CPU clock/voltage and the removed APU controls are outside the present UI.
+Intel PL1/PL2/PL4 and all related controls were removed from the app/catalog on 29 October 2026 at the user's request. Old files remain readable for explicit cleanup; they cannot apply Intel instructions. Fixed CPU clock/voltage and the removed APU controls are outside the present UI.
 
 ## Windows settings
 
@@ -36,7 +36,7 @@ Windows processor boost, min/max, EPP and core parking preserve and verify **bot
 
 When a preset includes a power plan and processor policies, the controller captures policies of the target plan, activates that plan first and then writes policies. Restore verifies even an inactive plan's original policies without activating it as a side effect.
 
-Power plan and Windows energy/overlay mode are separate. The energy mode requires Balanced, which can be requested in the same preset; incompatible combinations fail before SET. Configured original overlay comes from `PowerGetActualOverlayScheme`; the effective overlay is an additional observation. A legacy effective-only image cannot restore a user's configured selection.
+Power plan and Windows energy/overlay mode are separate. Windows applies the energy mode only on Balanced. A preset with an energy mode and no plan selects Balanced (original plan captured and restored); a preset with another plan applies that plan and skips the energy mode instead of failing. Configured original overlay comes from `PowerGetActualOverlayScheme`; the effective overlay is an additional observation. A legacy effective-only image cannot restore a user's configured selection.
 
 Display refresh uses supported Windows modes with readback/restore. The MUX setting is an HP BIOS boot preference, not an immediately observed display-routing change. [Power lifecycle](POWER_LIFECYCLE.md).
 

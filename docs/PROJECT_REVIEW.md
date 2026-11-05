@@ -32,7 +32,7 @@ The `Request::FanMode` branch in [ui.rs](../crates/app/src/ui.rs) saves preferen
 4. Test real reboot, sleep/resume, source change, driver/owner failure, full restore and longer load stability.
 5. Continue the [TGP investigation](plans/NVPWRCONTROL_TGP_FORK_PLAN.md). No alternate writer is yet established; TPM and Secure Boot remain requirements.
 6. Verify physical MUX/iGPU-only battery behavior and independent keyboard hotkey/power lifetime.
-7. Obtain appropriate hardware for Intel/additional model support; none is currently available for Intel.
+7. Obtain appropriate hardware for additional AMD/OMEN model support. Intel tuning was removed from scope by the user on 29 October 2026.
 8. Measure current total resident helpers against 50 MB, finish DPI/accessibility review, then install/package one accepted version and reauthorize exact sign-in revision.
 
 The local installed 0.1.0 copy was not updated by the source build; [Validation](VALIDATION.md) identifies both artifacts. The ordinary app still has no automatic HP takeover.
