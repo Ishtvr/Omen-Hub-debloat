@@ -2,6 +2,12 @@
 
 Omen Hub++'s original Rust code and icon are [MIT licensed](LICENSE). Optional embedded signed CPU modules retain their separate **LGPL-2.1-or-later** license. Proprietary HP/AMD/NVIDIA binaries, kernel installers and decompiled source are not bundled as project code.
 
+## Slint
+
+The native desktop UI uses **Slint 1.18.1**, under the **Slint Royalty-free Desktop, Mobile, and Web Applications License 2.0**. The original application code remains MIT licensed. The standard, unmodified `AboutSlint` widget is available through Settings → About Omen Hub++, satisfying the license's attribution condition. The version-specific terms and upstream license overview are included under `third-party/Slint/` in source and packages. [Pinned upstream license](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md).
+
+The Slint MCP server is compiled only for developer interaction tests. Distributed normal release builds do not enable that feature. The separately installed viewer/language-server tools are developer-only and are not included in app packages.
+
 ## Rust dependencies
 
 Direct dependencies include `serde`, `serde_json`, `wmi`, `windows`, `windows-sys`, `libloading`, `sha2` and `quick-xml`. Exact versions/transitives are locked in `Cargo.lock`.

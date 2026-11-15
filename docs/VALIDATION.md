@@ -1,10 +1,42 @@
 # Validation
 
-Current software summary updated **5 November 2026**. Latest source tested: the preserved working tree based on **`2efca79`**, version **`0.9.0-beta.3`**, Windows x64. It includes the existing native UI/curve/localization/controller changes and the control responsiveness/verification repair described below. Earlier dated sections identify their own artifacts and remain historical. No new hardware write qualification is implied.
+Current software summary updated **15 November 2026**, version **0.10.0-beta.1**, Windows x64 / Rust 1.99.0. Source: the preserved `554bb55` baseline plus the Slint migration, identified by the release tag and packaged `build-info.json`. The older native measurements below remain historical. No new hardware write or HP-independent lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
-## Control responsiveness and local update — 5 November 2026
+## Slint UI — 15 November 2026
+
+Release executable: **15,384,576 bytes**, SHA-256 **`24FA1838A2C43E24D11F2F56F0E252581CDDEF8D5838FA7EFAE6FE43CB8009F0`**. The release defaults to software rendering; the explicit GPU renderer remains developer-testable. UI workspaces and exact scope: [migration](plans/SLINT_UI_MIGRATION.md), [release notes](releases/0.10.0-beta.1.md).
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed |
+| Workspace unit tests | 299 passed: 152 core / 61 app / 86 platform; one timing benchmark ignored |
+| Guardian process fixtures | 14 scenarios passed; real services/drivers not addressed |
+| Clippy workspace/all targets, `-D warnings` | Passed |
+| Normal locked release build | Passed; embedded pinned CPU reader/SMU modules present |
+| Release package contents, version, hash and notices | Passed (571 files); clean-source identity is required for publication |
+| German, software renderer, scale 1.25 | Passed real interaction sequence |
+| English, software renderer, scale 1.0 | Passed real interaction sequence |
+| German, FemtoVG renderer, scale 1.5 | Passed real interaction sequence |
+| English, FemtoVG renderer, scale 2.0 | Passed real interaction sequence |
+| Normal release with `SLINT_MCP_PORT=9415` | No MCP listener; responding UI fixture opened |
+| Protected user-data comparison | 47 files compared; only the live `fan-service-status.json` producer changed |
+
+Each interaction sequence exercised 100 alternating wheel events, 15 resizes including compact dimensions, three minimize/restore and three real tray/restore cycles, actual tab transitions, Unicode name/caret input and text Undo/Redo, group collapse/reopen with numeric Undo, exact 55,125 mW roundtrip, all Windows boost choices, preset switching, curve numeric editing/history/reopen and four mouse/modifier gestures with immutable visible voltage anchors. About version/language and memory-only global settings save were checked separately from preset sign-in permission. Screenshots and element trees were inspected. These are marked **test fixtures**; no real tuning, manufacturer-service changes, startup-task writes or user-profile/settings writes are activated by the fixture.
+
+Private evidence is under `.local/slint-ui-qa-20261115-182330-de-winit-software/`, `...182358-en-winit-software/`, `...182425-de-winit-femtovg/` and `...182454-en-winit-femtovg/`. The Windows display was not reconfigured: scale overrides exercise Slint rendering/layout, not physical multi-monitor DPI transitions. Native OS color picker/device actions and real standby/reboot/AC controller qualification remain outside this UI acceptance.
+
+### Resource observations
+
+A single warm **normal release, memory-only UI fixture** reached a responding window in about **249 ms**. After entering the tray its working set was **33,439,744 bytes**, private committed memory **12,087,296 bytes**; process CPU time did not advance during the observed approximately three-second interval. The fixture did not activate sensors or controllers, so this is **not** total tray-idle acceptance including helpers.
+
+The renderer comparison found process-global GPU-driver allocations staying resident after hiding the GPU-rendered fixture (about 183 MB working set / 172 MB private in one observation). The software-rendered fixture used about 33 MB / 12 MB. This evidence motivated the default renderer change; executable size is not an optimization target. It is not a universal FPS/startup benchmark or a hardware-lifecycle claim.
+
+During preparation the portable/installed main and protected fan helper were 0.9.0-beta.3; the fan helper remained running. Updating the portable UI must not silently overwrite protected executables or startup permissions. Check the deployed `dist/build-info.json` and private handover receipt for actual local identity; package construction supports `-SkipLocalDist` so a live image need not be touched while checks are running.
+
+
+## Historical: control responsiveness and local update — 5 November 2026
 
 The release executable has SHA-256 **`B00BC0B101D9F6F82F5B35587EA952DDB48D3F0989A77205852FDCA87A2E9639`**, source `2efca798ed58367323b4e562b39832126949f0ca` plus preserved/uncommitted work. The full private source and user-data snapshots are retained under ignored `.local/`. [Causes, changes and read-only evidence](history/RESPONSIVENESS_2026-11-05.md).
 

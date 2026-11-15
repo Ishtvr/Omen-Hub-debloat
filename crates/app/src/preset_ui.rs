@@ -37,7 +37,7 @@ use windows_sys::Win32::{
     },
 };
 
-const UPDATE: u32 = WM_APP + 31;
+pub(crate) const UPDATE: u32 = WM_APP + 31;
 const SELECT: usize = 701;
 const NEW: usize = 702;
 const NAME: usize = 703;
@@ -59,19 +59,19 @@ const INFO_OFFSET: usize = FIELD_STRIDE - 1;
 const INFO_SIZE: i32 = 26;
 pub const CLASS: &str = "OmenHubPPPresetEditor";
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
-struct View {
-    profiles: Vec<PerformanceProfile>,
-    selected: Option<PerformanceProfile>,
-    binding: DeviceBinding,
+pub(crate) struct View {
+    pub(crate) profiles: Vec<PerformanceProfile>,
+    pub(crate) selected: Option<PerformanceProfile>,
+    pub(crate) binding: DeviceBinding,
     /// This device's own values, shown greyed and used by Reset.
-    defaults: BTreeMap<Feature, Value>,
-    curve: Result<omen_core::vf::VfState, String>,
-    removed_options: usize,
-    pending: bool,
-    applicable: bool,
-    blockers: Vec<String>,
-    startup_enabled: bool,
-    startup_valid: bool,
+    pub(crate) defaults: BTreeMap<Feature, Value>,
+    pub(crate) curve: Result<omen_core::vf::VfState, String>,
+    pub(crate) removed_options: usize,
+    pub(crate) pending: bool,
+    pub(crate) applicable: bool,
+    pub(crate) blockers: Vec<String>,
+    pub(crate) startup_enabled: bool,
+    pub(crate) startup_valid: bool,
 }
 fn load(id: Option<&str>) -> Result<View, String> {
     let store = ProfileStore::user_data()?;
@@ -146,15 +146,16 @@ fn load(id: Option<&str>) -> Result<View, String> {
         startup_valid,
     })
 }
-struct SaveData {
-    baseline: Option<PerformanceProfile>,
-    binding: DeviceBinding,
-    name: String,
-    edits: Vec<(Feature, Option<Value>)>,
+pub(crate) struct SaveData {
+    pub(crate) baseline: Option<PerformanceProfile>,
+    pub(crate) binding: DeviceBinding,
+    pub(crate) name: String,
+    pub(crate) edits: Vec<(Feature, Option<Value>)>,
     /// Autostart chosen in the draft; `None` leaves it unchanged.
-    startup: Option<bool>,
+    pub(crate) startup: Option<bool>,
 }
-enum Request {
+pub(crate) enum Request {
+    List,
     Load(Option<String>),
     Save(Box<SaveData>),
     Apply(String),
@@ -163,14 +164,41 @@ enum Request {
     Startup(String, bool),
     Stop,
 }
-enum Update {
+pub(crate) enum Update {
+    List(
+        Result<
+            (
+                Vec<PerformanceProfile>,
+                Option<omen_core::battery::Selection>,
+                bool,
+            ),
+            String,
+        >,
+    ),
     View(Box<View>, String),
     Error(String),
 }
-fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<Update>) {
+pub(crate) fn worker(
+    hwnd: usize,
+    requests: mpsc::Receiver<Request>,
+    updates: mpsc::Sender<Update>,
+) {
     while let Ok(request) = requests.recv() {
         if matches!(request, Request::Stop) {
             break;
+        }
+        if matches!(request, Request::List) {
+            let result = (|| {
+                let store = ProfileStore::user_data()?;
+                Ok((store.list()?, store.ac_selection(), store.pending()?))
+            })();
+            if updates.send(Update::List(result)).is_err() {
+                break;
+            }
+            unsafe {
+                PostMessageW(hwnd as HWND, UPDATE, 0, 0);
+            }
+            continue;
         }
         let result = (|| -> Result<Update, String> {
             match request {
@@ -294,7 +322,7 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
                         .into(),
                     ))
                 }
-                Request::Stop => unreachable!(),
+                Request::Stop | Request::List => unreachable!(),
             }
         })();
         if updates
@@ -693,7 +721,7 @@ fn display(hwnd: HWND, state: &State, view: View, message: &str) {
         let stored = view
             .selected
             .as_ref()
-            .and_then(|p| preset::display_value(p, row.field.feature).cloned());
+            .and_then(|p| preset_fields::display_value(p, row.field.feature).cloned());
         // On/off fields are always part of a preset. A saved preset without
         // one shows its default (cTGP on, others off); Save stores it.
         added |=
@@ -1437,10 +1465,9 @@ fn edit_gpu_curve(hwnd: HWND, state: &State) {
                 .borrow()
                 .iter()
                 .find(|row| row.field.feature == Feature::GpuVfCurve)
+                && let Editor::Curve(button) = row.editor
             {
-                if let Editor::Curve(button) = row.editor {
-                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(button);
-                }
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(button);
             }
         }
     }
@@ -1671,54 +1698,53 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                         edit_gpu_curve(hwnd, state);
                         return 0;
                     }
-                    if let Some(row) = state.rows.borrow().get(index) {
-                        if notification == EN_CHANGE as usize
+                    if let Some(row) = state.rows.borrow().get(index)
+                        && (notification == EN_CHANGE as usize
                             || notification == CBN_SELCHANGE as usize
-                            || (offset == 0 && notification == BN_CLICKED as usize)
+                            || (offset == 0 && notification == BN_CLICKED as usize))
+                    {
+                        row.edited.set(true);
+                        if checked(row.check)
+                            && matches!(
+                                row.field.feature,
+                                Feature::GpuVfCurve | Feature::GpuCoreOffsetMhz
+                            )
                         {
-                            row.edited.set(true);
-                            if checked(row.check)
-                                && matches!(
-                                    row.field.feature,
-                                    Feature::GpuVfCurve | Feature::GpuCoreOffsetMhz
-                                )
+                            let other = if row.field.feature == Feature::GpuVfCurve {
+                                Feature::GpuCoreOffsetMhz
+                            } else {
+                                Feature::GpuVfCurve
+                            };
+                            for other_row in state
+                                .rows
+                                .borrow()
+                                .iter()
+                                .filter(|r| r.field.feature == other)
                             {
-                                let other = if row.field.feature == Feature::GpuVfCurve {
-                                    Feature::GpuCoreOffsetMhz
-                                } else {
-                                    Feature::GpuVfCurve
+                                set_checked(other_row.check, false);
+                                other_row.edited.set(true);
+                            }
+                        }
+                        // Dynamic Boost proposes cTGP on and the Hub's
+                        // Unleashed TPP of 72 W, visible and editable.
+                        if offset == 0
+                            && checked(row.check)
+                            && row.field.feature == Feature::GpuUnleashed
+                        {
+                            for other_row in state.rows.borrow().iter() {
+                                let value = match other_row.field.feature {
+                                    Feature::GpuCustomTgp => Value::Boolean(true),
+                                    Feature::HpSharedPowerMw => Value::Integer(72_000),
+                                    _ => continue,
                                 };
-                                for other_row in state
-                                    .rows
-                                    .borrow()
-                                    .iter()
-                                    .filter(|r| r.field.feature == other)
-                                {
-                                    set_checked(other_row.check, false);
+                                if !checked(other_row.check) {
+                                    set_checked(other_row.check, true);
+                                    show_value(other_row, &value);
                                     other_row.edited.set(true);
                                 }
                             }
-                            // Dynamic Boost proposes cTGP on and the Hub's
-                            // Unleashed TPP of 72 W, visible and editable.
-                            if offset == 0
-                                && checked(row.check)
-                                && row.field.feature == Feature::GpuUnleashed
-                            {
-                                for other_row in state.rows.borrow().iter() {
-                                    let value = match other_row.field.feature {
-                                        Feature::GpuCustomTgp => Value::Boolean(true),
-                                        Feature::HpSharedPowerMw => Value::Integer(72_000),
-                                        _ => continue,
-                                    };
-                                    if !checked(other_row.check) {
-                                        set_checked(other_row.check, true);
-                                        show_value(other_row, &value);
-                                        other_row.edited.set(true);
-                                    }
-                                }
-                            }
-                            dirty(hwnd, state);
                         }
+                        dirty(hwnd, state);
                     }
                     return 0;
                 }
@@ -1773,10 +1799,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
                     APPLY => {
                         if state.view.borrow().as_ref().is_some_and(|v| v.pending) {
                             dispatch(hwnd, state, Request::Recover, t("preset.restoring"));
-                        } else if !state.dirty.get() {
-                            if let Some(id) = selected(state) {
-                                dispatch(hwnd, state, Request::Apply(id), t("common.uac"));
-                            }
+                        } else if !state.dirty.get()
+                            && let Some(id) = selected(state)
+                        {
+                            dispatch(hwnd, state, Request::Apply(id), t("common.uac"));
                         }
                     }
                     DELETE => {
@@ -1806,6 +1832,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
             UPDATE => {
                 while let Ok(update) = state.rx.try_recv() {
                     match update {
+                        Update::List(_) => (),
                         Update::View(view, message) => display(hwnd, state, *view, &message),
                         Update::Error(error) => {
                             state.busy.set(false);
@@ -1871,7 +1898,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, m: u32, w: WPARAM, l: LPARAM) ->
     }
 }
 pub fn run(id: Option<String>) -> Result<(), String> {
-    run_window(id, None, None, None)
+    crate::slint_ui::entry(1, id)
 }
 pub fn preview(path: &Path, group: Option<usize>, size: Option<[i32; 2]>) -> Result<(), String> {
     run_window(None, Some(path.to_owned()), group, size)

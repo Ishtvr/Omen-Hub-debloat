@@ -1,148 +1,66 @@
----
-name: Omen Hub++
-description: A clean dark native instrument panel for measured hardware state and deliberate controls.
-colors:
-  background: "#101215"
-  panel: "#191d22"
-  field: "#242b33"
-  border: "#657888"
-  foreground: "#edf2f7"
-  muted: "#a6b1bc"
-  accent: "#68dbbf"
-  accent-ink: "#0b1c17"
-  error: "#f7a7a7"
-  accent-hover: "#85e9d0"
-  accent-pressed: "#4cb699"
-  field-hover: "#303943"
-  chart-background: "#1c1f22"
-  chart-plot: "#1c1d1f"
-  chart-surface: "#272a2d"
-  chart-band: "#273140"
-  chart-foreground: "#dee2e5"
-  chart-grid: "#34383c"
-  chart-grid-minor: "#26292c"
-  chart-reference: "#848d97"
-  chart-draft: "#c7cdd3"
-  chart-selection: "#85cdf4"
-typography:
-  small:
-    fontFamily: "Segoe UI"
-    fontSize: "14px"
-    fontWeight: 400
-  body:
-    fontFamily: "Segoe UI"
-    fontSize: "16px"
-    fontWeight: 400
-  editor-body:
-    fontFamily: "Segoe UI"
-    fontSize: "18px"
-    fontWeight: 400
-  heading:
-    fontFamily: "Segoe UI"
-    fontSize: "20px"
-    fontWeight: 600
-  title:
-    fontFamily: "Segoe UI"
-    fontSize: "28px"
-    fontWeight: 600
-  metric:
-    fontFamily: "Segoe UI"
-    fontSize: "36px"
-    fontWeight: 600
-rounded:
-  control: "0px"
-  panel: "12px"
-spacing:
-  action-gap: "16px"
-  column-gap: "20px"
-  panel-inset: "24px"
-  dashboard-inset: "28px"
-components:
-  button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.accent-ink}"
-    rounded: "{rounded.control}"
-  button-primary-hover:
-    backgroundColor: "{colors.accent-hover}"
-    textColor: "{colors.accent-ink}"
-  button-primary-pressed:
-    backgroundColor: "{colors.accent-pressed}"
-    textColor: "{colors.accent-ink}"
-  button-secondary:
-    backgroundColor: "{colors.field}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.control}"
-  button-secondary-hover:
-    backgroundColor: "{colors.field-hover}"
-    textColor: "{colors.foreground}"
-  button-secondary-pressed:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.foreground}"
-  button-disabled:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.muted}"
-    rounded: "{rounded.control}"
-  field:
-    backgroundColor: "{colors.field}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.control}"
-  sensor-panel:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.panel}"
-    padding: "{spacing.panel-inset}"
----
+# Omen Hub++ — Precision Hardware Utility
 
+Slint migration specification, 15 November 2026. This describes the new UI being implemented on `codex/slint-ui-rework`; it is not a claim that the deployed beta.3 already uses Slint. Confirmed functions and device contracts remain authoritative in PRODUCT.md and docs/HARDWARE_MATRIX.md.
 
-# Design System: Omen Hub++
+## Product and operating context
 
-Reviewed **29 October 2026**. The approved direction is a modern, clean dark native instrument panel. Frontmatter preserves the shared palette/typography/spacing reference; runtime implementation is in `theme.rs` and the scoped chart palette in `curve_widget.rs`. This document defines intent and observed native composition, not blanket hardware/DPI/accessibility acceptance.
+A local Windows hardware utility used alongside demanding games/development workloads, often in a dim room. The dark graphite surface reduces glare. Its first job is to show GPU watts/temperature with CPU performance beside it, then offer deliberate tuning and cooling controls. Mode: Operate. All existing tuning, recovery, startup, cooling and lighting workflows survive the visual replacement.
 
-## Information hierarchy
+The approved brief replaces the Win32/GDI visual world. It does not request a browser runtime, a debloat service manager or new snapshot operations. Do not copy the brief's generic three-tab feature examples. Keep the backend flat and reuse existing core/platform policies and sleeping workers. System calls never execute in Slint callbacks on the event thread.
 
-GPU watts and temperature come first; CPU package watts, Tctl, load and interval-effective clocks sit alongside. Inventory and detailed controls follow. Measured, baseline, unavailable, selected, draft and confirmed-applied states must be named in text before color is used.
+## Composition and geometry
 
-The dashboard has two sensor regions, three prominent tool entries—Performance profiles, Fan curve, Lighting—and explicit profile Apply plus fan/graphics choices. GPU V/F belongs under performance profiles. User custom presets separate GPU, CPU and Windows controls. Avoid long instruction walls on operational surfaces.
+Use one resizable native Windows window with the system caption, window menu, minimize/maximize and resize behavior. Default client size 760 × 540 logical px, minimum 720 × 500. Validate rather than assume readability at 100/125/150/200% scale. The window can grow; at compact sizes each work area scrolls within its own bounds. No controls move outside their viewport or over the command/status bars.
 
-The current outer dashboard reference is 1140×780 with minimum 960×750. Width distributes sensor/action space; it is a native desktop layout, not a mobile breakpoint design. Open-window memory may exceed 50 MB; total resident tray idle including activated helpers must target 50 MB.
+- Top command bar: 44 px, 16 px horizontal inset, original geometric app mark, Omen Hub++ label, quiet actual privilege status. Flat segmented navigation: Overview, Presets, Cooling, Lighting. A separate Settings action stays visible. No wide sidebar or hero.
+- Main work area: 20 px horizontal inset, 16 px vertical inset, 8 px row rhythm and 20 px group separation. Headers 32 px; controls at least 32 px, primary actions 34 px. Label/value columns share edges.
+- Overview: two open instrument regions separated by one hairline, GPU first and CPU beside it; concise measured values and provenance, no symmetric KPI-card row. Power source and device identity are secondary. Mode/preset selection and Apply are distinct. Fan/graphics requests show saved preference separately from confirmed state.
+- Presets: pinned selection/New/name row; independent scrolling groups GPU, CPU limits/PBO/CO/per-core and Windows processor/energy/display. Name input is plain left-aligned and vertically centered. Save, Apply/Recovery, Delete and sign-in permission remain explicit. Long choice text wraps in the open chooser/detail area rather than being silently cut off. Help opens on demand, never a repetitive explanation under every row.
+- Curves: GPU curve belongs to the preset draft. Cooling owns the shared fan curve and BIOS/Curve/Max choices. A chart takes the available work area; a compact numeric point editor, Undo/Redo, fit/zoom, selection and modifier editing remain accessible. Closing/applying the curve draft does not itself write GPU hardware.
+- Lighting: four keyboard zones including numpad, On/Off, native color picker and real readback/error state. Color picker cancellation changes nothing. Opening the view only reads.
+- Settings: language System/Deutsch/English, app autostart, start in tray, close behavior, battery selection and preset hold. Preserve the explicit existing HP-service action, separate from ordinary settings saves. App startup and a preset's sign-in approval are different contracts.
+- Footer: 28 px high, one actionable status line. Busy, failed, saved and confirmed/partial Apply use text, not color alone. Clicking details expands a bounded diagnostic area; long failure details remain selectable/readable.
 
-## Visual language
+## Tokens
 
-- Cool charcoal ground, slightly raised opaque panels and slate fields; bright neutral values and restrained muted support text.
-- Mint primary actions with dark ink; clear hover, pressed, disabled and keyboard focus states.
-- Flat rectangular native buttons/inputs; gently rounded sensor panels. No glass, animated gradients or continuous decorative rendering.
-- Segoe UI with a deliberate value/heading/body hierarchy. Missing measurements use readable body text rather than a large fabricated number.
-- Pale blue is the chart selection color. Zone colors, curve nodes and bands are data, not replacements for the app accent.
+| Role | Value | Use |
+| --- | --- | --- |
+| surface-0 | #0A0B0E | window canvas |
+| surface-1 | #111318 | command bar, fields |
+| surface-2 | #171A21 | hover/selected segment |
+| hairline | #1E222B | one-pixel separators |
+| text-high | #ECEEF2 | primary text/values |
+| text-mid | #8A93A2 | secondary labels |
+| text-mono | #5E6673 | nonessential metadata only; essential text uses readable higher contrast |
+| signal-crimson | #E11D48 | single primary action/focus, at most two concurrent accents |
+| signal-clean | #10B981 | small confirmed-status point only |
+| warning | #E5B76B | explicit degraded/pending state |
+| error | #F3A1AF | readable error text |
 
-Use the established frontmatter tokens instead of introducing competing palettes. Earlier calculated contrast checks apply to the specified pairs, not comprehensive accessibility certification. Native EDIT/COMBOBOX behavior, labels, caret, selection and keyboard operation remain intact under custom drawing.
+Segoe UI Variable/Segoe UI for controls; Consolas for aligned measurements and technical identifiers only. Type scale 11 px nonessential metadata, 12 px secondary, 13 px body/control, 15 px group heading, 24 px measurement. Preserve native caret, text selection, keyboard navigation and visible focus. Never put essential explanations at the low-contrast mono token.
 
-## Surface contracts
+Use 4 px field/button radius and 6 px segment radius. No nested bordered panels, glass, gradients, decorative shadows, KPI tiles, colored pill stacks, emoji icons or continuous decoration. Draw the original app mark and action icons as geometry; do not ship vendor logos/fonts or downloaded artwork.
 
-| Surface | Required distinction |
-| --- | --- |
-| Dashboard sensors | Package-energy watts versus limit; Tctl versus per-core temperature; effective intervals versus OS MHz |
-| Presets | Optional included instruction versus observed value; Save versus Apply versus sign-in approval |
-| GPU chart | Loaded-reference/draft curves and selected guides; no claim that the selection is a live operating point |
-| Fans | Chosen preference versus fresh helper-confirmed regulation; pending BIOS handover remains explicit |
-| Lighting | Real read colors and On/Off, four clickable zones, native picker; confirmed color applies immediately |
-| Graphics | Requested BIOS preference versus active routing; show restart pending without claiming a physical switch was verified |
+Motion is limited to hover/segment changes at 120–160 ms, ease-out cubic-bezier(0.16,1,0.3,1). No entrance delays, bouncing, animated telemetry numbers or redraw loop at rest. The signature interaction is the precise curve/draft selection guide, driven by actual editing state.
 
-Fan quick-switch copy now describes the selected request rather than confirmed regulation. Fresh actual helper-status feedback remains tracked in [Project review](docs/PROJECT_REVIEW.md).
+## State, threading and lifecycle
 
-## Curves and keyboard
+Rust owns state and editing history. Slint owns layout, clipping, rendering and input. Keep stable models and update changed rows without recreating the whole form on each telemetry tick. Virtualize long lists. The bounded preset form stays mounted inside a clipped ScrollView, including collapsed groups, so input selection and native text Undo survive scrolling and group toggles. Group visibility, scroll position and viewport geometry never mutate profile contents or Undo history.
 
-The curve canvas follows the user-provided Afterburner composition: large grid, square draft nodes, dotted loaded reference, selected guides, contiguous range and immutable GPU voltage anchors. Keep Shift/Alt/Ctrl editing, undo/redo, fit/zoom and numeric/keyboard alternatives. surrounding fields/actions use the shared app theme. [Curve behavior](docs/CURVE_EDITOR.md).
+Reuse existing bounded telemetry children, CPU reader, controller lease, Apply/preflight/readback/recovery, cooling helper and persistent stores. Manual controls do not queue behind telemetry. Hold/battery operations retain their existing independent completion paths. Controls remain busy until their own operation finishes; a telemetry or automatic result cannot unlock them.
 
-Lighting is a simple four-zone keyboard including numpad, On/Off and a short status line. It does not use a profile/hex/save/apply form or per-key promises. Zone controls are keyboard reachable; color picker cancellation leaves hardware unchanged. [Lighting UI](docs/KEYBOARD_UI.md).
+A hidden Win32 event/tray owner can retain power notifications, single-instance activation and Explorer recreation while Slint supplies the visible windows. Hiding/minimizing pauses sensor polling and rendering. Closing during a write waits for that write's completion. Exiting must preserve cooling ownership and journals; never kill active controllers as part of UI tests.
 
-## Native lifecycle and assets
+Settings save atomically through the existing settings contract and detects concurrent edits. Language stays process-consistent; a saved language change clearly requires restart. Do not discard drafts or restart automatically. New subprocess/UAC actions carry the current language. Do not silently change startup permissions.
 
-Render in response to Windows messages; release/rebuild dashboard controls around tray visibility. Preserve native roles, readable focus and bounded GDI object lifetimes. High contrast uses sampled system roles where implemented; dynamic changes and the chart require additional review.
+A dedicated developer test mode isolates UI interaction from hardware writes, user profiles/settings, startup tasks and cooling helpers. It is visibly labeled. MCP exists only in explicit developer builds; normal release builds have no localhost server or network client.
 
-The original app icon is generated by `scripts/generate-icon.py` and embedded as a Windows resource. It is not an HP/OMEN/MSI logo. Raster mockups, downloaded fonts, WebViews and vendor assets are not required for the client UI. The documentation sidecar's HTML/CSS tiles are references only; the app never loads them.
+## Acceptance and truthfulness
 
-## Review scope
+Rapid alternating scroll, repeated resize, minimize/restore, group toggles, dropdowns and keyboard/name input must be tested in the running app. Verify drafts, selection, native text Undo and curve history survive. Test both languages, compact dimensions and DPI; inspect screenshots and actual element geometry.
 
-Existing 96-DPI client renders and native smoke checks cover specific recorded builds/surfaces. They do not certify titlebars, every system dialog, multiple monitors/DPI, dynamic high contrast or comprehensive assistive technology. Keep those limits in [Validation](docs/VALIDATION.md) and the [Roadmap](docs/ROADMAP.md).
+Show requested limit, successful limit readback and measured Tctl as different data. Missing telemetry stays unavailable; do not cap the temperature display or guess power/clock values. Stored requests and historical successful Apply are not current hardware proof. Intel controls stay removed and legacy cleanup remains explicit on Save. Max-Fan stays outside custom presets.
 
-The versioned [surface briefs](.impeccable/surface-briefs/dashboard.md) record design requirements. Current support is always the [hardware matrix](docs/HARDWARE_MATRIX.md), not an old design brief or screenshot.
+The latest brief removes an extreme fixed RAM limit; low tray-idle CPU/RAM including helpers remains a measured goal. Executable size is not a target. Measure startup and interaction latency and renderer behavior on actual views. Update validation with measured scope and limits, not blanket claims.
+
+Run format, workspace tests, Clippy with warnings denied and a release build, plus targeted regressions. Do not replace dist, redirect shortcuts or publish a partially migrated UI. Record exact source/version/SHA-256 when a complete tested build is deployed.

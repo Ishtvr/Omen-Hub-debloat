@@ -7,6 +7,9 @@ mod win_resource;
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        slint_build::compile("ui/app.slint").expect("Compile Slint interface");
+    }
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let icon = manifest.join("assets/omen-hub-pp.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
@@ -32,7 +35,10 @@ fn main() {
             ("FileDescription", "Omen Hub++"),
             ("FileVersion", version),
             ("InternalName", "omen-hub-pp"),
-            ("LegalCopyright", "MIT License"),
+            (
+                "LegalCopyright",
+                "Omen Hub++ contributors; third-party notices included",
+            ),
             ("OriginalFilename", "omen-hub-pp.exe"),
             ("ProductName", "Omen Hub++"),
             ("ProductVersion", version),

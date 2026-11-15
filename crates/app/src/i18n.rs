@@ -112,10 +112,10 @@ fn parse(source: &str) -> HashMap<String, String> {
 /// German for a German Windows display language, English otherwise.
 /// `OMEN_HUB_LANG=de|en` overrides it (for screenshots and translators).
 fn detect_language() -> Language {
-    if let Ok(code) = std::env::var("OMEN_HUB_LANG") {
-        if let Some(language) = Language::from_code(&code) {
-            return language;
-        }
+    if let Ok(code) = std::env::var("OMEN_HUB_LANG")
+        && let Some(language) = Language::from_code(&code)
+    {
+        return language;
     }
     detect_system_language()
 }
@@ -211,32 +211,33 @@ fn error_in(language: Language, detail: &str, depth: usize) -> String {
     // A preflight child may return a JSON-encoded Plan or ApplyFailure. Decode
     // known fields first so escaped marker arguments and raw JSON don't leak
     // into a user-facing status. Native diagnostics remain exact data.
-    if depth < 4 && detail.len() <= 64 * 1024 {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) {
-            let error = value.get("Err").unwrap_or(&value);
-            let mut reasons = Vec::new();
-            if let Some(reason) = error.get("error").and_then(serde_json::Value::as_str) {
-                reasons.push(reason);
-            }
-            for field in ["blockers", "rollback_errors"] {
-                if let Some(items) = error.get(field).and_then(serde_json::Value::as_array) {
-                    for item in items {
-                        if let Some(reason) = item
-                            .as_str()
-                            .or_else(|| item.get("reason").and_then(serde_json::Value::as_str))
-                        {
-                            reasons.push(reason);
-                        }
+    if depth < 4
+        && detail.len() <= 64 * 1024
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(detail)
+    {
+        let error = value.get("Err").unwrap_or(&value);
+        let mut reasons = Vec::new();
+        if let Some(reason) = error.get("error").and_then(serde_json::Value::as_str) {
+            reasons.push(reason);
+        }
+        for field in ["blockers", "rollback_errors"] {
+            if let Some(items) = error.get(field).and_then(serde_json::Value::as_array) {
+                for item in items {
+                    if let Some(reason) = item
+                        .as_str()
+                        .or_else(|| item.get("reason").and_then(serde_json::Value::as_str))
+                    {
+                        reasons.push(reason);
                     }
                 }
             }
-            if !reasons.is_empty() {
-                return reasons
-                    .into_iter()
-                    .map(|reason| error_in(language, reason, depth + 1))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-            }
+        }
+        if !reasons.is_empty() {
+            return reasons
+                .into_iter()
+                .map(|reason| error_in(language, reason, depth + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
         }
     }
     if detail.contains(omen_core::message::OPEN) {
@@ -411,6 +412,35 @@ mod tests {
             for choice in field.choices() {
                 let key = format!("choice.{choice:?}");
                 assert!(german.contains(&key), "{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn slint_surfaces_reference_existing_language_keys() {
+        let german = keys(GERMAN);
+        for source in [
+            include_str!("../ui/app.slint"),
+            include_str!("../ui/primitives.slint"),
+        ] {
+            for literal in source.split('"').skip(1).step_by(2) {
+                if [
+                    "ui.",
+                    "preset.",
+                    "settings.",
+                    "common.",
+                    "lighting.",
+                    "section.",
+                    "mux.",
+                ]
+                .iter()
+                .any(|prefix| literal.starts_with(prefix))
+                {
+                    assert!(
+                        german.contains(literal),
+                        "Missing Slint translation: {literal}"
+                    );
+                }
             }
         }
     }
@@ -596,14 +626,13 @@ mod tests {
             let code = source.split("#[cfg(test)]").next().unwrap();
             for (offset, _) in code.match_indices("wide(") {
                 let after = code[offset + 5..].trim_start();
-                if let Some(literal) = after.strip_prefix('"').and_then(|s| s.split('"').next()) {
-                    if !literal.is_empty()
+                if let Some(literal) = after.strip_prefix('"').and_then(|s| s.split('"').next())
+                    && !literal.is_empty()
                         && !literal.starts_with("OmenHubPP")
                         // The i glyph is the language-neutral information icon.
                         && !["Omen Hub++", "OmenHubPlusPlusWindow", "Segoe UI", "runas", "TaskbarCreated", "i"].contains(&literal)
-                    {
-                        unexpected.push(format!("{}: {literal}", path.display()));
-                    }
+                {
+                    unexpected.push(format!("{}: {literal}", path.display()));
                 }
             }
         }

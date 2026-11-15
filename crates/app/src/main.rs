@@ -47,6 +47,8 @@ mod settings_ui;
 #[cfg(windows)]
 mod single_instance;
 #[cfg(windows)]
+mod slint_ui;
+#[cfg(windows)]
 mod startup_setup;
 #[cfg(windows)]
 mod switch;
@@ -135,12 +137,32 @@ fn run() -> Result<(), String> {
             .is_some_and(|a| profile_commands::handles(a) || a.starts_with("mode-"));
         // SAFETY: Called once before any window exists; failure keeps the default.
         unsafe {
-            SetProcessDpiAwarenessContext(if windowless {
+            let slint_ui = args.is_empty()
+                || args.first().is_some_and(|a| {
+                    matches!(
+                        a.as_str(),
+                        "--show"
+                            | "--tray"
+                            | "--ui-test"
+                            | "settings-ui"
+                            | "presets-ui"
+                            | "gpu-ui"
+                            | "fan-ui"
+                            | "curve-ui"
+                            | "gpu-curve-ui"
+                            | "keyboard-ui"
+                    )
+                });
+            SetProcessDpiAwarenessContext(if windowless || slint_ui {
                 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
             } else {
                 DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
             });
         }
+    }
+    #[cfg(windows)]
+    if args == ["--ui-test"] {
+        return slint_ui::run(false, 1, true, None);
     }
     #[cfg(windows)]
     if args.is_empty() || args == ["--tray"] || args == ["--show"] {
@@ -184,10 +206,6 @@ fn run() -> Result<(), String> {
         .is_some_and(|a| matches!(a.as_str(), "gpu-ui" | "presets-ui"))
         && args.len() <= 2
     {
-        let Some(_instance) = single_instance::claim("Presets") else {
-            single_instance::activate(preset_ui::CLASS, false);
-            return Ok(());
-        };
         return preset_ui::run(args.get(1).cloned());
     }
     #[cfg(windows)]
@@ -204,10 +222,6 @@ fn run() -> Result<(), String> {
     }
     #[cfg(windows)]
     if args == ["keyboard-ui"] {
-        let Some(_instance) = single_instance::claim("Keyboard") else {
-            single_instance::activate(keyboard_ui::CLASS, false);
-            return Ok(());
-        };
         return keyboard_ui::run(None);
     }
     #[cfg(windows)]

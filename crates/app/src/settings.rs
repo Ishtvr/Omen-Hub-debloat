@@ -99,6 +99,63 @@ fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_preferences_survive_reopen_without_granting_preset_startup() {
+        struct Files {
+            store: ProfileStore,
+            entry: Option<String>,
+        }
+        impl Backend for Files {
+            fn read(&self) -> Result<Snapshot, String> {
+                Ok(Snapshot {
+                    options: self.store.app_settings()?,
+                    run_entry: self.entry.clone(),
+                })
+            }
+            fn options(&mut self, options: &AppSettings) -> Result<(), String> {
+                self.store.save_app_settings(options)
+            }
+            fn run_entry(&mut self, entry: Option<&str>) -> Result<(), String> {
+                self.entry = entry.map(str::to_owned);
+                Ok(())
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "omen-settings-reopen-{}",
+            crate::native_ui::token()
+        ));
+        let store = ProfileStore::at(root.clone()).unwrap();
+        let approval = store.startup().unwrap();
+        let mut files = Files { store, entry: None };
+        let baseline = files.read().unwrap();
+        let options = AppSettings {
+            language: omen_core::app_settings::LanguagePreference::English,
+            start_in_tray: true,
+            close_to_tray: false,
+            battery_preset: Some("mode:quiet".into()),
+            hold_preset: true,
+            ..Default::default()
+        };
+        commit(
+            &mut files,
+            &baseline,
+            &options,
+            true,
+            Path::new("C:\\Omen\\app.exe"),
+        )
+        .unwrap();
+        drop(files);
+        let reopened = ProfileStore::at(root.clone()).unwrap();
+        assert_eq!(reopened.app_settings().unwrap(), options);
+        assert_eq!(
+            serde_json::to_value(reopened.startup().unwrap()).unwrap(),
+            serde_json::to_value(approval).unwrap()
+        );
+        // Only this test's uniquely created temporary directory is removed.
+        std::fs::remove_file(root.join("app-settings.json")).unwrap();
+        std::fs::remove_dir(root.join("profiles")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
     struct Fake {
         state: Snapshot,
         fail_save: bool,

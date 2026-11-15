@@ -1,4 +1,4 @@
-param()
+param([switch]$SkipLocalDist)
 $ErrorActionPreference = 'Stop'
 $taskRepo = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $taskRepo
@@ -98,6 +98,10 @@ try {
         if ($taskFiles.Count -eq 0) { $taskMissing += $taskPackage.name }
         New-Item -ItemType Directory -Force -Path $taskTarget | Out-Null
         foreach ($taskFile in $taskFiles) { Copy-Item -LiteralPath $taskFile.FullName -Destination $taskTarget }
+        $taskLicenseDirectory = Join-Path $taskDir 'LICENSES'
+        if (Test-Path -LiteralPath $taskLicenseDirectory -PathType Container) {
+            Copy-Item -LiteralPath $taskLicenseDirectory -Destination (Join-Path $taskTarget 'LICENSES') -Recurse
+        }
         $taskRows += "| $($taskPackage.name) | $($taskPackage.version) | $($taskPackage.license) | $(($taskFiles | ForEach-Object Name) -join ', ') |"
     }
     if ($taskMissing.Count -gt 0) {
@@ -105,6 +109,7 @@ try {
         $taskRows += 'No license file is shipped inside these crate sources; their SPDX license applies: ' + ($taskMissing -join ', ') + '.'
     }
     Set-Content -LiteralPath (Join-Path $taskDist 'third-party\RUST-DEPENDENCIES.md') -Encoding UTF8 -Value $taskRows
+    Copy-Item -LiteralPath (Join-Path $taskRepo 'third-party\Slint') -Destination (Join-Path $taskDist 'third-party\Slint') -Recurse
 
     $taskHash = (Get-FileHash -LiteralPath $taskOutput -Algorithm SHA256).Hash
     $taskCommit = $null
@@ -123,6 +128,8 @@ try {
         source_commit = $taskCommit
         source_dirty = $taskDirty
         binary_sha256 = $taskHash
+        ui_framework = [ordered]@{ name = 'Slint'; version = ($taskMetadata.packages | Where-Object { $_.name -eq 'slint' } | Select-Object -First 1 -ExpandProperty version) }
+        developer_mcp = $false
         cpu_sensor_module = Test-Path -LiteralPath (Join-Path $taskModules 'AMDFamily17.bin')
         cpu_smu_module = $taskSmu
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskDist 'build-info.json') -Encoding UTF8
@@ -133,8 +140,8 @@ try {
     # Keep the familiar local output current without including unrelated dist
     # files in the archive. Only the clean staging directory is packaged.
     $taskLocalDist = Join-Path $taskRepo 'dist'
-    New-Item -ItemType Directory -Force -Path $taskLocalDist | Out-Null
-    foreach ($taskEntry in Get-ChildItem -LiteralPath $taskDist -Force) {
+    if (-not $SkipLocalDist) { New-Item -ItemType Directory -Force -Path $taskLocalDist | Out-Null }
+    foreach ($taskEntry in $(if (-not $SkipLocalDist) { Get-ChildItem -LiteralPath $taskDist -Force })) {
         $taskDestination = Join-Path $taskLocalDist $taskEntry.Name
         # An already running, byte-identical executable need not be opened
         # for writing just to refresh documentation/package receipts. A changed
@@ -161,13 +168,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
         $taskSetup = Join-Path $taskRepo "target\OmenHubPlusPlus-$taskVersion-Setup.exe"
         $taskSums += (Get-FileHash -LiteralPath $taskSetup -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($taskSetup) + "`n"
-        Copy-Item -LiteralPath $taskSetup -Destination $taskLocalDist -Force
+        if (-not $SkipLocalDist) { Copy-Item -LiteralPath $taskSetup -Destination $taskLocalDist -Force }
     } else {
         Write-Warning 'Inno Setup 6 not found; the Setup.exe was not built (winget install JRSoftware.InnoSetup).'
     }
     [IO.File]::WriteAllText($taskChecksum,$taskSums,[Text.UTF8Encoding]::new($false))
     [pscustomobject]@{
-        File = Join-Path $taskLocalDist 'Omen Hub++.exe'
+        File = $(if ($SkipLocalDist) { Join-Path $taskDist 'Omen Hub++.exe' } else { Join-Path $taskLocalDist 'Omen Hub++.exe' })
         Bytes = (Get-Item -LiteralPath $taskOutput).Length
         SHA256 = $taskHash
         Package = $taskZip

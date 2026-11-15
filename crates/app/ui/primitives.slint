@@ -1,0 +1,133 @@
+import { Theme } from "theme.slint";
+
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    out property <bool> keyboard-focus: focus.has-focus;
+    callback clicked();
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    min-width: max(32px, label.preferred-width + 24px);
+    min-height: 32px;
+    max-height: 34px;
+    border-radius: 4px;
+    background: !root.enabled ? Theme.surface : area.pressed ? Theme.line : root.primary ? Theme.accent : area.has-hover ? Theme.hover : Theme.surface;
+    border-width: root.enabled && focus.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    animate background { duration: 120ms; }
+    label := Text {
+        text: root.text;
+        color: !root.enabled ? Theme.quiet : Theme.ink;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    @children
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+}
+
+export component SegmentedTabs inherits Rectangle {
+    in property <[string]> labels;
+    in-out property <int> selected;
+    callback changed(int);
+    height: 32px;
+    background: Theme.surface;
+    border-radius: 6px;
+    Rectangle {
+        visible: root.selected >= 0;
+        x: root.selected * (parent.width / max(1, root.labels.length));
+        width: parent.width / max(1, root.labels.length);
+        height: parent.height;
+        background: Theme.hover;
+        border-radius: 5px;
+        animate x {
+            duration: 140ms;
+            easing: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 0px;
+        for title[index] in root.labels: ActionButton {
+            text: title;
+            background: transparent;
+            clicked => { root.changed(index); }
+        }
+    }
+}
+
+export component Hairline inherits Rectangle {
+    height: 1px;
+    background: Theme.line;
+}
+
+export component SectionTitle inherits Text {
+    color: Theme.ink;
+    font-size: 15px;
+    font-weight: 600;
+    vertical-alignment: center;
+    height: 32px;
+}
+
+export component SectionHeader inherits Rectangle {
+    in property <string> text;
+    in property <bool> expanded;
+    callback clicked();
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    height: 34px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            color: Theme.ink;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        Path {
+            y: 14px;
+            width: 12px;
+            height: 8px;
+            stroke: Theme.muted;
+            stroke-width: 1.5px;
+            commands: root.expanded ? "M 1 6 L 6 1 L 11 6" : "M 1 1 L 6 6 L 11 1";
+        }
+    }
+
+    TouchArea {
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+}

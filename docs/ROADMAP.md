@@ -2,6 +2,11 @@
 
 Reviewed **29 October 2026**, `0.9.0-dev.2`. The goal is an independent native replacement for OMEN hardware-control processes, with relevant UXTU-style tuning. The [hardware matrix](HARDWARE_MATRIX.md) owns current support claims; historical completed work is in [Validation](VALIDATION.md), not an ever-growing checklist here.
 
+## Slint software migration — 15 November 2026
+
+The normal workspaces have moved to Rust/Slint on the 0.10.0-beta.1 branch. Software interaction acceptance is recorded separately in [Validation](VALIDATION.md). Keep physical multi-monitor/DPI changes, actual color-picker/device writes, sleep/reboot/AC lifecycle and total tray-idle measurement including activated helpers as device acceptance tasks. The UI rewrite does not close the hardware ownership/recovery items below.
+
+
 ## 1. Close recovery and status gaps
 
 - [ ] Check all pending hardware/ownership journals before dashboard HP-mode or MUX writes.

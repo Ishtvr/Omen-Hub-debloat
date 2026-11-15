@@ -1,6 +1,6 @@
 # Omen Hub++
 
-Confirmed product requirements, reviewed **29 October 2026**. Product name: **Omen Hub++**; Cargo package/binary names: `omen-hub-plus-plus` / `omen-hub-pp`.
+Confirmed product requirements, reviewed **15 November 2026**. Product name: **Omen Hub++**; Cargo package/binary names: `omen-hub-plus-plus` / `omen-hub-pp`.
 
 Current implementation and support belong in the [hardware matrix](docs/HARDWARE_MATRIX.md), measurements in [Validation](docs/VALIDATION.md), and pending work in the [Roadmap](docs/ROADMAP.md). This file records durable requirements, not a build-by-build changelog.
 
@@ -8,13 +8,13 @@ Current implementation and support belong in the [hardware matrix](docs/HARDWARE
 
 A native, lightweight Windows application that brings practical OMEN hardware control and relevant UXTU-style tuning into one place. It should eventually replace original OMEN user-mode hardware controllers completely, with no ads, overlays, account requirement, telemetry or background updater.
 
-The target user wants to inspect GPU power and temperature first, see CPU performance beside them, then select or edit profiles. The interface is modern, clean and dark. The workflow is code-first in Rust with real native controls and visual review.
+The target user wants to inspect GPU power and temperature first, see CPU performance beside them, then select or edit profiles. The interface is modern, clean and dark. The workflow is code-first in Rust and Slint with native Windows integration and interactive visual review.
 
 ## Platform and resource requirements
 
-- Windows x64 first. The current UI is Win32/GDI; no Electron, UWP shell or embedded browser runtime.
+- Windows x64 first. The UI uses Slint 1.18.1, with a Win32 event/tray owner and the existing Windows controllers; no Electron, UWP shell or embedded browser runtime.
 - One standalone application binary may also run fixed-purpose helpers. UI and tray stay in the user session; privileged work uses explicit UAC/fixed helpers where required.
-- **50 MB total tray-idle working set**, including resident helpers after sensors have been activated. The open window may exceed 50 MB to improve the UI. These user decisions date to 13–14 October 2026.
+- Low background CPU/RAM, measured across the app and resident helpers after sensor activation. The Slint brief approved on 15 November 2026 supersedes the earlier fixed 50 MB ceiling. Responsiveness and correctness take priority; executable size is not a target.
 - On 29 October 2026 the user removed executable size as an optimization target. Responsiveness and correctness take priority; the background memory requirement remains.
 - Event-driven drawing, suspended dashboard polling while hidden/asleep, bounded readers and explicit stale/unavailable states.
 - Runtime is offline. Build preparation and developer tools may require downloads.
@@ -24,8 +24,8 @@ The target user wants to inspect GPU power and temperature first, see CPU perfor
 
 | Surface | Intended workflow |
 | --- | --- |
-| Dashboard | GPU watts/temperature and CPU measurements first; performance-mode selection and Apply; three control entries; fan/graphics quick choices |
-| Performance profiles | Select/create/name a custom preset; separate GPU, CPU and Windows sections; Save / Apply / Delete and explicit sign-in authorization |
+| Overview | GPU watts/temperature and CPU measurements first; separate mode/preset selection and Apply; graphics request and historical Apply status |
+| Presets | Select/create/name a custom preset; grouped GPU, CPU and Windows fields, inline GPU curve; Save / Apply / Delete / Recovery and explicit sign-in authorization |
 | GPU curve | Interactive full V/F chart within performance profiles, with Shift/Alt/Ctrl editing, history, zoom and numeric alternatives |
 | Fan curve | Native CPU/GPU curve editor for the separate cooling helper; confirmed execution state must remain distinct from saved intent |
 | Lighting | Four clickable zones including numpad, native color picker, On/Off and a short state line; immediate verified application |

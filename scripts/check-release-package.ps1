@@ -20,6 +20,8 @@ try {
         if($releaseName.StartsWith('/')-or$releaseName.Contains(':')-or$releaseName.Split('/')-contains'..'){throw 'Unsafe archive entry path.'}
         if($releaseName-cin$releaseRequired){continue}
         if($releaseName-match'^third-party/rust/[^/]+/(LICEN[CS]E[^/]*|COPYING[^/]*|NOTICE[^/]*|UNLICENSE[^/]*|COPYRIGHT[^/]*)$'){continue}
+        if($releaseName-match'^third-party/rust/[^/]+/LICENSES/[A-Za-z0-9_.-]+$'){continue}
+        if($releaseName-cmatch'^third-party/Slint/(LICENSE\.md|LicenseRef-Slint-Royalty-free-2\.0\.md)$'){continue}
         if($releaseName-cmatch'^third-party/PawnIO\.Modules/(AMDFamily17\.p|RyzenSMU\.p|COPYING|source-0\.2\.11\.zip|CPU_SENSORS\.md)$'){continue}
         throw "Unexpected release payload: $releaseName"
     }
@@ -32,6 +34,12 @@ try {
     if($releaseBuild.schema-ne1-or$releaseBuild.product-cne'Omen Hub++'-or$releaseBuild.version-cne$Version-or$releaseBuild.target-cne'x86_64-pc-windows-msvc'){throw 'Build identity differs.'}
     if($ExpectedCommit-and$releaseBuild.source_commit-cne$ExpectedCommit){throw 'Package source commit differs.'}
     if($RequireCleanSource-and$releaseBuild.source_dirty-cne$false){throw 'Public release requires a clean source checkout.'}
+    if($releaseBuild.ui_framework.name-ceq'Slint'){
+        if($releaseBuild.developer_mcp-cne$false){throw 'Developer MCP must not be enabled in a public package.'}
+        foreach($releaseName in @('third-party/Slint/LICENSE.md','third-party/Slint/LicenseRef-Slint-Royalty-free-2.0.md')){
+            if($releaseName-cnotin$releaseNames){throw 'Slint license/attribution terms are missing.'}
+        }
+    }
     if($releaseBuild.cpu_sensor_module-or$releaseBuild.cpu_smu_module){
         foreach($releaseName in @('third-party/PawnIO.Modules/AMDFamily17.p','third-party/PawnIO.Modules/COPYING','third-party/PawnIO.Modules/source-0.2.11.zip','third-party/PawnIO.Modules/CPU_SENSORS.md')){
             if($releaseName-cnotin$releaseNames){throw 'Embedded module license/corresponding source is missing.'}

@@ -24,12 +24,12 @@ use windows_sys::Win32::{
 /// Window class and single-instance kind of the dashboard.
 pub const CLASS: &str = "OmenHubPlusPlusWindow";
 pub const KIND: &str = "Dashboard";
-const UPDATE: u32 = WM_APP + 1;
+pub(crate) const UPDATE: u32 = WM_APP + 1;
 const TRAY: u32 = crate::tray::CALLBACK;
-const CPU_READER_PID: u32 = WM_APP + 61;
-const POWER_STATE: u32 = WM_APP + 63;
-const MODE_RESULT: u32 = WM_APP + 62;
-const AUTO_RESULT: u32 = WM_APP + 64;
+pub(crate) const CPU_READER_PID: u32 = WM_APP + 61;
+pub(crate) const POWER_STATE: u32 = WM_APP + 63;
+pub(crate) const MODE_RESULT: u32 = WM_APP + 62;
+pub(crate) const AUTO_RESULT: u32 = WM_APP + 64;
 const REFRESH: usize = 101;
 const PROFILE: usize = 102;
 const GPU_PROFILES: usize = 103;
@@ -54,7 +54,7 @@ const DEFAULT_MODES: [(&str, HpMode); 4] = [
 ];
 
 #[derive(Debug, Clone)]
-enum Request {
+pub(crate) enum Request {
     Refresh,
     Visibility(bool),
     Power,
@@ -62,12 +62,17 @@ enum Request {
 }
 
 #[derive(Debug, Clone)]
-enum ControlRequest {
+pub(crate) enum ControlRequest {
     ApplyPreset(String),
     ApplyMode(HpMode),
     FanMode(FanMode),
     Graphics(GraphicsMode),
     Stop,
+}
+
+pub(crate) struct ControlOutcome {
+    pub(crate) message: String,
+    pub(crate) failed: bool,
 }
 
 struct State {
@@ -84,7 +89,7 @@ struct State {
     preview_index: Cell<usize>,
     custom_profiles: RefCell<Vec<(String, String)>>,
     selected_custom: RefCell<Option<String>>,
-    mode_result: Arc<Mutex<Option<String>>>,
+    mode_result: Arc<Mutex<Option<ControlOutcome>>>,
     auto_result: Arc<Mutex<Option<String>>>,
     applying_preset: Cell<bool>,
     mode_status: RefCell<String>,
@@ -158,7 +163,7 @@ fn selection_name(selection: &Selection) -> String {
 }
 /// Historical confirmation is explicitly labelled; reopening a window is
 /// neither a new Apply nor proof that firmware retained the entire preset.
-fn last_apply_status() -> Option<String> {
+pub(crate) fn last_apply_status() -> Option<String> {
     let store = omen_platform::profile_store::ProfileStore::user_data().ok()?;
     let result = store.control_result().ok()?;
     if result["operation"] != "apply" {
@@ -236,10 +241,10 @@ fn battery_switch(previous: Option<bool>, current: Option<bool>) -> Option<Strin
 /// Manual controls have their own sleeping worker: a slow GPU/inventory/CPU
 /// reader cannot sit ahead of Apply. The UI still serializes its controls and
 /// the cross-process foreground lease serializes actual hardware transactions.
-fn control_worker(
+pub(crate) fn control_worker(
     hwnd: usize,
     requests: mpsc::Receiver<ControlRequest>,
-    mode_result: Arc<Mutex<Option<String>>>,
+    mode_result: Arc<Mutex<Option<ControlOutcome>>>,
 ) {
     while let Ok(request) = requests.recv() {
         match request {
@@ -249,12 +254,15 @@ fn control_worker(
                 if result.is_ok() {
                     record_manual(&selection);
                 }
-                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(record) => crate::elevation::applied_status(&record),
-                    Err(error) => tf(
-                        "mode.preset_failed_detail",
-                        &[&crate::i18n::error_message(&error)],
-                    ),
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(ControlOutcome {
+                    failed: result.is_err(),
+                    message: match result {
+                        Ok(record) => crate::elevation::applied_status(&record),
+                        Err(error) => tf(
+                            "mode.preset_failed_detail",
+                            &[&crate::i18n::error_message(&error)],
+                        ),
+                    },
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -271,24 +279,28 @@ fn control_worker(
                         store.save_fan_mode(mode)?;
                         if (mode.needs_service() || omen_platform::fan_service_present())
                             && !omen_platform::fan_service_installed()
-                        {
-                            if let Err(error) = crate::elevation::run(
+                            && let Err(error) = crate::elevation::run(
                                 None,
                                 crate::elevation::Action::FanService,
                                 || false,
-                            ) {
-                                store.save_fan_mode(previous)?;
-                                return Err(error);
-                            }
+                            )
+                        {
+                            store.save_fan_mode(previous)?;
+                            return Err(error);
                         }
                         Ok(store.active_fan_curve().ok().flatten().is_some())
                     });
-                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(_) if mode == FanMode::Bios => t("fan.quick.bios_active").into(),
-                    Ok(_) if mode == FanMode::Max => t("fan.quick.max_active").into(),
-                    Ok(true) => t("fan.quick.curve_active").into(),
-                    Ok(false) => t("fan.quick.curve_missing").into(),
-                    Err(error) => tf("fan.quick.failed", &[&crate::i18n::error_message(&error)]),
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(ControlOutcome {
+                    failed: result.is_err(),
+                    message: match result {
+                        Ok(_) if mode == FanMode::Bios => t("fan.quick.bios_active").into(),
+                        Ok(_) if mode == FanMode::Max => t("fan.quick.max_active").into(),
+                        Ok(true) => t("fan.quick.curve_active").into(),
+                        Ok(false) => t("fan.quick.curve_missing").into(),
+                        Err(error) => {
+                            tf("fan.quick.failed", &[&crate::i18n::error_message(&error)])
+                        }
+                    },
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -298,10 +310,13 @@ fn control_worker(
                 let result =
                     crate::elevation::run(None, crate::elevation::Action::Graphics(mode), || false);
                 let name = graphics_name(mode);
-                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(_) if restart_pending() => tf("mux.pending", &[&name]),
-                    Ok(_) => tf("mux.active", &[&name]),
-                    Err(error) => tf("mux.failed", &[&crate::i18n::error_message(&error)]),
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(ControlOutcome {
+                    failed: result.is_err(),
+                    message: match result {
+                        Ok(_) if restart_pending() => tf("mux.pending", &[&name]),
+                        Ok(_) => tf("mux.active", &[&name]),
+                        Err(error) => tf("mux.failed", &[&crate::i18n::error_message(&error)]),
+                    },
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -317,12 +332,15 @@ fn control_worker(
                     .iter()
                     .find(|(_, m)| *m == mode)
                     .map_or("", |(key, _)| t(key));
-                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
-                    Ok(_) => tf("mode.active", &[&label]),
-                    Err(error) => tf(
-                        "mode.failed",
-                        &[&label, &crate::i18n::error_message(&error)],
-                    ),
+                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(ControlOutcome {
+                    failed: result.is_err(),
+                    message: match result {
+                        Ok(_) => tf("mode.active", &[&label]),
+                        Err(error) => tf(
+                            "mode.failed",
+                            &[&label, &crate::i18n::error_message(&error)],
+                        ),
+                    },
                 });
                 unsafe {
                     PostMessageW(hwnd as HWND, MODE_RESULT, 0, 0);
@@ -333,7 +351,7 @@ fn control_worker(
     }
 }
 
-fn worker(
+pub(crate) fn worker(
     hwnd: usize,
     rx: mpsc::Receiver<Request>,
     shared: Arc<Mutex<Option<Snapshot>>>,
@@ -498,14 +516,14 @@ fn worker(
             }
             None => (),
         }
-        if let Some(reader) = hardware.as_mut() {
-            if !visible || suspended || reset_hardware {
-                match reader.pause() {
-                    Ok(()) => snapshot.cpu_hardware_status = CpuHardwareStatus::Paused,
-                    Err(e) => {
-                        hardware = None;
-                        cpu_failed(&mut snapshot, e);
-                    }
+        if let Some(reader) = hardware.as_mut()
+            && (!visible || suspended || reset_hardware)
+        {
+            match reader.pause() {
+                Ok(()) => snapshot.cpu_hardware_status = CpuHardwareStatus::Paused,
+                Err(e) => {
+                    hardware = None;
+                    cpu_failed(&mut snapshot, e);
                 }
             }
         }
@@ -868,12 +886,11 @@ unsafe extern "system" fn window_proc(
                 // the status line, unless a control result is being shown.
                 if let Some(notice) =
                     crate::preset_hold::take_notice().or_else(crate::fan_watch::take_notice)
+                    && !state.applying_preset.get()
                 {
-                    if !state.applying_preset.get() {
-                        *state.mode_status.borrow_mut() = notice.clone();
-                        if !state.preview.get().is_null() {
-                            SetWindowTextW(state.preview.get(), wide(&notice).as_ptr());
-                        }
+                    *state.mode_status.borrow_mut() = notice.clone();
+                    if !state.preview.get().is_null() {
+                        SetWindowTextW(state.preview.get(), wide(&notice).as_ptr());
                     }
                 }
                 0
@@ -886,12 +903,12 @@ unsafe extern "system" fn window_proc(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .take();
-                if !state.applying_preset.get() {
-                    if let Some(message) = result {
-                        *state.mode_status.borrow_mut() = message.clone();
-                        if !state.preview.get().is_null() {
-                            SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
-                        }
+                if !state.applying_preset.get()
+                    && let Some(message) = result
+                {
+                    *state.mode_status.borrow_mut() = message.clone();
+                    if !state.preview.get().is_null() {
+                        SetWindowTextW(state.preview.get(), wide(&message).as_ptr());
                     }
                 }
                 0
@@ -908,12 +925,13 @@ unsafe extern "system" fn window_proc(
                         windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(control, 1);
                     }
                 }
-                if let Some(message) = state
+                if let Some(outcome) = state
                     .mode_result
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .take()
                 {
+                    let message = outcome.message;
                     sync_switches(hwnd);
                     *state.mode_status.borrow_mut() = message.clone();
                     if !state.preview.get().is_null() {
@@ -1086,10 +1104,7 @@ unsafe fn request_exit(hwnd: HWND, state: &State) {
     }
 }
 pub fn run(start_in_tray: bool) -> Result<(), String> {
-    thread::spawn(crate::autostart::migrate);
-    crate::preset_hold::spawn();
-    crate::fan_watch::spawn();
-    run_window(start_in_tray, None, [1140, 780])
+    crate::slint_ui::run(start_in_tray, 0, false, None)
 }
 pub fn preview(path: &std::path::Path) -> Result<(), String> {
     run_window(false, Some(path), [1140, 780])
@@ -1235,12 +1250,12 @@ fn run_window(
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
-            if message.message == UPDATE {
-                if let Some(path) = preview {
-                    let render = crate::curve_widget::render_window(hwnd, path);
-                    DestroyWindow(hwnd);
-                    break render;
-                }
+            if message.message == UPDATE
+                && let Some(path) = preview
+            {
+                let render = crate::curve_widget::render_window(hwnd, path);
+                DestroyWindow(hwnd);
+                break render;
             }
         };
         let _ = state.tx.send(Request::Stop);

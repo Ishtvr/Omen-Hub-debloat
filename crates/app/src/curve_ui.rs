@@ -1113,13 +1113,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 }
             }
             plot::EDIT_VALUE => {
-                if let Some(c) = s.controls.get() {
-                    if l == c.canvas as isize {
-                        s.graph_only.set(false);
-                        layout(hwnd, s);
-                        SetFocus(c.y);
-                        SendMessageW(c.y, EM_SETSEL, 0, -1);
-                    }
+                if let Some(c) = s.controls.get()
+                    && l == c.canvas as isize
+                {
+                    s.graph_only.set(false);
+                    layout(hwnd, s);
+                    SetFocus(c.y);
+                    SendMessageW(c.y, EM_SETSEL, 0, -1);
                 }
                 0
             }
@@ -1137,20 +1137,20 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 0
             }
             plot::CHANGED => {
-                if let Some(c) = s.controls.get() {
-                    if l == c.canvas as isize {
-                        if w == 2 {
-                            report(hwnd, s, &plot::error(c.canvas));
-                        } else {
-                            if w == 1 {
-                                if let Some(v) = s.view.borrow_mut().as_mut() {
-                                    v.rows[s.mode.get()].enabled = true;
-                                }
-                                SendMessageW(c.include, BM_SETCHECK, BST_CHECKED as usize, 0);
-                                dirty(s);
+                if let Some(c) = s.controls.get()
+                    && l == c.canvas as isize
+                {
+                    if w == 2 {
+                        report(hwnd, s, &plot::error(c.canvas));
+                    } else {
+                        if w == 1 {
+                            if let Some(v) = s.view.borrow_mut().as_mut() {
+                                v.rows[s.mode.get()].enabled = true;
                             }
-                            sync(s);
+                            SendMessageW(c.include, BM_SETCHECK, BST_CHECKED as usize, 0);
+                            dirty(s);
                         }
+                        sync(s);
                     }
                 }
                 0
@@ -1350,15 +1350,15 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         }
                     }
                     OPEN if !s.dirty.get() => {
-                        if let Some(id) = selected(s) {
-                            if let Err(e) = std::env::current_exe().and_then(|exe| {
+                        if let Some(id) = selected(s)
+                            && let Err(e) = std::env::current_exe().and_then(|exe| {
                                 std::process::Command::new(exe)
                                     .args(["--lang", crate::i18n::language_code()])
                                     .args(["presets-ui", &id])
                                     .spawn()
-                            }) {
-                                text(c.status, &tf("curve.open_failed", &[&e]));
-                            }
+                            })
+                        {
+                            text(c.status, &tf("curve.open_failed", &[&e]));
                         }
                     }
                     _ => {}
@@ -1444,13 +1444,13 @@ struct Preview {
     example: bool,
 }
 pub fn run(id: Option<String>) -> Result<(), String> {
-    run_window(id, None, None)
+    crate::slint_ui::entry(2, id)
 }
 pub fn run_gpu(id: Option<String>) -> Result<(), String> {
-    run_window(id, None, Some(false))
+    crate::slint_ui::entry(1, id)
 }
 pub fn run_fans(id: Option<String>) -> Result<(), String> {
-    run_window(id, None, Some(true))
+    crate::slint_ui::entry(2, id)
 }
 /// Edit an owned, validated curve in memory. No profile file or hardware write;
 /// the caller decides when to save the surrounding preset.
@@ -1583,10 +1583,10 @@ fn run_editor(
             }
             None
         } else {
-            if state.fans_merged {
-                if let Some(c) = state.controls.get() {
-                    text(c.open, t("curve.cancel"));
-                }
+            if state.fans_merged
+                && let Some(c) = state.controls.get()
+            {
+                text(c.open, t("curve.cancel"));
             }
             let thread = thread::spawn(move || worker(handle, requests, updates));
             let request = if state.fans_merged {
@@ -1598,10 +1598,10 @@ fn run_editor(
             Some(thread)
         };
         ShowWindow(hwnd, if preview.is_some() { SW_HIDE } else { SW_SHOW });
-        if state.draft {
-            if let Some(c) = state.controls.get() {
-                SetFocus(c.canvas);
-            }
+        if state.draft
+            && let Some(c) = state.controls.get()
+        {
+            SetFocus(c.canvas);
         }
         let mut msg: MSG = std::mem::zeroed();
         let mut preview_error = None;
@@ -1622,44 +1622,45 @@ fn run_editor(
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            if let Some(preview) = &preview {
-                if msg.message == UPDATE && !state.busy.get() {
-                    if state.view.borrow().is_some() {
-                        if preview.example {
-                            if let Some(c) = state.controls.get() {
-                                let edited = plot::mutate(c.canvas, |curve| {
-                                    let start = curve.points.clone();
-                                    curve.drag_gpu(
-                                        &start,
-                                        omen_core::curve_editor::DragMode::CurrentOffset,
-                                        120,
-                                    )?;
-                                    let index = curve
-                                        .points
-                                        .iter()
-                                        .position(|p| p.x >= 1000)
-                                        .ok_or(t("curve.example_anchor"))?;
-                                    curve.select(index, false);
-                                    curve.plateau(curve.points[index].y)?;
-                                    curve.select_voltage_range(1000, 1250);
-                                    Ok(true)
-                                });
-                                if let Err(e) = edited {
-                                    preview_error = Some(e);
-                                }
-                                sync(&state);
-                                text(c.status, t("curve.example_hint"));
-                            }
-                        }
-                        if let Err(e) = plot::render_window(hwnd, &preview.path) {
+            if let Some(preview) = &preview
+                && msg.message == UPDATE
+                && !state.busy.get()
+            {
+                if state.view.borrow().is_some() {
+                    if preview.example
+                        && let Some(c) = state.controls.get()
+                    {
+                        let edited = plot::mutate(c.canvas, |curve| {
+                            let start = curve.points.clone();
+                            curve.drag_gpu(
+                                &start,
+                                omen_core::curve_editor::DragMode::CurrentOffset,
+                                120,
+                            )?;
+                            let index = curve
+                                .points
+                                .iter()
+                                .position(|p| p.x >= 1000)
+                                .ok_or(t("curve.example_anchor"))?;
+                            curve.select(index, false);
+                            curve.plateau(curve.points[index].y)?;
+                            curve.select_voltage_range(1000, 1250);
+                            Ok(true)
+                        });
+                        if let Err(e) = edited {
                             preview_error = Some(e);
                         }
-                    } else {
-                        preview_error = Some(t("curve.preview_failed").into());
+                        sync(&state);
+                        text(c.status, t("curve.example_hint"));
                     }
-                    DestroyWindow(hwnd);
-                    break 1;
+                    if let Err(e) = plot::render_window(hwnd, &preview.path) {
+                        preview_error = Some(e);
+                    }
+                } else {
+                    preview_error = Some(t("curve.preview_failed").into());
                 }
+                DestroyWindow(hwnd);
+                break 1;
             }
         };
         let _ = state.tx.send(Request::Stop);

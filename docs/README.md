@@ -1,6 +1,6 @@
 # Documentation
 
-Documentation structure refreshed **29 October 2026**; latest local software check **5 November 2026**, `0.9.0-beta.3`, working tree based on `2efca79`. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
+Documentation structure refreshed **29 October 2026**; latest local software check **15 November 2026**, `0.10.0-beta.1`, based on the preserved `554bb55` source plus the Slint migration. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
 
 ## Start here
 

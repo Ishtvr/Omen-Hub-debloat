@@ -97,10 +97,10 @@ pub fn migrate() {
     if !crate::single_instance::elevated() {
         return;
     }
-    if let Ok(Some(entry)) = legacy_entry() {
-        if matches!(omen_platform::tray_task_command(), Ok(None)) {
-            let _ = set_entry(Some(&entry));
-        }
+    if let Ok(Some(entry)) = legacy_entry()
+        && matches!(omen_platform::tray_task_command(), Ok(None))
+    {
+        let _ = set_entry(Some(&entry));
     }
 }
 

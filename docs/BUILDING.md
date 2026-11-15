@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Windows x64, Rust's `x86_64-pc-windows-msvc` target, Visual Studio C++ build tools and Windows SDK.
-- The workspace declares Rust 1.85/edition 2024. Recent recorded checks used Rust/Cargo 1.99.0; CI uses stable Rust. The declared minimum is not a separate recorded MSRV qualification.
+- The Slint application declares Rust 1.92/edition 2024; core/platform retain 1.85. Recent recorded checks use Rust/Cargo 1.99.0; CI uses stable Rust. The declared minimum is not a separate recorded MSRV qualification.
 - Windows PowerShell 5.1 (`powershell.exe`) is sufficient for the scripts. PowerShell 7 (`pwsh`) is not required.
 
 Use the committed `Cargo.lock`. Build preparation can download dependencies; the app runtime contains no network client, updater or telemetry.
@@ -78,3 +78,25 @@ This reads the ZIP without launching or installing it. Verify the exact source r
 | `.impeccable/` | Versioned design configuration and intent briefs; no runtime web UI |
 
 `target/`, `dist/`, `.local/`, `.tools/` and local skills under `.agents/` are ignored. Preserve current research evidence, pinned modules, corresponding sources/licenses and needed proof programs. Compiler caches are reproducible; those inputs and records are not interchangeable with disposable caches. Never publish proprietary DLLs, drivers, decompiled sources, personal dumps or secrets.
+
+## Slint development and interaction checks
+
+The UI is compiled from `crates/app/ui/app.slint`, `primitives.slint` and `theme.slint` with pinned Slint/slint-build **1.18.1**. No Node, browser, Qt installation or online runtime is required. Winit can use FemtoVG/OpenGL or the software renderer; the development test script accepts both explicitly.
+
+For the embedded developer MCP, build separately from the normal release:
+
+```powershell
+$env:SLINT_EMIT_DEBUG_INFO = '1'
+cargo build -p omen-hub-plus-plus --features slint/mcp --locked
+Remove-Item Env:SLINT_EMIT_DEBUG_INFO
+python scripts/test-slint-ui.py --language de --backend winit-software --scale 1.25
+python scripts/test-slint-ui.py --language en --backend winit-femtovg --scale 2.0
+```
+
+The script starts only an owned `--lang de|en --ui-test` subprocess, binds MCP to localhost, exercises real input/scroll/resize/minimize/tray restoration and curve history, then closes that process. Profiles/settings in this mode exist only in memory; no hardware controllers, startup tasks, manufacturer service changes or user-data writes are activated. Screenshots, trees and logs go under ignored `.local/slint-ui-qa-*/`. Python uses only the Windows standard library.
+
+Scale overrides exercise Slint layout/rendering; they are not physical Windows display-scaling changes or multi-monitor qualification. The tests do not establish successful firmware writes or a cooling lifecycle.
+
+Normal `cargo build --release --locked` does **not** enable `slint/mcp`; do not add it to Cargo.toml or distribute a developer build. Legacy `*-preview` CLI captures remain Win32 diagnostic references, not screenshots of the current Slint surface. Use the running `--ui-test` application for current UI acceptance.
+
+Use `scripts/build-release.ps1 -SkipLocalDist` to create the reviewable ZIP/Setup/staging directory without replacing a running portable build. The normal release manifest records Slint and disabled developer MCP; strict package checking requires its terms. Updating an active elevated GUI requires a graceful exit after its own operation, without terminating cooling helpers or changing startup permissions.

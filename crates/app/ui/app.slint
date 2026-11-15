@@ -1,0 +1,1309 @@
+import {
+    ComboBox,
+    LineEdit,
+    TextEdit,
+    CheckBox,
+    ScrollView,
+    Palette,
+    AboutSlint,
+} from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import {
+    ActionButton,
+    SegmentedTabs,
+    Hairline,
+    SectionTitle,
+    SectionHeader,
+} from "primitives.slint";
+
+export struct FieldData {
+    index: int,
+    label: string,
+    unit: string,
+    included: bool,
+    value: string,
+    kind: int,
+    choices: [string],
+    selected: int,
+    info: string,
+}
+export struct GroupData { title: string, expanded: bool, rows: [FieldData] }
+export struct CurveNode { x: float, y: float, reference-y: float, selected: bool }
+export struct CoreRow { label: string, value: string }
+export struct AxisTick { position: float, label: string }
+
+export global Workbench {
+    pure callback tr(string) -> string;
+    in-out property <int> page;
+    in property <bool> admin;
+    in property <bool> test-mode;
+    in-out property <bool> busy;
+    in-out property <string> status;
+    in-out property <bool> failed;
+    in-out property <string> details;
+    in property <string> identity;
+    in property <string> gpu-name;
+    in property <string> gpu-power;
+    in property <string> gpu-temp;
+    in property <string> gpu-clock;
+    in property <string> cpu-name;
+    in property <string> cpu-power;
+    in property <string> cpu-temp;
+    in property <string> cpu-load;
+    in property <string> sensor-details;
+    in property <string> cpu-source;
+    in property <string> power-source;
+    in property <string> last-apply;
+    in property <[string]> modes;
+    in property <bool> modes-ready;
+    in-out property <int> mode-index;
+    in property <[string]> profiles;
+    in-out property <int> profile-index;
+    in-out property <string> preset-name;
+    in property <[GroupData]> groups;
+    in property <[CoreRow]> cores;
+    in-out property <bool> dirty;
+    in property <bool> preset-ready;
+    in property <bool> preset-saved;
+    in property <bool> preset-applicable;
+    in property <bool> recovery-pending;
+    in-out property <bool> preset-startup;
+    in-out property <int> fan-index;
+    in-out property <int> graphics-index;
+    in property <string> cooling-status;
+    in property <string> graphics-status;
+    in-out property <bool> curve-open;
+    in property <bool> curve-gpu;
+    in property <[CurveNode]> nodes;
+    in property <[AxisTick]> y-ticks;
+    in property <string> curve-title;
+    in property <string> curve-x-label;
+    in property <string> curve-y-label;
+    in property <string> curve-low;
+    in property <string> curve-high;
+    in-out property <string> point-x;
+    in-out property <string> point-y;
+    in property <[string]> point-labels;
+    in-out property <int> point-index;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in-out property <bool> lighting-on;
+    in property <bool> lighting-ready;
+    in property <[color]> zone-colors;
+    in-out property <int> language-index;
+    in-out property <bool> autostart;
+    in-out property <bool> start-in-tray;
+    in-out property <int> close-index;
+    in-out property <bool> hold-preset;
+    in property <[string]> battery-choices;
+    in-out property <int> battery-index;
+    in property <bool> settings-ready;
+    in-out property <bool> settings-dirty;
+    in property <bool> hp-disabled;
+    in property <bool> hp-available;
+    in-out property <int> confirm-kind;
+    callback navigate(int);
+    callback refresh();
+    callback apply-mode();
+    callback select-preset(int);
+    callback new-preset();
+    callback name-edited(string);
+    callback include-field(int, bool);
+    callback edit-field(int, string);
+    callback choice-field(int, int);
+    callback edit-core(int, string);
+    callback toggle-group(int);
+    callback save-preset();
+    callback apply-preset();
+    callback delete-preset();
+    callback reset-preset();
+    callback startup-edited(bool);
+    callback fan-change(int);
+    callback graphics-change(int);
+    callback open-curve(bool);
+    callback curve-action(string);
+    callback select-point(int);
+    callback chart-event(int, float, float, bool, bool, bool);
+    callback chart-key(string, bool, bool, bool) -> bool;
+    callback lighting-power();
+    callback pick-zone(int);
+    callback save-settings();
+    callback settings-changed();
+    callback hp-service();
+    callback show-about();
+    callback confirm(bool);
+}
+
+component FieldRow inherits Rectangle {
+    in-out property <FieldData> item;
+    in-out property <bool> show-info;
+    height: 44px + (root.show-info ? info-text.preferred-height + 16px : 0px);
+    background: hover.has-hover ? Theme.surface : transparent;
+    hover := TouchArea {
+        enabled: (false) && Workbench.confirm-kind == 0;
+    }
+
+    HorizontalLayout {
+        height: 44px;
+        spacing: 8px;
+        padding-right: 16px;
+        include := CheckBox {
+            text: root.item.label;
+            checked <=> root.item.included;
+            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+            horizontal-stretch: 1;
+            toggled => { Workbench.include-field(root.item.index, self.checked); }
+        }
+
+        info := ActionButton {
+            enabled: Workbench.confirm-kind == 0;
+            text: "i";
+            width: 28px;
+            background: transparent;
+            clicked => { root.show-info = !root.show-info; }
+        }
+
+        if root.item.kind == 0: LineEdit {
+            accessible-label: root.item.label;
+            text <=> root.item.value;
+            preferred-width: 128px;
+            min-width: 80px;
+            max-width: 128px;
+            horizontal-stretch: 0;
+            enabled: (root.item.included && !Workbench.busy) && Workbench.confirm-kind == 0;
+            edited(text) => { Workbench.edit-field(root.item.index, text); }
+        }
+        if root.item.kind == 1: ComboBox {
+            accessible-label: root.item.label;
+            model: root.item.choices;
+            current-index <=> root.item.selected;
+            preferred-width: 280px;
+            min-width: 220px;
+            max-width: 280px;
+            horizontal-stretch: 0;
+            enabled: (root.item.included && !Workbench.busy) && Workbench.confirm-kind == 0;
+            selected(value) => { Workbench.choice-field(root.item.index, self.current-index); }
+        }
+        if root.item.kind == 2: Text {
+            text: root.item.included ? Workbench.tr("common.on") : Workbench.tr("common.off");
+            color: Theme.muted;
+            width: 128px;
+            vertical-alignment: center;
+        }
+        if root.item.kind == 3: ActionButton {
+            text: Workbench.tr("ui.edit_curve");
+            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+            clicked => { Workbench.open-curve(true); }
+        }
+        if root.item.kind == 4: Text {
+            text: Workbench.tr("ui.per_core_below");
+            color: Theme.muted;
+            width: 128px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.item.unit;
+            width: 24px;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+
+    info-text := Text {
+        visible: root.show-info;
+        x: 28px;
+        y: 46px;
+        width: parent.width - 40px;
+        text: root.item.info;
+        color: Theme.muted;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+}
+
+component PresetGroup inherits Rectangle {
+    in property <GroupData> group;
+    in property <int> index;
+    height: layout.preferred-height;
+    layout := VerticalLayout {
+        spacing: 0px;
+        SectionHeader {
+            text: root.group.title;
+            expanded: root.group.expanded;
+            clicked => { Workbench.toggle-group(root.index); }
+        }
+
+        Rectangle {
+            height: root.group.expanded ? row-layout.preferred-height : 0px;
+            visible: root.group.expanded;
+            row-layout := VerticalLayout {
+                for row in root.group.rows: FieldRow {
+                    item <=> row;
+                }
+                if root.index == 4: GridLayout {
+                    spacing: 8px;
+                    for item[index] in Workbench.cores: HorizontalLayout {
+                        row: floor(index / 4);
+                        col: mod(index, 4);
+                        Text {
+                            text: item.label;
+                            color: Theme.muted;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            accessible-label: item.label;
+                            text: item.value;
+                            min-width: 40px;
+                            max-width: 60px;
+                            preferred-width: 52px;
+                            enabled: (root.group.rows[0].included && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            edited(value) => { Workbench.edit-core(index, value); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component Measurement inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 54px;
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.muted;
+            font-size: 12px;
+        }
+
+        Text {
+            text: root.value;
+            color: Theme.ink;
+            font-size: root.value == Workbench.tr("common.unavailable") ? 13px : 24px;
+            font-family: "Consolas";
+            wrap: word-wrap;
+        }
+    }
+}
+
+component CurveCanvas inherits Rectangle {
+    background: Theme.surface;
+    clip: true;
+    min-height: 190px;
+    for grid in 6: Rectangle {
+        y: parent.height * grid / 5;
+        height: 1px;
+        background: Theme.line;
+    }
+    for grid in 9: Rectangle {
+        x: parent.width * grid / 8;
+        width: 1px;
+        background: Theme.line;
+    }
+    for point[index] in Workbench.nodes: curve-line := Rectangle {
+        property <CurveNode> next: Workbench.nodes[min(index + 1, Workbench.nodes.length - 1)];
+        property <float> dx: (self.next.x - point.x) * parent.width / 1px;
+        property <float> dy: (point.y - self.next.y) * parent.height / 1px;
+        x: point.x * parent.width;
+        y: (1 - point.y) * parent.height;
+        width: sqrt(self.dx * self.dx + self.dy * self.dy) * 1px;
+        height: 1px;
+        visible: index < Workbench.nodes.length - 1;
+        background: Theme.muted;
+        transform-rotation: atan2(self.dy, self.dx);
+        transform-origin: { x: 0px, y: 0px };
+    }
+    for tick in Workbench.y-ticks: Text {
+        x: 5px;
+        y: (1 - tick.position) * (parent.height - self.height);
+        text: tick.label;
+        color: Theme.muted;
+        font-family: "Consolas";
+        font-size: 11px;
+    }
+    // Normalized geometry is retained across resize; no native child controls.
+    Rectangle {
+        visible: Workbench.nodes.length > 0;
+        x: Workbench.nodes[Workbench.point-index].x * parent.width;
+        width: 1px;
+        background: Theme.accent.with-alpha(0.3);
+    }
+
+    Rectangle {
+        visible: Workbench.nodes.length > 0;
+        y: (1 - Workbench.nodes[Workbench.point-index].y) * parent.height;
+        height: 1px;
+        background: Theme.accent.with-alpha(0.3);
+    }
+
+    for point[index] in Workbench.nodes: draft-node := Rectangle {
+        x: point.x * parent.width - 3px;
+        y: (1 - point.y) * parent.height - 3px;
+        width: point.selected ? 8px : 5px;
+        height: self.width;
+        background: point.selected ? Theme.accent : Theme.ink;
+    }
+    for point in Workbench.nodes: Rectangle {
+        x: point.x * parent.width - 1px;
+        y: (1 - point.reference-y) * parent.height - 1px;
+        width: 2px;
+        height: 2px;
+        background: Theme.quiet;
+    }
+    canvas-input := TouchArea {
+        clicked => { chart-focus.focus(); }
+        moved => {
+            if (self.pressed) { Workbench.chart-event(1, self.mouse-x / self.width, self.mouse-y / self.height, false, false, false); }
+        }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.cancel {
+                Workbench.chart-event(3,0,0,false,false,false);
+            } else if (e.button == PointerEventButton.left) {
+                chart-focus.focus();
+                Workbench.chart-event(e.kind == PointerEventKind.down ? 0 : e.kind == PointerEventKind.up ? 2 : 3,
+                    self.mouse-x / self.width, self.mouse-y / self.height, e.modifiers.shift, e.modifiers.control, e.modifiers.alt);
+            }
+        }
+        scroll-event(e) => { Workbench.curve-action(e.delta-y > 0px ? "zoom-in" : "zoom-out"); return accept; }
+    }
+
+    chart-focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        key-pressed(e) => {
+            return Workbench.chart-key(e.text, e.modifiers.shift, e.modifiers.control, e.modifiers.alt) ? accept : reject;
+        }
+    }
+}
+
+component ConfirmPrompt inherits FocusScope {
+    in property <int> kind;
+    callback accepted(bool);
+    private property <bool> confirm-focused;
+    forward-focus: cancel-button;
+    init => { cancel-button.focus(); }
+    capture-key-pressed(e) => {
+        if e.text == Key.Escape { root.accepted(false); return accept; }
+        if e.text == Key.Tab || e.text == Key.Backtab {
+            root.confirm-focused = !root.confirm-focused;
+            if root.confirm-focused { confirm-button.focus(); } else { cancel-button.focus(); }
+            return accept;
+        }
+        return reject;
+    }
+    Rectangle {
+        background: #00000099;
+        TouchArea { }
+    }
+
+    Rectangle {
+        width: min(440px, parent.width - 48px);
+        height: confirm-layout.preferred-height;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.line;
+        border-radius: 6px;
+        confirm-layout := VerticalLayout {
+            padding: 20px;
+            spacing: 16px;
+            Text {
+                text: Workbench.tr(root.kind == 2 ? "ui.confirm_delete" : root.kind == 3 ? "ui.confirm_exit" : "ui.confirm_discard");
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                cancel-button := ActionButton {
+                    text: Workbench.tr("ui.cancel");
+                    clicked => { root.accepted(false); }
+                }
+
+                confirm-button := ActionButton {
+                    text: Workbench.tr("ui.continue");
+                    primary: true;
+                    clicked => { root.accepted(true); }
+                }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Omen Hub++";
+    preferred-width: 760px;
+    preferred-height: 540px;
+    min-width: 720px;
+    min-height: 500px;
+    max-width: 10000px;
+    max-height: 10000px;
+    background: Theme.canvas;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    property <bool> show-details;
+
+    VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 44px;
+            background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
+                Path {
+                    y: 12px;
+                    width: 17px;
+                    height: 19px;
+                    stroke: Theme.ink;
+                    stroke-width: 1.5px;
+                    commands: "M 8 1 L 15 5 L 15 13 L 8 17 L 1 13 L 1 5 Z M 5 7 L 8 5 L 11 7 L 11 11 L 8 13 L 5 11 Z";
+                }
+
+                Text {
+                    text: "OMEN HUB++";
+                    color: Theme.ink;
+                    font-size: 12px;
+                    font-weight: 600;
+                    letter-spacing: 0.8px;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: Workbench.admin ? Workbench.tr("ui.admin") : Workbench.tr("ui.user");
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                navigation := SegmentedTabs {
+                    y: 6px;
+                    width: 330px;
+                    labels: [
+                        Workbench.tr("ui.overview"),
+                        Workbench.tr("ui.presets"),
+                        Workbench.tr("ui.cooling"),
+                        Workbench.tr("ui.lighting")
+                    ];
+                    selected: Workbench.page < 4 ? Workbench.page : -1;
+                    changed(page) => { Workbench.navigate(page); }
+                }
+
+                settings-button := ActionButton {
+                    enabled: Workbench.confirm-kind == 0;
+                    y: 6px;
+                    text: Workbench.tr("settings.title");
+                    clicked => { Workbench.navigate(4); }
+                }
+            }
+        }
+
+        Hairline { }
+
+        if Workbench.test-mode: Text {
+            text: Workbench.tr("ui.test_mode");
+            color: Theme.warning;
+            height: 22px;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            overview := ScrollView {
+                visible: Workbench.page == 0 && !Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    HorizontalLayout {
+                        spacing: 24px;
+                        VerticalLayout {
+                            spacing: 12px;
+                            SectionTitle {
+                                text: Workbench.tr("section.gpu");
+                            }
+
+                            Text {
+                                text: Workbench.gpu-name;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                Measurement {
+                                    label: Workbench.tr("ui.power");
+                                    value: Workbench.gpu-power;
+                                }
+
+                                Measurement {
+                                    label: Workbench.tr("ui.temperature");
+                                    value: Workbench.gpu-temp;
+                                }
+                            }
+
+                            Text {
+                                text: Workbench.gpu-clock;
+                                color: Theme.muted;
+                                font-family: "Consolas";
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.line;
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            SectionTitle {
+                                text: Workbench.tr("section.cpu");
+                            }
+
+                            Text {
+                                text: Workbench.cpu-name;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                Measurement {
+                                    label: Workbench.tr("ui.power");
+                                    value: Workbench.cpu-power;
+                                }
+
+                                Measurement {
+                                    label: Workbench.tr("ui.tctl");
+                                    value: Workbench.cpu-temp;
+                                }
+                            }
+
+                            Text {
+                                text: Workbench.cpu-load;
+                                color: Theme.muted;
+                                font-family: "Consolas";
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: Workbench.cpu-source;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+
+                    Text {
+                        visible: Workbench.sensor-details != "";
+                        text: Workbench.sensor-details;
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+
+                    Text {
+                        text: Workbench.last-apply;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+
+                    Hairline { }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("ui.performance");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+
+                        mode-selector := ComboBox {
+                            model: Workbench.modes;
+                            current-index <=> Workbench.mode-index;
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            horizontal-stretch: 1;
+                        }
+
+                        mode-apply := ActionButton {
+                            text: Workbench.tr("preset.apply_button");
+                            primary: true;
+                            enabled: (Workbench.modes-ready && !Workbench.busy && !Workbench.recovery-pending) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.apply-mode(); }
+                        }
+
+                        refresh := ActionButton {
+                            text: Workbench.tr("ui.refresh");
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.refresh(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("ui.graphics");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            model: [Workbench.tr("mux.hybrid"), Workbench.tr("mux.discrete")];
+                            current-index <=> Workbench.graphics-index;
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            selected(value) => { Workbench.graphics-change(self.current-index); }
+                        }
+
+                        Text {
+                            text: Workbench.graphics-status;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    ActionButton {
+                        visible: Workbench.recovery-pending;
+                        text: Workbench.tr("preset.restore_button");
+                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                        clicked => { Workbench.navigate(1); }
+                    }
+
+                    Text {
+                        text: Workbench.identity + "  ·  " + Workbench.power-source;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+                }
+            }
+
+            presets := Rectangle {
+                visible: Workbench.page == 1 && !Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        preset-selector := ComboBox {
+                            model: Workbench.profiles;
+                            current-index <=> Workbench.profile-index;
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            horizontal-stretch: 1;
+                            selected(value) => { Workbench.select-preset(self.current-index); }
+                        }
+
+                        new-preset := ActionButton {
+                            text: Workbench.tr("preset.new");
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.new-preset(); }
+                        }
+
+                        preset-name := LineEdit {
+                            accessible-label: Workbench.tr("ui.preset_name");
+                            text <=> Workbench.preset-name;
+                            placeholder-text: Workbench.tr("ui.preset_name");
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            horizontal-stretch: 1;
+                            edited(text) => { Workbench.name-edited(text); }
+                        }
+                    }
+
+                    preset-list := ScrollView {
+                        content-width: self.visible-width - 10px;
+                        VerticalLayout {
+                            spacing: 8px;
+                            for group[index] in Workbench.groups: PresetGroup {
+                                group: group;
+                                index: index;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        startup := CheckBox {
+                            text: Workbench.tr("preset.startup_label");
+                            checked <=> Workbench.preset-startup;
+                            enabled: (Workbench.preset-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            toggled => { Workbench.startup-edited(self.checked); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: Workbench.dirty ? Workbench.tr("preset.unsaved") : "";
+                            color: Theme.muted;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        visible: Workbench.preset-startup && Workbench.dirty;
+                        text: Workbench.tr("preset.startup_on_save");
+                        color: Theme.warning;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ActionButton {
+                            text: Workbench.tr("ui.reset_draft");
+                            enabled: (Workbench.preset-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.reset-preset(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        delete-preset := ActionButton {
+                            text: Workbench.tr("preset.delete");
+                            enabled: (Workbench.preset-saved && !Workbench.busy && !Workbench.recovery-pending) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.delete-preset(); }
+                        }
+
+                        save-preset := ActionButton {
+                            text: Workbench.tr("preset.save");
+                            enabled: (Workbench.preset-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.save-preset(); }
+                        }
+
+                        apply-preset := ActionButton {
+                            text: Workbench.recovery-pending ? Workbench.tr("preset.restore_button") : Workbench.tr("preset.apply_button");
+                            primary: true;
+                            enabled: (!Workbench.busy && (Workbench.recovery-pending || (!Workbench.dirty && Workbench.preset-applicable))) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.apply-preset(); }
+                        }
+                    }
+                }
+            }
+
+            cooling := Rectangle {
+                visible: Workbench.page == 2 && !Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+                    SectionTitle {
+                        text: Workbench.tr("ui.cooling");
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("ui.fan_request");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+
+                        fan-selector := ComboBox {
+                            model: [
+                                Workbench.tr("ui.fan_bios"),
+                                Workbench.tr("ui.fan_curve"),
+                                Workbench.tr("ui.fan_max")
+                            ];
+                            current-index <=> Workbench.fan-index;
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            selected(value) => { Workbench.fan-change(self.current-index); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    Text {
+                        text: Workbench.cooling-status;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+
+                    Hairline { }
+
+                    SectionTitle {
+                        text: Workbench.tr("ui.shared_curve");
+                    }
+
+                    Text {
+                        text: Workbench.tr("ui.fan_curve_note");
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+
+                    edit-fan := ActionButton {
+                        text: Workbench.tr("ui.edit_curve");
+                        enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                        clicked => { Workbench.open-curve(false); }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+                }
+            }
+
+            lighting := Rectangle {
+                visible: Workbench.page == 3 && !Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 20px;
+                    HorizontalLayout {
+                        SectionTitle {
+                            text: Workbench.tr("ui.lighting");
+                            horizontal-stretch: 1;
+                        }
+
+                        lighting-power := ActionButton {
+                            text: !Workbench.lighting-ready ? Workbench.tr("ui.refresh") : Workbench.lighting-on ? Workbench.tr("common.on") : Workbench.tr("common.off");
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.lighting-power(); }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        for zone[index] in Workbench.zone-colors: ActionButton {
+                            text: "";
+                            accessible-label: Workbench.tr(index == 0 ? "lighting.zone_left" : index == 1 ? "lighting.zone_middle" : index == 2 ? "lighting.zone_right" : "lighting.zone_numpad");
+                            min-height: 150px;
+                            max-height: 150px;
+                            preferred-height: 150px;
+                            enabled: Workbench.lighting-ready && Workbench.lighting-on && !Workbench.busy && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.pick-zone(index); }
+                            background: Theme.surface;
+                            border-width: self.keyboard-focus ? 2px : 1px;
+                            border-color: self.keyboard-focus ? Theme.accent : Workbench.lighting-on ? zone : Theme.line;
+                            border-radius: 4px;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+                                for row in 4: HorizontalLayout {
+                                    spacing: 5px;
+                                    for key in 4: Rectangle {
+                                        height: 16px;
+                                        background: Workbench.lighting-on ? zone.with-alpha(0.3) : Theme.hover;
+                                        border-radius: 2px;
+                                    }
+                                }
+                                Text {
+                                    text: Workbench.tr(index == 0 ? "lighting.zone_left" : index == 1 ? "lighting.zone_middle" : index == 2 ? "lighting.zone_right" : "lighting.zone_numpad");
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: Workbench.tr("ui.lighting_note");
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+                }
+            }
+
+            settings := ScrollView {
+                visible: Workbench.page == 4 && !Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    SectionTitle {
+                        text: Workbench.tr("settings.title");
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("settings.language");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        language := ComboBox {
+                            model: [Workbench.tr("settings.language_system"), "Deutsch", "English"];
+                            current-index <=> Workbench.language-index;
+                            enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            selected(value) => { Workbench.settings-changed(); }
+                        }
+                    }
+
+                    Text {
+                        text: Workbench.tr("settings.restart_note");
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    autostart := CheckBox {
+                        text: Workbench.tr("settings.autostart");
+                        checked <=> Workbench.autostart;
+                        enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                        toggled => { Workbench.settings-changed(); }
+                    }
+
+                    tray-start := CheckBox {
+                        text: Workbench.tr("settings.start_in_tray");
+                        checked <=> Workbench.start-in-tray;
+                        enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                        toggled => { Workbench.settings-changed(); }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("settings.close");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        close-behavior := ComboBox {
+                            model: [Workbench.tr("settings.close_tray"), Workbench.tr("settings.close_exit")];
+                            current-index <=> Workbench.close-index;
+                            enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            selected(value) => { Workbench.settings-changed(); }
+                        }
+                    }
+
+                    Hairline { }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.tr("settings.battery");
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        battery := ComboBox {
+                            model: Workbench.battery-choices;
+                            current-index <=> Workbench.battery-index;
+                            enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            selected(value) => { Workbench.settings-changed(); }
+                        }
+                    }
+
+                    hold := CheckBox {
+                        text: Workbench.tr("settings.hold_preset");
+                        checked <=> Workbench.hold-preset;
+                        enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                        toggled => { Workbench.settings-changed(); }
+                    }
+
+                    Text {
+                        text: Workbench.tr("settings.startup_note");
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        settings-save := ActionButton {
+                            text: Workbench.tr("preset.save");
+                            min-width: 110px;
+                            max-width: 140px;
+                            primary: Workbench.settings-dirty;
+                            enabled: (Workbench.settings-ready && Workbench.settings-dirty && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.save-settings(); }
+                        }
+                    }
+
+                    Hairline { }
+
+                    HorizontalLayout {
+                        ActionButton {
+                            text: Workbench.hp-disabled ? Workbench.tr("ui.hp_restore") : Workbench.tr("settings.hp_service");
+                            enabled: (Workbench.hp-available && !Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.hp-service(); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: Workbench.tr("ui.about");
+                            clicked => { Workbench.show-about(); }
+                        }
+                    }
+                }
+            }
+
+            curve-editor := ScrollView {
+                visible: Workbench.curve-open;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        SectionTitle {
+                            text: Workbench.curve-title;
+                            horizontal-stretch: 1;
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: Workbench.tr("ui.back");
+                            clicked => { Workbench.curve-action("close"); }
+                        }
+
+                        ActionButton {
+                            text: Workbench.tr(Workbench.curve-gpu ? "ui.use_curve" : "ui.save_curve");
+                            primary: true;
+                            enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("save"); }
+                        }
+                    }
+
+                    Text {
+                        text: Workbench.tr(Workbench.curve-gpu ? "ui.curve_draft_note" : "ui.fan_curve_note");
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    chart := CurveCanvas {
+                        preferred-height: max(190px, curve-editor.visible-height - 226px);
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: Workbench.curve-low;
+                            color: Theme.muted;
+                            font-family: "Consolas";
+                        }
+
+                        Text {
+                            text: Workbench.curve-x-label;
+                            color: Theme.muted;
+                            horizontal-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: Workbench.curve-high;
+                            color: Theme.muted;
+                            font-family: "Consolas";
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        point-selector := ComboBox {
+                            model: Workbench.point-labels;
+                            current-index <=> Workbench.point-index;
+                            selected(value) => { Workbench.select-point(self.current-index); }
+                        }
+
+                        point-x := LineEdit {
+                            accessible-label: Workbench.curve-x-label;
+                            text <=> Workbench.point-x;
+                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            min-width: 50px;
+                            max-width: 70px;
+                        }
+
+                        point-y := LineEdit {
+                            accessible-label: Workbench.curve-y-label;
+                            text <=> Workbench.point-y;
+                            min-width: 60px;
+                            max-width: 80px;
+                        }
+
+                        Text {
+                            text: Workbench.curve-y-label;
+                            color: Theme.muted;
+                            vertical-alignment: center;
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: Workbench.tr("ui.set_point");
+                            clicked => { Workbench.curve-action("set"); }
+                        }
+
+                        ActionButton {
+                            text: "+";
+                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("insert"); }
+                        }
+
+                        ActionButton {
+                            text: "−";
+                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("remove"); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        ActionButton {
+                            text: Workbench.tr("ui.undo");
+                            enabled: (Workbench.can-undo) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("undo"); }
+                        }
+
+                        ActionButton {
+                            text: Workbench.tr("ui.redo");
+                            enabled: (Workbench.can-redo) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("redo"); }
+                        }
+
+                        ActionButton {
+                            text: Workbench.tr("ui.flatten");
+                            enabled: (Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("flatten"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: "−";
+                            clicked => { Workbench.curve-action("zoom-out"); }
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: "+";
+                            clicked => { Workbench.curve-action("zoom-in"); }
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: Workbench.tr("ui.fit");
+                            clicked => { Workbench.curve-action("fit"); }
+                        }
+
+                        ActionButton {
+                            enabled: Workbench.confirm-kind == 0;
+                            text: Workbench.tr("ui.reset_draft");
+                            clicked => { Workbench.curve-action("reset"); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.show-details: TextEdit {
+            height: 104px;
+            text: Workbench.details + (Workbench.sensor-details != "" ? "\n" + Workbench.sensor-details : "");
+            read-only: true;
+            font-family: "Consolas";
+            font-size: 12px;
+        }
+        Hairline { }
+
+        footer := Rectangle {
+            height: 28px;
+            background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 8px;
+                Rectangle {
+                    width: 5px;
+                    height: 5px;
+                    border-radius: 3px;
+                    background: Workbench.failed ? Theme.error : Workbench.busy ? Theme.warning : Theme.quiet;
+                }
+
+                Text {
+                    text: Workbench.status;
+                    color: Workbench.failed ? Theme.error : Theme.muted;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: Workbench.tr("ui.details");
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+
+            TouchArea {
+                clicked => { root.show-details = !root.show-details; }
+            }
+        }
+    }
+
+    if Workbench.confirm-kind != 0: ConfirmPrompt {
+        kind: Workbench.confirm-kind;
+        accepted(value) => {
+            Workbench.confirm(value);
+            if Workbench.page == 1 { preset-name.focus(); } else { settings-button.focus(); }
+        }
+    }
+}
+
+export component AboutWindow inherits Window {
+    in property <string> window-title;
+    in property <string> version-text;
+    in property <string> close-text;
+    callback dismiss();
+    title: root.window-title;
+    preferred-width: 400px;
+    preferred-height: 280px;
+    min-width: 400px;
+    min-height: 280px;
+    background: Theme.canvas;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        SectionTitle {
+            text: "Omen Hub++";
+        }
+
+        Text {
+            text: root.version-text;
+            color: Theme.muted;
+        }
+
+        AboutSlint {
+            height: 110px;
+        }
+
+        ActionButton {
+            text: root.close-text;
+            clicked => { root.dismiss(); }
+        }
+    }
+}

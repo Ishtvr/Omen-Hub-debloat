@@ -1,10 +1,10 @@
 # Localization
 
-The app includes German (`de.json`, reference) and English (`en.json`) under `crates/app/lang/`, with 543 matching keys in each catalog. Repository documentation uses English for current guides; archived measurement records retain their original language. Documentation language does not change the app's language selection.
+The app includes German (`de.json`, reference) and English (`en.json`) under `crates/app/lang/`, with matching keys in both catalogs. Repository documentation uses English for current guides; archived measurement records retain their original language. Documentation language does not change the app's language selection.
 
 ## Selection and keys
 
-Language precedence is an explicit `--lang de|en` prefix, then the process's `OMEN_HUB_LANG=de|en`, then Windows display language (German → German, otherwise English). The choice is immutable for that app process; it does not alter Windows language or profile data.
+Language precedence is an explicit `--lang de|en` prefix, then the process's `OMEN_HUB_LANG=de|en`, then the stored app language preference, then Windows display language (German → German, otherwise English). The choice is immutable for that app process; it does not alter Windows language or profile data.
 
 ```powershell
 .\target\release\omen-hub-pp.exe --lang de
@@ -53,3 +53,9 @@ Keep German labels natural: Takt, Auslastung, Leistungsprofil, Anwenden and Wied
 3. Run the workspace tests. They check key parity, duplicate/empty entries, placeholders, referenced keys, preset label/info coverage, direct display literals, literal argument preservation, exact localized units and structured errors in both languages.
 
 New copy must distinguish measured state, selected preference, draft, unavailable, pending and confirmed application. Fan quick-status wording now confirms selection only; fresh matching helper-status confirmation remains a separate [review item](PROJECT_REVIEW.md). No localization change grants new hardware support.
+
+## Slint presentation
+
+Slint resolves UI text through the same process language catalog as CLI and fixed UAC commands. Field labels, choices and explanations keep stable feature keys. Settings language changes are saved through the existing transaction and take effect after restart; open views and About keep the current language until then. Built-in Slint attribution and Windows consent/color-picker resources retain their own branding/system language.
+
+Regression checks cover Slint key references, exact localized milliwatts, Unicode name editing/Undo and real German/English interaction. A translated display value never changes the stored integer unit or grants a startup permission.

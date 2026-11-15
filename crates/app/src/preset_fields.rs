@@ -106,6 +106,21 @@ pub fn retired(feature: F) -> bool {
         || REMOVED_CPU_OPTIONS.contains(&feature)
         || REMOVED_PRESET_OPTIONS.contains(&feature)
 }
+/// Present the same Dynamic Boost spelling/precedence that Apply resolves.
+/// Saving still uses the existing alias-aware optimistic merge in core.
+pub fn display_value(
+    profile: &omen_core::profiles::PerformanceProfile,
+    feature: F,
+) -> Option<&Value> {
+    omen_core::preset::display_value(
+        profile,
+        if feature == F::GpuUnleashed {
+            F::GpuDynamicBoost
+        } else {
+            feature
+        },
+    )
+}
 pub fn fields() -> Vec<Field> {
     let rows = [
         (F::GpuCoreOffsetMhz, 0, 0),
@@ -251,6 +266,58 @@ pub fn choice_label(choice: C) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dynamic_boost_display_and_saved_edit_follow_apply_precedence() {
+        use omen_core::profiles::{DeviceBinding, PerformanceProfile, Setting};
+        let mut profile = PerformanceProfile {
+            schema: 1,
+            id: "alias-test".into(),
+            name: "Alias".into(),
+            binding: DeviceBinding {
+                manufacturer: "HP".into(),
+                board: "8E35".into(),
+                bios: "F.13".into(),
+                cpu_names: vec!["Test CPU".into()],
+                nvidia_uuid: Some("GPU-test".into()),
+                nvidia_driver: Some("test".into()),
+                nvidia_vbios: Some("test".into()),
+            },
+            settings: vec![Setting {
+                feature: F::GpuDynamicBoost,
+                value: Value::Boolean(true),
+            }],
+        };
+        assert_eq!(
+            display_value(&profile, F::GpuUnleashed),
+            Some(&Value::Boolean(true))
+        );
+        profile.settings.push(Setting {
+            feature: F::GpuUnleashed,
+            value: Value::Boolean(false),
+        });
+        assert_eq!(
+            display_value(&profile, F::GpuUnleashed),
+            Some(&Value::Boolean(true))
+        );
+        let edited = omen_core::preset::merge(
+            &profile,
+            &profile,
+            "Alias",
+            &[(F::GpuUnleashed, Some(Value::Boolean(false)))],
+        )
+        .unwrap();
+        assert_eq!(
+            display_value(&edited, F::GpuUnleashed),
+            Some(&Value::Boolean(false))
+        );
+        assert!(
+            edited
+                .effective()
+                .settings
+                .iter()
+                .all(|s| s.value == Value::Boolean(false))
+        );
+    }
     #[test]
     fn current_fields_have_no_retired_controls_or_empty_groups() {
         let fields = fields();

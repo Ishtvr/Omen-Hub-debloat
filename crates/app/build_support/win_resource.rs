@@ -65,7 +65,7 @@ fn utf16z(text: &str) -> Vec<u8> {
 }
 
 fn align(buffer: &mut Vec<u8>) {
-    while buffer.len() % 4 != 0 {
+    while !buffer.len().is_multiple_of(4) {
         buffer.push(0);
     }
 }
@@ -214,7 +214,9 @@ mod tests {
         assert_eq!(&data[48..52], &1u32.to_le_bytes());
         assert_eq!(&data[68..72], &2u32.to_le_bytes());
         let text: Vec<u16> = data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         let needle: Vec<u16> = "Omen Hub++".encode_utf16().collect();
@@ -225,7 +227,12 @@ mod tests {
     fn committed_icon_covers_shell_and_tray_sizes() {
         let resources = icon_resources(include_bytes!("../assets/omen-hub-pp.ico")).unwrap();
         let (_, _, group) = resources.last().unwrap();
-        let sides: Vec<u8> = group[6..].chunks_exact(14).map(|e| e[0]).collect();
+        let sides: Vec<u8> = group[6..]
+            .as_chunks::<14>()
+            .0
+            .iter()
+            .map(|e| e[0])
+            .collect();
         // 0 encodes 256 pixels in icon directories.
         for side in [16, 20, 24, 32, 40, 48, 64, 0] {
             assert!(sides.contains(&side), "missing {side}");

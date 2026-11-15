@@ -1,5 +1,15 @@
 # Architecture
 
+## Slint presentation — 15 November 2026
+
+The application now renders its normal workspaces through `crates/app/src/slint_ui.rs` and `crates/app/ui/`. `slint_ui/curve.rs` adapts the existing pure curve editor and viewport; it does not implement a new tuner. A hidden Win32 owner retains tray recreation, single-instance activation, power notifications and worker-result messages on the same event thread as Slint.
+
+Manual controls, bounded telemetry readers, preset operations and settings/lighting use sleeping workers and fixed messages. Opening Overview loads local preset names first; hardware-backed preset-editor inventory is deferred until Presets is opened. The bounded form remains mounted during scrolling/group collapse to retain edit state. UI tests use an explicit isolated memory-only mode; normal release builds exclude the developer MCP feature.
+
+Core/platform policies, file schemas, controller leases, device bindings, original capture, readback, restore and cooling ownership remain the existing implementation. Software UI tests do not add hardware qualification. The sections below describe the retained engine and historical native capture infrastructure.
+
+## Retained engine and native capture infrastructure
+
 Reviewed against `0.9.0-dev.2`. [Hardware support](HARDWARE_MATRIX.md) and [Validation](VALIDATION.md) define what the architecture has actually demonstrated.
 
 ## Crates

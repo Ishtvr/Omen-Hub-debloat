@@ -6,6 +6,8 @@ The user raised the tray-idle working-set budget to **50 MB** on 13 October 2026
 
 On 14 October 2026 the user clarified that the **open window may exceed 50 MB** when this improves the UI; the budget remains for total tray idle, including helpers after sensor activation. The requested appearance is **modern, clean and dark**, with clear fields and prominent actions.
 
+On 15 November 2026 the user approved the Rust/Slint UI rewrite and superseded the old fixed RAM ceiling with a low-background-resource goal. Preserve the earlier budget as history, measure total tray idle including helpers, and prioritize responsive interaction and correctness over executable size. The application uses Slint 1.18.1 with a native Windows event/tray owner; MCP is for explicit developer builds only.
+
 Omen Hub++ must eventually replace the original OMEN Hub and its hardware-controller processes completely. Original OMEN Hub modules are reverse-engineering sources, not mandatory runtime dependencies for the target engine. Prove the necessary lifecycle and independent transport before claiming replacement support.
 
 - Keep documentation truthful about implemented features versus plans. Never imply that a profile preview changed firmware.

@@ -1,5 +1,17 @@
 # Getting started
 
+## Current Slint workspaces
+
+From 0.10.0-beta.1 the top navigation opens **Overview**, **Presets**, **Cooling** and **Lighting**. The separate **Settings** action holds app-wide language, Windows startup, tray/close behavior, battery selection and preset hold. GPU curve editing is inside Presets; the shared fan curve and BIOS/Curve/Max selection are under Cooling.
+
+Save stores a preset; Apply runs the existing device-bound preflight, original capture and readback/restore. A selected sign-in permission can also apply/re-authorize when saving; its notice is shown in the editor. App startup does not grant preset startup. Requested values, historical Apply results and measured Tctl remain different facts.
+
+Language changes take effect after exiting and restarting the app. `--show` from the desktop shortcut opens the window even when automatic startup uses the tray. Closing follows the saved preference and retains separate cooling/recovery processes. Do not use `--ui-test` for real hardware control: it is a labeled, memory-only developer fixture.
+
+The retained engine/control guidance follows below; older screenshots/native layout descriptions do not describe the new shell. Current hardware support remains the [hardware matrix](HARDWARE_MATRIX.md).
+
+## Retained control guidance
+
 Omen Hub++ is an experimental Windows x64 application. Start with the [hardware matrix](HARDWARE_MATRIX.md): current hardware-control evidence is specific to HP 8E35/F.13, Ryzen 9 8940HX and RTX 5070 Laptop. A different BIOS, GPU implementation or driver can make a control unavailable.
 
 The current local source candidate is `0.9.0-beta.3`. The first public beta was withdrawn; a local candidate is not a published release. Follow [Building](BUILDING.md) and [Validation](VALIDATION.md) to identify the actual tested executable.

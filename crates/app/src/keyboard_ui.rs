@@ -1,7 +1,7 @@
 //! Direct four-zone lighting. One elevated editor; the dashboard stays normal.
 use crate::{
     i18n::t,
-    native_ui::{self as ui, text, wide},
+    native_ui::{self as ui, text},
     theme,
 };
 use omen_core::{
@@ -25,7 +25,6 @@ use windows_sys::Win32::{
         Controls::Dialogs::*,
         Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED},
         Input::KeyboardAndMouse::{EnableWindow, GetFocus},
-        Shell::{IsUserAnAdmin, ShellExecuteW},
         WindowsAndMessaging::*,
     },
 };
@@ -95,10 +94,10 @@ fn worker(hwnd: usize, requests: mpsc::Receiver<Request>, updates: mpsc::Sender<
             },
             Err(error) => {
                 let state = control.as_mut().ok().and_then(|c| c.read().ok());
-                if let Ok(user) = ProfileStore::user_data() {
-                    if let Ok(store) = ProfileStore::at(user.root().join("keyboard-control")) {
-                        let _=store.save_control_result(&serde_json::json!({"schema":1,"operation":"lighting_direct","detail":error}));
-                    }
+                if let Ok(user) = ProfileStore::user_data()
+                    && let Ok(store) = ProfileStore::at(user.root().join("keyboard-control"))
+                {
+                    let _=store.save_control_result(&serde_json::json!({"schema":1,"operation":"lighting_direct","detail":error}));
                 }
                 Update {
                     state,
@@ -515,28 +514,7 @@ pub fn run(selected: Option<String>) -> Result<(), String> {
     if selected.is_some() {
         return Err(t("lighting.no_profile").into());
     }
-    if unsafe { IsUserAnAdmin() } == 0 {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let result = unsafe {
-            ShellExecuteW(
-                ptr::null_mut(),
-                wide("runas").as_ptr(),
-                wide(&exe.to_string_lossy()).as_ptr(),
-                wide(&format!(
-                    "--lang {} keyboard-ui",
-                    crate::i18n::language_code()
-                ))
-                .as_ptr(),
-                ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        if result as usize <= 32 {
-            return Err(t("lighting.uac_cancelled").into());
-        }
-        return Ok(());
-    }
-    run_window(None, None, None)
+    crate::slint_ui::entry(3, None)
 }
 pub fn preview(selected: String, path: &Path, size: Option<[i32; 2]>) -> Result<(), String> {
     run_window(

@@ -300,24 +300,24 @@ fn nearest(g: Geometry, c: &Curve, x: i32, y: i32) -> Option<usize> {
         .map(|(i, _)| i)
 }
 fn finish_drag(hwnd: HWND, cancel: bool) {
-    if let Some(s) = unsafe { state(hwnd) } {
-        if s.drag.borrow_mut().take().is_some() {
-            let changed = if let Some(c) = s.model.borrow_mut().as_mut() {
-                if cancel {
-                    c.cancel_gesture()
-                } else {
-                    c.end_gesture();
-                    false
-                }
+    if let Some(s) = unsafe { state(hwnd) }
+        && s.drag.borrow_mut().take().is_some()
+    {
+        let changed = if let Some(c) = s.model.borrow_mut().as_mut() {
+            if cancel {
+                c.cancel_gesture()
             } else {
+                c.end_gesture();
                 false
-            };
-            unsafe {
-                ReleaseCapture();
             }
-            refresh(hwnd);
-            notify(hwnd, usize::from(changed));
+        } else {
+            false
+        };
+        unsafe {
+            ReleaseCapture();
         }
+        refresh(hwnd);
+        notify(hwnd, usize::from(changed));
     }
 }
 fn interact(hwnd: HWND, x: i32, y: i32) {
