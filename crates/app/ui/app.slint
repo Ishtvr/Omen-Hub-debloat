@@ -8,6 +8,10 @@ import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 import { ComboBox, LineEdit, CheckBox, BrightnessSlider } from "controls.slint";
 import { KeyboardPreview, KeyCap } from "keyboard.slint";
+import { ColorField } from "color-field.slint";
+import { ColorPicker, ColorEditor } from "color-picker.slint";
+export { ColorEditor } from "color-picker.slint";
+import { ThemeGallery, PaletteChoice } from "theme-gallery.slint";
 import {
     ActionButton,
     SegmentedTabs,
@@ -111,6 +115,10 @@ export global Workbench {
     in property <bool> settings-ready;
     in-out property <bool> settings-dirty;
     in-out property <int> palette-index;
+    in property <[PaletteChoice]> palette-choices;
+    in property <color> background-preview;
+    in property <color> foreground-preview;
+    in property <color> accent-preview;
     in-out property <string> color-background;
     in-out property <string> color-foreground;
     in-out property <string> color-accent;
@@ -155,6 +163,7 @@ export global Workbench {
     callback settings-changed();
     callback palette-changed(int);
     callback colors-changed();
+    callback open-color-picker(int);
     callback reset-appearance();
     callback hp-service();
     callback show-about();
@@ -185,7 +194,7 @@ component FieldRow inherits Rectangle {
         info := ActionButton {
             enabled: Workbench.confirm-kind == 0;
             text: "i";
-            width: 28px;
+            control-width: Theme.control-height;
             background: transparent;
             clicked => { root.show-info = !root.show-info; }
         }
@@ -215,7 +224,7 @@ component FieldRow inherits Rectangle {
         }
         if root.item.kind == 3: ActionButton {
             text: Workbench.tr("ui.edit_curve");
-            width: Theme.field-width;
+            control-width: Theme.field-width;
             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
             clicked => { Workbench.open-curve(true); }
         }
@@ -472,6 +481,13 @@ component ConfirmPrompt inherits FocusScope {
 }
 
 export component AppWindow inherits Window {
+    callback color-picker-closed(int);
+    color-picker-closed(target) => {
+        if target == 0 { color-background.focus(); }
+        else if target == 1 { color-foreground.focus(); }
+        else if target == 2 { color-accent.focus(); }
+        else { lighting-color.focus(); }
+    }
     title: "Omen Hub++";
     preferred-width: 1000px;
     preferred-height: 720px;
@@ -512,13 +528,6 @@ export component AppWindow inherits Window {
                     font-size: 12px;
                     font-weight: 600;
                     letter-spacing: 0.8px;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: Workbench.admin ? Workbench.tr("ui.admin") : Workbench.tr("ui.user");
-                    color: Theme.muted;
-                    font-size: 11px;
                     vertical-alignment: center;
                 }
 
@@ -726,7 +735,7 @@ export component AppWindow inherits Window {
                                 }
 
                                 Text {
-                                    text: Workbench.identity + "  ·  " + Workbench.power-source;
+                                    text: Workbench.identity + "  ·  " + Workbench.power-source + "  ·  " + Workbench.tr(Workbench.admin ? "ui.admin" : "ui.user");
                                     color: Theme.muted;
                                     font-size: 11px;
                                     wrap: word-wrap;
@@ -738,27 +747,19 @@ export component AppWindow inherits Window {
                                 text: Workbench.tr("ui.presets");
                             }
 
-                            GridLayout {
+                            HorizontalLayout {
                                 spacing: 8px;
+                                padding-right: 16px;
                                 Text {
-                                    row: 0;
-                                    col: 0;
                                     text: Workbench.tr("preset.selector_label");
                                     color: Theme.muted;
-                                    font-size: 12px;
-                                }
-
-                                Text {
-                                    row: 0;
-                                    col: 2;
-                                    text: Workbench.tr("ui.preset_name");
-                                    color: Theme.muted;
-                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
                                 }
 
                                 preset-selector := ComboBox {
-                                    row: 1;
-                                    col: 0;
+                                    width: Theme.field-width;
+                                    accessible-label: Workbench.tr("preset.selector_label");
                                     model: Workbench.profiles;
                                     current-index <=> Workbench.profile-index;
                                     enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
@@ -766,21 +767,34 @@ export component AppWindow inherits Window {
                                 }
 
                                 new-preset := ActionButton {
-                                    row: 1;
-                                    col: 1;
-                                    text: Workbench.tr("preset.new");
+                                    text: "+";
+                                    accessible-label: Workbench.tr("preset.new");
                                     enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
                                     clicked => { Workbench.new-preset(); }
                                 }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                padding-right: 16px;
+                                Text {
+                                    text: Workbench.tr("ui.preset_name");
+                                    color: Theme.muted;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
 
                                 preset-name := LineEdit {
-                                    row: 1;
-                                    col: 2;
+                                    width: Theme.field-width;
                                     accessible-label: Workbench.tr("ui.preset_name");
                                     text <=> Workbench.preset-name;
                                     placeholder-text: Workbench.tr("ui.preset_name");
                                     enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
                                     edited(text) => { Workbench.name-edited(text); }
+                                }
+
+                                Rectangle {
+                                    width: Theme.control-height;
                                 }
                             }
 
@@ -974,22 +988,13 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                 }
 
-                                HorizontalLayout {
-                                    width: Theme.field-width;
-                                    spacing: 8px;
-                                    lighting-color := LineEdit {
-                                        accessible-label: Workbench.tr("lighting.color");
-                                        text <=> Workbench.lighting-color;
-                                        placeholder-text: Workbench.tr("lighting.mixed");
-                                        enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                                        edited(value) => { Workbench.edit-lighting-color(value); }
-                                    }
-
-                                    lighting-picker := ActionButton {
-                                        text: Workbench.tr("lighting.choose_color");
-                                        enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.pick-lighting-color(); }
-                                    }
+                                lighting-color := ColorField {
+                                    text: Workbench.tr("lighting.color");
+                                    value: Workbench.lighting-color;
+                                    mixed: Workbench.lighting-color == "";
+                                    swatch-color: Workbench.zone-colors[Workbench.lighting-group == 0 ? 3 : Workbench.lighting-group == 1 ? 1 : 0];
+                                    enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
+                                    clicked => { Workbench.pick-lighting-color(); }
                                 }
                             }
 
@@ -1001,29 +1006,40 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                 }
 
-                                HorizontalLayout {
+                                lighting-value := Rectangle {
                                     width: Theme.field-width;
-                                    spacing: 8px;
-                                    lighting-slider := BrightnessSlider {
-                                        accessible-label: Workbench.tr("lighting.brightness");
-                                        value: Workbench.lighting-level;
-                                        enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                                        edited(value) => { Workbench.lighting-level-edited(value); }
-                                    }
+                                    height: Theme.control-height;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: lighting-brightness.has-focus || lighting-slider.has-focus ? Theme.accent : Theme.line;
+                                    background: Theme.control;
+                                    HorizontalLayout {
+                                        padding-left: 4px;
+                                        padding-right: 8px;
+                                        spacing: 8px;
+                                        lighting-slider := BrightnessSlider {
+                                            accessible-label: Workbench.tr("lighting.brightness");
+                                            value: Workbench.lighting-level;
+                                            enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
+                                            edited(value) => { Workbench.lighting-level-edited(value); }
+                                        }
 
-                                    lighting-brightness := LineEdit {
-                                        width: 60px;
-                                        accessible-label: Workbench.tr("lighting.brightness");
-                                        text <=> Workbench.lighting-brightness;
-                                        placeholder-text: Workbench.tr("lighting.mixed");
-                                        enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                                        edited(value) => { Workbench.edit-lighting-brightness(value); }
-                                    }
+                                        lighting-brightness := LineEdit {
+                                            width: 60px;
+                                            background: transparent;
+                                            border-width: 0px;
+                                            accessible-label: Workbench.tr("lighting.brightness");
+                                            text <=> Workbench.lighting-brightness;
+                                            placeholder-text: Workbench.tr("lighting.mixed");
+                                            enabled: Workbench.lighting-ready && !Workbench.busy && Workbench.confirm-kind == 0;
+                                            edited(value) => { Workbench.edit-lighting-brightness(value); }
+                                        }
 
-                                    Text {
-                                        text: "%";
-                                        color: Theme.muted;
-                                        vertical-alignment: center;
+                                        Text {
+                                            text: "%";
+                                            color: Theme.muted;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
@@ -1091,27 +1107,11 @@ export component AppWindow inherits Window {
                         text: Workbench.tr("settings.appearance");
                     }
 
-                    HorizontalLayout {
-                        Text {
-                            text: Workbench.tr("settings.palette");
-                            color: Theme.ink;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-
-                        palette-selector := ComboBox {
-                            width: Theme.field-width;
-                            model: [
-                                "Slate",
-                                Workbench.tr("settings.graphite"),
-                                "Vesper",
-                                Workbench.tr("settings.light"),
-                                Workbench.tr("settings.custom")
-                            ];
-                            current-index <=> Workbench.palette-index;
-                            enabled: Workbench.settings-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                            selected(value) => { Workbench.palette-changed(self.current-index); }
-                        }
+                    palette-selector := ThemeGallery {
+                        choices: Workbench.palette-choices;
+                        selected: Workbench.palette-index;
+                        enabled: Workbench.settings-ready && !Workbench.busy && Workbench.confirm-kind == 0;
+                        changed(index) => { Workbench.palette-changed(index); }
                     }
 
                     HorizontalLayout {
@@ -1122,22 +1122,12 @@ export component AppWindow inherits Window {
                             horizontal-stretch: 1;
                         }
 
-                        color-background := LineEdit {
-                            width: Theme.field-width;
-                            accessible-label: Workbench.tr("settings.background");
-                            text <=> Workbench.color-background;
+                        color-background := ColorField {
+                            text: Workbench.tr("settings.background");
+                            value: Workbench.color-background;
+                            swatch-color: Workbench.background-preview;
                             enabled: Workbench.settings-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                            edited(text) => { Workbench.colors-changed(); }
-                            Rectangle {
-                                x: parent.width - 29px;
-                                y: 10px;
-                                width: 16px;
-                                height: 16px;
-                                border-radius: 4px;
-                                background: Theme.canvas;
-                                border-width: 1px;
-                                border-color: Theme.muted;
-                            }
+                            clicked => { Workbench.open-color-picker(0); }
                         }
                     }
 
@@ -1149,22 +1139,12 @@ export component AppWindow inherits Window {
                             horizontal-stretch: 1;
                         }
 
-                        color-foreground := LineEdit {
-                            width: Theme.field-width;
-                            accessible-label: Workbench.tr("settings.foreground");
-                            text <=> Workbench.color-foreground;
+                        color-foreground := ColorField {
+                            text: Workbench.tr("settings.foreground");
+                            value: Workbench.color-foreground;
+                            swatch-color: Workbench.foreground-preview;
                             enabled: Workbench.settings-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                            edited(text) => { Workbench.colors-changed(); }
-                            Rectangle {
-                                x: parent.width - 29px;
-                                y: 10px;
-                                width: 16px;
-                                height: 16px;
-                                border-radius: 4px;
-                                background: Theme.ink;
-                                border-width: 1px;
-                                border-color: Theme.muted;
-                            }
+                            clicked => { Workbench.open-color-picker(1); }
                         }
                     }
 
@@ -1176,22 +1156,12 @@ export component AppWindow inherits Window {
                             horizontal-stretch: 1;
                         }
 
-                        color-accent := LineEdit {
-                            width: Theme.field-width;
-                            accessible-label: Workbench.tr("settings.accent");
-                            text <=> Workbench.color-accent;
+                        color-accent := ColorField {
+                            text: Workbench.tr("settings.accent");
+                            value: Workbench.color-accent;
+                            swatch-color: Workbench.accent-preview;
                             enabled: Workbench.settings-ready && !Workbench.busy && Workbench.confirm-kind == 0;
-                            edited(text) => { Workbench.colors-changed(); }
-                            Rectangle {
-                                x: parent.width - 29px;
-                                y: 10px;
-                                width: 16px;
-                                height: 16px;
-                                border-radius: 4px;
-                                background: Theme.accent;
-                                border-width: 1px;
-                                border-color: Theme.muted;
-                            }
+                            clicked => { Workbench.open-color-picker(2); }
                         }
                     }
 
@@ -1346,6 +1316,7 @@ export component AppWindow inherits Window {
             }
 
             curve-editor := ScrollView {
+                content-width: self.visible-width - 12px;
                 visible: Workbench.curve-open;
                 VerticalLayout {
                     padding: 20px;
@@ -1445,15 +1416,13 @@ export component AppWindow inherits Window {
                             accessible-label: Workbench.curve-x-label;
                             text <=> Workbench.point-x;
                             enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                            min-width: 50px;
-                            max-width: 70px;
+                            width: 96px;
                         }
 
                         point-y := LineEdit {
                             accessible-label: Workbench.curve-y-label;
                             text <=> Workbench.point-y;
-                            min-width: 60px;
-                            max-width: 80px;
+                            width: 96px;
                         }
 
                         Text {
@@ -1466,18 +1435,6 @@ export component AppWindow inherits Window {
                             enabled: Workbench.confirm-kind == 0;
                             text: Workbench.tr("ui.set_point");
                             clicked => { Workbench.curve-action("set"); }
-                        }
-
-                        ActionButton {
-                            text: "+";
-                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                            clicked => { Workbench.curve-action("insert"); }
-                        }
-
-                        ActionButton {
-                            text: "−";
-                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                            clicked => { Workbench.curve-action("remove"); }
                         }
                     }
 
@@ -1501,6 +1458,25 @@ export component AppWindow inherits Window {
                             clicked => { Workbench.curve-action("flatten"); }
                         }
 
+                        ActionButton {
+                            text: "+";
+                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("insert"); }
+                        }
+
+                        ActionButton {
+                            text: "−";
+                            enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
+                            clicked => { Workbench.curve-action("remove"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
                         Rectangle {
                             horizontal-stretch: 1;
                         }
@@ -1578,7 +1554,8 @@ export component AppWindow inherits Window {
         }
     }
 
-    if Workbench.confirm-kind != 0: ConfirmPrompt {
+    if Workbench.confirm-kind == 4: ColorPicker { }
+    if Workbench.confirm-kind > 0 && Workbench.confirm-kind < 4: ConfirmPrompt {
         kind: Workbench.confirm-kind;
         accepted(value) => {
             Workbench.confirm(value);

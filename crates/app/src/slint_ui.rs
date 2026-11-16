@@ -36,8 +36,10 @@ use windows_sys::Win32::{
 };
 
 mod appearance;
+mod colors;
 mod curve;
 mod lighting;
+mod pacing;
 slint::include_modules!();
 
 const AUX_DONE: u32 = WM_APP + 92;
@@ -207,6 +209,9 @@ struct Host {
     loading_presets: Cell<bool>,
     appearance_draft: RefCell<omen_core::appearance::Appearance>,
     appearance_tokens: Cell<omen_core::appearance::Tokens>,
+    pacing: RefCell<pacing::Pacer>,
+    pacing_timer: slint::Timer,
+    color_picker: RefCell<Option<colors::Picker>>,
 }
 
 impl Host {
@@ -831,6 +836,8 @@ impl Host {
                 let _ = w.hide();
             }
             self.visible.set(false);
+            self.pacing_timer.stop();
+            self.pacing.borrow_mut().reset();
             let _ = self.tx.send(ui::Request::Visibility(false));
         }
     }
@@ -840,6 +847,7 @@ impl Host {
             self.status(t("common.finishing"), false);
             return;
         }
+        self.close_color_picker(false);
         if let Some(w) = self.window.upgrade()
             && (w.global::<Workbench>().get_dirty()
                 || self.curves_dirty()
@@ -1353,6 +1361,8 @@ pub fn run(
     // An OpenGL driver's process-global allocations outlive a hidden window.
     // The bounded utility renders smoothly in software without that tray cost.
     // Explicit developer backend overrides remain available for comparison.
+    let backend = std::env::var("SLINT_BACKEND").unwrap_or_default();
+    let software = backend.trim().is_empty() || backend == "winit-software";
     if std::env::var("SLINT_BACKEND")
         .ok()
         .is_none_or(|value| value.trim().is_empty())
@@ -1465,6 +1475,9 @@ pub fn run(
                 .tokens()
                 .expect("Valid built-in palette"),
         ),
+        pacing: RefCell::new(pacing::Pacer::new(software)),
+        pacing_timer: Default::default(),
+        color_picker: Default::default(),
     });
     let initial_appearance = if test {
         host.test_settings
@@ -1666,6 +1679,49 @@ pub fn run(
         move |window, event| {
             if matches!(
                 event,
+                winit::event::WindowEvent::Moved(_)
+                    | winit::event::WindowEvent::Resized(_)
+                    | winit::event::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                h.pacing.borrow_mut().refresh_known = false;
+            }
+            if matches!(event, winit::event::WindowEvent::RedrawRequested)
+                && h.pacing.borrow().enabled
+                && h.visible.get()
+            {
+                if !h.pacing.borrow().refresh_known {
+                    let rate = window
+                        .with_winit_window(|w| {
+                            w.current_monitor()
+                                .and_then(|m| m.refresh_rate_millihertz())
+                        })
+                        .flatten();
+                    h.pacing.borrow_mut().set_refresh(rate);
+                }
+                let delay = h.pacing.borrow_mut().delay(std::time::Instant::now());
+                if let Some(delay) = delay {
+                    if !h.pacing_timer.running() {
+                        let weak = Rc::downgrade(&h);
+                        h.pacing_timer.start(
+                            slint::TimerMode::SingleShot,
+                            pacing::timer_delay(delay),
+                            move || {
+                                if let Some(h) = weak.upgrade()
+                                    && h.visible.get()
+                                    && let Some(w) = h.window.upgrade()
+                                {
+                                    w.window()
+                                        .with_winit_window(|native| native.request_redraw());
+                                }
+                            },
+                        );
+                    }
+                    return EventResult::PreventDefault;
+                }
+                h.pacing_timer.stop();
+            }
+            if matches!(
+                event,
                 winit::event::WindowEvent::Resized(_) | winit::event::WindowEvent::Focused(_)
             ) {
                 h.update_icon();
@@ -1823,6 +1879,19 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
 fn bind(w: &AppWindow, h: &Rc<Host>) {
     let d = w.global::<Workbench>();
     {
+        let editor = w.global::<ColorEditor>();
+        let host = h.clone();
+        editor.on_hsv(move |h, s, v| host.picker_hsv(h, s, v));
+        let host = h.clone();
+        editor.on_hex_edited(move |text| host.picker_hex(text.as_str()));
+        let host = h.clone();
+        editor.on_swatch(move |i| host.picker_swatch(i));
+        let host = h.clone();
+        editor.on_accept(move || host.close_color_picker(true));
+        let host = h.clone();
+        editor.on_cancel(move || host.close_color_picker(false));
+    }
+    {
         let h = h.clone();
         d.on_show_about(move || h.show_about());
     }
@@ -1832,6 +1901,9 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     });
     callback!(on_refresh, |h| {
         let _ = h.tx.send(ui::Request::Refresh);
+    });
+    callback!(on_open_color_picker, |h, target| {
+        h.open_color_picker(target);
     });
     callback!(on_palette_changed, |h, index| {
         h.select_palette(index);

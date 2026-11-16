@@ -3,6 +3,7 @@ pub mod app_settings;
 pub mod appearance;
 pub mod battery;
 pub mod ccd;
+pub mod color;
 pub mod cooling;
 pub mod cooling_override;
 pub mod cpu;

@@ -1,0 +1,257 @@
+import { Theme } from "theme.slint";
+import { ActionButton } from "primitives.slint";
+import { LineEdit, BrightnessSlider } from "controls.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export global ColorEditor {
+    in property <string> title;
+    in property <color> original;
+    in property <color> current;
+    in property <color> hue-color;
+    in property <float> hue;
+    in property <float> saturation;
+    in property <float> value;
+    in-out property <string> hex;
+    in property <bool> valid;
+    in property <[color]> swatches;
+    in property <[string]> swatch-labels;
+    callback hsv(float, float, float);
+    callback hex-edited(string);
+    callback swatch(int);
+    callback accept();
+    callback cancel();
+}
+
+export component ColorPicker inherits FocusScope {
+    function reveal(top: length, item-height: length) {
+        let offset = top - body.absolute-position.y;
+        if offset < 0px { body.content-y = body.content-y - offset; }
+        else if offset + item-height > body.visible-height { body.content-y = body.content-y - (offset + item-height - body.visible-height); }
+    }
+    init => { sv-focus.focus(); }
+    capture-key-pressed(e) => {
+        if e.text == Key.Escape { ColorEditor.cancel(); return accept; }
+        if e.text == Key.Tab || e.text == Key.Backtab {
+            let at = sv-focus.has-focus ? 0 : hue.has-focus ? 1 : palette-focus.has-focus ? 2 : hex-field.has-focus ? 3 : cancel.keyboard-focus ? 4 : 5;
+            let backwards = e.text == Key.Backtab || e.modifiers.shift;
+            let proposed = mod(at + (backwards ? 5 : 1),6);
+            let next = proposed == 5 && !ColorEditor.valid ? backwards ? 4 : 0 : proposed;
+            if next == 0 { sv-focus.focus(); } else if next == 1 { hue.focus(); } else if next == 2 { palette-focus.focus(); } else if next == 3 { hex-field.focus(); } else if next == 4 { cancel.focus(); } else { apply-button.focus(); }
+            if next == 0 { root.reveal(plane.absolute-position.y,plane.height); }
+            else if next == 1 { root.reveal(hue.absolute-position.y,hue.height); }
+            else if next == 2 { root.reveal(palette.absolute-position.y,palette.height); }
+            else if next == 3 { root.reveal(hex-field.absolute-position.y,hex-field.height); }
+            return accept;
+        }
+        return reject;
+    }
+    Rectangle {
+        background: #00000099;
+        TouchArea {
+            scroll-event(e) => { return accept; }
+        }
+    }
+
+    panel := Rectangle {
+        width: min(520px,parent.width - 32px);
+        height: min(560px,parent.height - 32px);
+        background: Theme.canvas;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.line;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            Text {
+                text: ColorEditor.title;
+                color: Theme.ink;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: Theme.tr("color.before");
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    height: 28px;
+                    background: ColorEditor.original;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.muted;
+                }
+
+                Text {
+                    text: Theme.tr("color.selection");
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    height: 28px;
+                    background: ColorEditor.current;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.muted;
+                }
+            }
+
+            body := ScrollView {
+                content-width: self.visible-width - 8px;
+                VerticalLayout {
+                    spacing: 12px;
+                    plane := Rectangle {
+                        height: 180px;
+                        background: @linear-gradient(90deg, #FFFFFF 0%, ColorEditor.hue-color 100%);
+                        Rectangle {
+                            background: @linear-gradient(180deg, #00000000 0%, #000000 100%);
+                        }
+
+                        Rectangle {
+                            x: ColorEditor.saturation * parent.width - 6px;
+                            y: (1 - ColorEditor.value) * parent.height - 6px;
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 6px;
+                            border-width: 2px;
+                            border-color: white;
+                            background: transparent;
+                            Rectangle {
+                                x: -1px;
+                                y: -1px;
+                                width: 14px;
+                                height: 14px;
+                                border-radius: 7px;
+                                border-width: 1px;
+                                border-color: black;
+                            }
+                        }
+
+                        border-width: sv-focus.has-focus ? 2px : 0px;
+                        border-color: Theme.accent;
+                        accessible-role: slider;
+                        accessible-label: Theme.tr("color.saturation_value");
+                        accessible-value: round(ColorEditor.saturation * 100) + " / " + round(ColorEditor.value * 100);
+                        accessible-action-increment => { ColorEditor.hsv(ColorEditor.hue, ColorEditor.saturation, min(1,ColorEditor.value + 0.01)); }
+                        accessible-action-decrement => { ColorEditor.hsv(ColorEditor.hue, ColorEditor.saturation, max(0,ColorEditor.value - 0.01)); }
+                        pointer := TouchArea {
+                            pointer-event(e) => { if e.button == PointerEventButton.left && e.kind == PointerEventKind.down { sv-focus.focus(); ColorEditor.hsv(ColorEditor.hue, clamp(self.mouse-x / self.width,0,1), clamp(1 - self.mouse-y / self.height,0,1)); } }
+                            moved => { if self.pressed { ColorEditor.hsv(ColorEditor.hue, clamp(self.mouse-x / self.width,0,1), clamp(1 - self.mouse-y / self.height,0,1)); } }
+                        }
+
+                        sv-focus := FocusScope {
+                            width: 0px;
+                            key-pressed(e) => {
+                                let step = e.modifiers.shift ? 0.05 : 0.01;
+                                if e.text == Key.LeftArrow { ColorEditor.hsv(ColorEditor.hue,max(0,ColorEditor.saturation - step),ColorEditor.value); return accept; }
+                                if e.text == Key.RightArrow { ColorEditor.hsv(ColorEditor.hue,min(1,ColorEditor.saturation + step),ColorEditor.value); return accept; }
+                                if e.text == Key.UpArrow { ColorEditor.hsv(ColorEditor.hue,ColorEditor.saturation,min(1,ColorEditor.value + step)); return accept; }
+                                if e.text == Key.DownArrow { ColorEditor.hsv(ColorEditor.hue,ColorEditor.saturation,max(0,ColorEditor.value - step)); return accept; }
+                                return reject;
+                            }
+                        }
+                    }
+
+                    hue := BrightnessSlider {
+                        accessible-label: Theme.tr("color.hue");
+                        value: ColorEditor.hue;
+                        maximum: 359;
+                        show-fill: false;
+                        hue-track: true;
+                        edited(v) => { ColorEditor.hsv(v,ColorEditor.saturation,ColorEditor.value); }
+                    }
+
+                    palette := Rectangle {
+                        height: 68px;
+                        private property <int> focused;
+                        for color[index] in ColorEditor.swatches: Rectangle {
+                            x: mod(index,8) * (palette.width + 6px) / 8;
+                            y: floor(index / 8) * 36px;
+                            width: (palette.width - 42px) / 8;
+                            height: 30px;
+                            background: Theme.control;
+                            border-radius: 4px;
+                            border-width: palette-focus.has-focus && index == palette.focused ? 2px : 1px;
+                            border-color: palette-focus.has-focus && index == palette.focused ? Theme.accent : Theme.line;
+                            accessible-role: button;
+                            accessible-label: Theme.tr("color.swatch") + " " + (index + 1);
+                            accessible-value: ColorEditor.swatch-labels[index];
+                            accessible-checkable: true;
+                            accessible-checked: ColorEditor.current == color;
+                            accessible-action-default => { ColorEditor.swatch(index); }
+                            Rectangle {
+                                x: 3px;
+                                y: 3px;
+                                width: parent.width - 6px;
+                                height: parent.height - 6px;
+                                border-radius: 3px;
+                                background: color;
+                            }
+
+                            TouchArea {
+                                clicked => { palette.focused = index; palette-focus.focus(); ColorEditor.swatch(index); }
+                            }
+                        }
+                        palette-focus := FocusScope {
+                            width: 0px;
+                            key-pressed(e) => {
+                                if e.text == Key.LeftArrow { palette.focused = max(0,palette.focused - 1); return accept; }
+                                if e.text == Key.RightArrow { palette.focused = min(15,palette.focused + 1); return accept; }
+                                if e.text == Key.UpArrow { palette.focused = max(0,palette.focused - 8); return accept; }
+                                if e.text == Key.DownArrow { palette.focused = min(15,palette.focused + 8); return accept; }
+                                if e.text == " " || e.text == Key.Return { ColorEditor.swatch(palette.focused); return accept; }
+                                return reject;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: "HEX";
+                            color: Theme.muted;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        hex-field := LineEdit {
+                            accessible-label: "HEX";
+                            width: Theme.field-width;
+                            text <=> ColorEditor.hex;
+                            edited(v) => { ColorEditor.hex-edited(v); }
+                            accepted(v) => { if ColorEditor.valid { ColorEditor.accept(); } }
+                        }
+                    }
+
+                    if !ColorEditor.valid: Text {
+                        text: Theme.tr("color.invalid_hex");
+                        color: Theme.error;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                cancel := ActionButton {
+                    text: Theme.tr("ui.cancel");
+                    clicked => { ColorEditor.cancel(); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                apply-button := ActionButton {
+                    text: Theme.tr("color.use");
+                    primary: true;
+                    enabled: ColorEditor.valid;
+                    clicked => { ColorEditor.accept(); }
+                }
+            }
+        }
+    }
+}

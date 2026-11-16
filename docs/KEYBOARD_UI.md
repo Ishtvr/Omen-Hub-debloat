@@ -11,7 +11,7 @@ users select the same groups with the three zone buttons.
 - **NUM pad & right** selects wire zone 0. The right hardware area also includes
   adjacent main/arrow keys. It cannot be controlled as numpad-only or per-key RGB.
 
-Choose a color with the native picker or #RRGGBB. Brightness adjusts the selected
+Choose a color in the shared in-app HSV/HEX editor, including sixteen RGB swatches and a keyboard route. Accept stages the chosen color; cancel changes nothing. Brightness adjusts the selected
 color's RGB value from 0 to 100%; it does not write an unqualified master-brightness
 byte. Changing brightness repeatedly uses the retained full-color base rather
 than compounding rounding. Mixed Rest colors retain their separate hues when

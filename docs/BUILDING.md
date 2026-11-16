@@ -100,3 +100,11 @@ Scale overrides exercise Slint layout/rendering; they are not physical Windows d
 Normal `cargo build --release --locked` does **not** enable `slint/mcp`; do not add it to Cargo.toml or distribute a developer build. Legacy `*-preview` CLI captures remain Win32 diagnostic references, not screenshots of the current Slint surface. Use the running `--ui-test` application for current UI acceptance.
 
 Use `scripts/build-release.ps1 -SkipLocalDist` to create the reviewable ZIP/Setup/staging directory without replacing a running portable build. The normal release manifest records Slint and disabled developer MCP; strict package checking requires its terms. Updating an active elevated GUI requires a graceful exit after its own operation, without terminating cooling helpers or changing startup permissions.
+
+For an optimized, owned-fixture scrolling experiment:
+
+    python scripts/benchmark-slint-scroll.py --backend winit-software
+
+It injects native wheels only into its own --ui-test child and records event-thread
+response, CPU and opt-in renderer frame counts. It never controls the live app or
+touches hardware. Event roundtrip and average FPS are not presentation latency.

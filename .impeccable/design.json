@@ -13,7 +13,10 @@
         "crates/app/ui/primitives.slint",
         "crates/app/ui/controls.slint",
         "crates/app/ui/app.slint",
-        "crates/app/ui/keyboard.slint"
+        "crates/app/ui/keyboard.slint",
+        "crates/app/ui/color-field.slint",
+        "crates/app/ui/color-picker.slint",
+        "crates/app/ui/theme-gallery.slint"
       ],
       "componentPreviewPolicy": "Runtime components are native Slint. This sidecar records source and behavior; it contains no fabricated HTML/CSS component assets.",
       "units": "Slint logical pixels. Client captures and Slint scale overrides do not establish physical Windows DPI transitions."
@@ -224,9 +227,9 @@
     "shadows": [],
     "motion": [
       {
-        "name": "action-background-feedback",
-        "value": "120ms",
-        "purpose": "ActionButton background state feedback only.",
+        "name": "immediate-action-feedback",
+        "value": "0ms",
+        "purpose": "Immediate state changes during input/scroll; no idle repaint loop.",
         "source": "crates/app/ui/primitives.slint"
       }
     ],
@@ -237,12 +240,14 @@
       "commandBar": "44 logical px high; 16 logical px side insets",
       "footer": "28 logical px high",
       "controlHeight": "{components.field.height}",
-      "valueColumn": "{components.value-field.width}",
+      "valueColumn": "276 logical px, including preset selector/name and common color fields",
       "navigation": "Three equal targets in a 300 logical px strip; Settings separate",
       "density": "20 logical px content inset; predominantly 8/12 logical px spacing",
       "compactBehavior": "Bounded scrolling with persistent mounted drafts and Undo",
       "popup": "Field width; bounded ScrollView; wrapped variable-height rows revealed from actual row geometry",
-      "chartPlot": "46 logical px left and 12 top; width minus 60 and height minus 28; paths, markers and pointer input share the plot"
+      "chartPlot": "46 logical px left and 12 top; width minus 60 and height minus 28; paths, markers and pointer input share the plot",
+      "textActionWidth": "128 logical px; compact actions 36 logical px",
+      "curveTools": "Bounded numeric/history/viewport rows; no compact horizontal widening"
     },
     "nativeComponents": [
       {
@@ -314,6 +319,21 @@
         "source": "crates/app/ui/controls.slint:BrightnessSlider",
         "description": "Accent track/thumb, focus boundary and numeric alternative for RGB-value brightness.",
         "states": "0–100 in single steps, with arrows, Home/End and semantic slider actions. No firmware master-brightness byte is invented."
+      },
+      {
+        "name": "Shared color field",
+        "source": "crates/app/ui/color-field.slint",
+        "description": "276x36 color/HEX well opening the common staged editor."
+      },
+      {
+        "name": "HSV and HEX dialog",
+        "source": "crates/app/ui/color-picker.slint",
+        "description": "Before/selection preview, SV plane, hue, sixteen swatches, valid HEX acceptance, cancel and visible keyboard focus."
+      },
+      {
+        "name": "Visual palette choices",
+        "source": "crates/app/ui/theme-gallery.slint",
+        "description": "Five equal source-backed palette previews with checked selection."
       }
     ],
     "documentationEvidence": {
@@ -326,7 +346,8 @@
         ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-reopened.png"
       ],
       "scope": "Native source and existing isolated client captures. This documentation pass performed no app or hardware action, physical DPI transition, lifecycle qualification or resource measurement.",
-      "validationOwner": "docs/VALIDATION.md"
+      "validationOwner": "docs/VALIDATION.md",
+      "colorScrollContract": "docs/plans/COLOR_SELECTION_AND_SCROLL.md"
     }
   },
   "components": [],

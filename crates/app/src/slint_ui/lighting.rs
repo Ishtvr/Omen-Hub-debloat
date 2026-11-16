@@ -351,33 +351,7 @@ impl Host {
         }
     }
     pub(super) fn pick_lighting_color(&self) {
-        if self.blocked() || self.test {
-            return;
-        }
-        let rgb = self
-            .lighting_draft
-            .borrow()
-            .as_ref()
-            .and_then(Draft::color)
-            .unwrap_or([255; 3]);
-        let mut custom = [0u32; 16];
-        let mut picker: windows_sys::Win32::UI::Controls::Dialogs::CHOOSECOLORW =
-            unsafe { std::mem::zeroed() };
-        picker.lStructSize = size_of_val(&picker) as u32;
-        picker.hwndOwner = self.visible_hwnd();
-        picker.rgbResult = crate::theme::rgb(rgb[0], rgb[1], rgb[2]);
-        picker.lpCustColors = custom.as_mut_ptr();
-        picker.Flags = windows_sys::Win32::UI::Controls::Dialogs::CC_RGBINIT
-            | windows_sys::Win32::UI::Controls::Dialogs::CC_FULLOPEN;
-        if unsafe { windows_sys::Win32::UI::Controls::Dialogs::ChooseColorW(&mut picker) } != 0 {
-            let rgb = [
-                (picker.rgbResult & 255) as u8,
-                ((picker.rgbResult >> 8) & 255) as u8,
-                ((picker.rgbResult >> 16) & 255) as u8,
-            ];
-            self.edit_lighting_color(&hex(rgb));
-            self.draw_lighting(true);
-        }
+        self.open_color_picker(3);
     }
 }
 

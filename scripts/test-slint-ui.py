@@ -92,13 +92,44 @@ def run(args):
                 time.sleep(.06)
 
             def label_click(label):
-                click(find(label, 'Button'))
+                try:
+                    element=find(label,'Button')
+                    try:
+                        view=by_id('AppWindow::curve-editor');y=element['absolutePosition'].get('y',0);top=view['absolutePosition'].get('y',0)
+                        if y<top or y+element['size']['height']>top+view['size']['height']: element=curve_to(label)
+                    except StopIteration: pass
+                except StopIteration:
+                    element=curve_to(label)
+                click(element)
 
             def key(text, event='PressAndRelease'):
                 client.tool('dispatch_key_event', {'windowHandle': window, 'text': text, 'eventType': event})
 
             def set_value(element, value):
+                ids = [p.get('id') for p in element['typeNamesAndIds']]
+                if any(p in ids for p in ['AppWindow::color-background','AppWindow::color-foreground','AppWindow::color-accent','AppWindow::lighting-color']):
+                    click(element)
+                    box = picker_hex()
+                    client.tool('set_element_value', {'elementHandle': box['handle'], 'value': value})
+                    wait_for(lambda: find(texts['color.use'], 'Button').get('accessibleEnabled'))
+                    label_click(texts['color.use'])
+                    return
                 client.tool('set_element_value', {'elementHandle': element['handle'], 'value': value})
+
+            def picker_hex():
+                wait_for(lambda: by_id('ColorPicker::panel'))
+                for _ in range(12):
+                    try:
+                        box = by_id('ColorPicker::hex-field')
+                        view = by_id('ColorPicker::body')
+                        y=box['absolutePosition'].get('y',0); top=view['absolutePosition'].get('y',0)
+                        if top <= y and y+box['size']['height'] <= top+view['size']['height']: return box
+                    except StopIteration: pass
+                    view=by_id('ColorPicker::body')
+                    client.tool('dispatch_pointer_scroll',{'windowHandle':window,'deltaY':-80,
+                        'position':{'x':view['absolutePosition'].get('x',0)+5,'y':view['absolutePosition'].get('y',0)+view['size']['height']/2}})
+                    time.sleep(.03)
+                raise AssertionError('Picker HEX field not reachable')
 
             def shot(name):
                 content = client.tool('take_screenshot', {'windowHandle': window})['content']
@@ -139,6 +170,13 @@ def run(args):
                 wait_for(lambda: by_id('AppWindow::' + id_name))
 
             def scroll_to(label, role='Button'):
+                view = by_id('AppWindow::preset-list')
+                top = view['absolutePosition'].get('y', 0)
+                bottom = top + view['size']['height']
+                for e in tree():
+                    y = e['absolutePosition'].get('y', 0)
+                    if e.get('accessibleLabel') == label and e.get('accessibleRole') == role and top <= y and y + e['size']['height'] <= bottom:
+                        return e
                 scroll(10000)
                 for _ in range(48):
                     view = by_id('AppWindow::preset-list')
@@ -154,6 +192,20 @@ def run(args):
 
             def name_field():
                 return scroll_to(texts['ui.preset_name'], 'TextInput')
+
+            def curve_to(label,role='Button'):
+                view=by_id('AppWindow::curve-editor')
+                def wheel(delta):
+                    client.tool('dispatch_pointer_scroll',{'windowHandle':window,'deltaY':delta,'position':{
+                        'x':view['absolutePosition'].get('x',0)+5,'y':view['absolutePosition'].get('y',0)+view['size']['height']/2}})
+                for direction in [0,10000]:
+                    if direction: wheel(direction)
+                    for _ in range(20):
+                        for e in tree():
+                            y=e['absolutePosition'].get('y',0);top=view['absolutePosition'].get('y',0)
+                            if e.get('accessibleLabel')==label and e.get('accessibleRole')==role and top<=y and y+e['size']['height']<=top+view['size']['height']: return e
+                        wheel(-80)
+                raise AssertionError('Curve control not reachable: '+label)
 
             def lighting_to(name):
                 def wheel(delta):
@@ -194,6 +246,8 @@ def run(args):
             assert len(handles) == 1, handles
             hwnd = handles[0]
             wait_for(lambda: name_field())
+            assert abs(name_field()['size']['width'] - 276) < .1
+            assert abs(by_id('AppWindow::preset-selector')['size']['width'] - 276) < .1
             navigate('ui.overview', 'overview')
             scroll(10000)
             wait_for(lambda: any(e.get('accessibleLabel') == 'GPU · ' + texts['ui.test_data'] for e in tree()))
@@ -210,7 +264,7 @@ def run(args):
             wait_for(lambda: name_field().get('accessibleValue') == name)
             key('\x11', 'Press'); key('y'); key('\x11', 'Release')
             wait_for(lambda: name_field().get('accessibleValue') == name + 'x')
-            click(by_id('AppWindow::new-preset'))
+            click(scroll_to(texts['preset.new']))
             wait_for(lambda: find(texts['ui.cancel'], 'Button'))
             key('\x1b')
             wait_for(lambda: name_field().get('accessibleValue') == name + 'x' and name_field().get('accessibleEnabled'))
@@ -340,12 +394,12 @@ def run(args):
             assert scroll_to(slow, 'TextInput')['accessibleValue'] == expected
             # A real preset switch must refresh reused editors, not just its name.
             name_field()
-            click(by_id('AppWindow::new-preset'))
+            click(scroll_to(texts['preset.new']))
             wait_for(lambda: name_field().get('accessibleValue', '') == '')
             assert scroll_to(slow, 'TextInput')['accessibleValue'] == '55'
             assert not find(slow, 'Checkbox').get('accessibleChecked', False)
             name_field()
-            click(by_id('AppWindow::preset-selector'))
+            click(scroll_to(texts['preset.selector_label'],'Combobox'))
             key('\uf701')
             key('\n')
             wait_for(lambda: name_field()['accessibleValue'] == name + 'x')
@@ -387,6 +441,14 @@ def run(args):
                 wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == edited)
             final_y = by_id('AppWindow::point-y')['accessibleValue']
             shot('gpu-curve')
+            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            curve_to(texts['ui.use_curve'])
+            chart=by_id('AppWindow::chart')
+            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=720+.5
+            primary=find(texts['ui.use_curve'],'Button')
+            assert primary['absolutePosition'].get('x',0)+primary['size']['width']<=720+.5
+            shot('gpu-curve-minimum')
+            assert user.SetWindowPos(hwnd,None,0,0,round(760*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
             label_click(texts['ui.back'])
             click(scroll_to(texts['ui.edit_curve']))
             wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == final_y)
@@ -398,6 +460,12 @@ def run(args):
             wait_for(lambda: by_id('AppWindow::curve-editor'))
             wait_for(lambda: any(e.get('accessibleLabel') == texts['ui.ready'] for e in tree()))
             assert_curve_pixels('fan-curve-connected')
+            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            curve_to(texts['ui.save_curve'])
+            chart=by_id('AppWindow::chart')
+            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=720+.5
+            shot('fan-curve-minimum')
+            assert user.SetWindowPos(hwnd,None,0,0,round(760*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
             label_click(texts['ui.back'])
             navigate('settings.title', 'settings')
             shot('settings-final')
@@ -438,17 +506,49 @@ def run(args):
             assert any(expected_version in e.get('accessibleLabel', '') for e in about_tree)
             client.tool('click_element', {'elementHandle': close['handle']})
             time.sleep(.1)
-            click(settings_to('palette-selector'))
-            key('\uf72b')  # End in open palette list, then Up selects Light.
-            key('\uf700'); key('\n')
+            settings_to('palette-selector')
+            label_click(texts['settings.light'])
             wait_for(lambda: by_id('AppWindow::color-background')['accessibleValue'] == '#F5F6FA')
-            time.sleep(.16)  # capture a settled palette, not a hover-color transition
             shot('appearance-light')
-            click(by_id('AppWindow::palette-selector'))
-            key('\uf729'); key('\n')  # Home: return to Slate.
+            label_click('Slate')
             wait_for(lambda: by_id('AppWindow::color-background')['accessibleValue'] == '#202127')
-            set_value(by_id('AppWindow::color-background'), '#')
-            assert not settings_to('settings-save').get('accessibleEnabled', False)
+            click(settings_to('color-background'))
+            box=picker_hex()
+            client.tool('set_element_value', {'elementHandle': box['handle'], 'value': '#'})
+            assert not find(texts['color.use'],'Button').get('accessibleEnabled',False)
+            key('\x1b')
+            assert by_id('AppWindow::color-background')['accessibleValue'] == '#202127'
+            # Cancel returns keyboard focus to the invoking color field.
+            assert user.SetWindowPos(hwnd, None, 0, 0, round(1000 * scale)+frame_w, round(720 * scale)+frame_h, 0x2 | 0x4 | 0x10)
+            key(' ')
+            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            wait_for(lambda: by_id('ColorPicker::panel'))
+            key('\t');key('\t');key('\t')
+            focused=by_id('ColorPicker::hex-field');body=by_id('ColorPicker::body')
+            assert body['absolutePosition'].get('y',0)<=focused['absolutePosition'].get('y',0)
+            assert focused['absolutePosition'].get('y',0)+focused['size']['height']<=body['absolutePosition'].get('y',0)+body['size']['height']+.5
+            shot('color-picker-minimum-focus')
+            assert user.SetWindowPos(hwnd,None,0,0,round(1000*scale)+frame_w,round(720*scale)+frame_h,0x2|0x4|0x10)
+            picker_hex()
+            shot('color-picker')
+            view = by_id('ColorPicker::body')
+            client.tool('dispatch_pointer_scroll', {'windowHandle':window,'deltaY':10000,
+                'position':{'x':view['absolutePosition'].get('x',0)+5,'y':view['absolutePosition'].get('y',0)+20}})
+            plane=by_id('ColorPicker::pointer')
+            client.tool('drag_element',{'elementHandle':plane['handle'],'target':{
+                'x':plane['absolutePosition'].get('x',0)+plane['size']['width']*.75,
+                'y':plane['absolutePosition'].get('y',0)+plane['size']['height']*.25}})
+            before_hue=picker_hex()['accessibleValue']
+            assert len(before_hue)==7 and before_hue!='#202127'
+            hue=by_id('ColorPicker::hue')
+            click(hue);key('\uf729')
+            assert picker_hex()['accessibleValue']!=before_hue
+            label_click(texts['color.swatch']+' 1')
+            assert picker_hex()['accessibleValue']=='#FFFFFF'
+            for _ in range(6): key('\t')
+            assert not find('Slate','Button').get('accessibleEnabled',False)
+            key('\x1b')
+            assert user.SetWindowPos(hwnd, None, 0, 0, round(760 * scale)+frame_w, round(540 * scale)+frame_h, 0x2 | 0x4 | 0x10)
             set_value(settings_to('color-background'), '#16191E')
             set_value(settings_to('color-accent'), '#91A2FF')
             shot('appearance-custom')
@@ -492,7 +592,7 @@ def run(args):
             assert not (fixture_dir / 'startup.json').exists()
             navigate('ui.overview', 'overview')
             name_field()
-            click(by_id('AppWindow::preset-selector'))
+            click(scroll_to(texts['preset.selector_label'],'Combobox'))
 
             def visible_option():
                 for menu_window in unpack(client.tool('list_windows', {}))['windowHandles']:
@@ -522,7 +622,7 @@ def run(args):
             key('\uf700'); key('\uf701'); wait_for(visible_option)
             key('\n')
             wait_for(lambda: name_field()['accessibleValue'] == late_name)
-            click(by_id('AppWindow::preset-selector'))  # Opening a late selection also reveals it.
+            click(scroll_to(texts['preset.selector_label'],'Combobox'))  # Opening a late selection also reveals it.
             _, option, _ = wait_for(visible_option)
             assert option['accessibleLabel'] == late_name
             shot('long-dropdown-reopened')
@@ -535,6 +635,7 @@ def run(args):
                 'aboutLanguageAndVersion': True, 'settingsDraftSaveAndSeparateStartup': True,
                 'diagonalCurvePixels': True, 'customAppearanceAndProcessRestart': True,
                 'lightingZoneMappingBrightnessResetAndDraftApply': True,
+                'sharedColorPickerHexCancelFocusAndPalette': True, 'uniformFormFieldWidth':276,
                 'wrappedDropdownOpeningKeysAndWheel': True,
                 'scope': 'Isolated UI fixture, no hardware qualification'}, indent=2), encoding='utf-8')
             print(str(output))

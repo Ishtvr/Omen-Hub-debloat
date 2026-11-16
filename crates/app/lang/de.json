@@ -680,5 +680,12 @@
   "lighting.zones_note": "Schematische Zonenansicht. „Rest“ verbindet links und Mitte. Der rechte Hardwarebereich umfasst das NUM-Pad und angrenzende Tasten; diese sind gemeinsam steuerbar.",
   "lighting.draft_note": "Farbe und Helligkeit sind eine Vorschau, bis du „Anwenden“ wählst.",
   "lighting.last_read": "Zuletzt zurückgelesen: {0}",
-  "ui.test_long_preset": "Test {0}: Leises Alltags-Preset mit GPU-Undervolting und effizientem CPU-Boost"
+  "ui.test_long_preset": "Test {0}: Leises Alltags-Preset mit GPU-Undervolting und effizientem CPU-Boost",
+  "color.before": "Vorher",
+  "color.selection": "Auswahl",
+  "color.saturation_value": "Sättigung und Helligkeit",
+  "color.hue": "Farbton",
+  "color.swatch": "Farbe",
+  "color.invalid_hex": "Bitte eine vollständige Farbe als #RRGGBB eingeben.",
+  "color.use": "Farbe übernehmen"
 }

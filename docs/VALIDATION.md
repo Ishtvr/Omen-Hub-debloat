@@ -1,8 +1,32 @@
 # Validation
 
-Current software summary updated **16 November 2026**, version **0.10.0-beta.2**, Windows x64 / Rust 1.99.0. Source: preserved Slint baseline f3b4b09 plus the appearance/curve/lighting correction, identified by the release tag and packaged build-info.json. Older measurements below remain historical. No new hardware write or HP-independent lifecycle qualification is implied.
+Current software summary updated **16 November 2026**, version **0.10.0-beta.3**, Windows x64 / Rust 1.99.0. Source: preserved 61955f2 baseline plus the shared color editor, uniform fields and software pacing correction, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Color selection and scroll pacing — 16 November 2026
+
+Normal executable: **15,376,896 bytes**, SHA-256 **90EB9AA24C06C97BB8F2279DAE45228F17E9F3B6BD7B33659338214071C19712**. Slint 1.18.1, software default; developer MCP absent. [Release notes](releases/0.10.0-beta.3.md), [extension/quality bar](plans/COLOR_SELECTION_AND_SCROLL.md).
+
+- Format check, **314 unit tests** (160 core / 67 app / 87 platform), **14 Guardian process/file scenarios**, Clippy all targets with warnings denied and normal locked release build passed. One manual timing test remains ignored.
+- Full actual UI interaction passed DE/software/1.25, EN/software/1, DE/FemtoVG/1.5 and EN/FemtoVG/2. Each exercised 100 alternating wheels, repeated resize/minimize/tray restore, native text/curve Undo, exact units, dropdowns, lighting drafts and settings restart.
+- Shared HSV plane, hue, swatches and HEX were driven with pointer/keyboard. Cancel/focus return, incomplete HEX, draft acceptance and persistence passed. At 720 × 500, Tab reveals the focused HEX editor above persistent actions. Curves and their primary actions stay within the compact horizontal viewport after toolbar reflow.
+- The independent review's compact-curve, picker-focus and fractional-timer findings were resolved by source inspection and all four recapture sets. Field widths are 276 logical px, ordinary text actions 128 px, compact actions 36 px; paired contextual numeric editors remain matched. Catalogs have **689 matching keys**.
+
+### Optimized native wheel experiment
+
+The owned --ui-test process received 300 native wheel events over five seconds at each physical size, scale1.25. No sensor/controller was activated. Slint console metrics count frames rendered; WM_NULL roundtrips measure event-thread response, **not presentation latency**. These short samples do not establish perceived smoothness for every workload.
+
+| Physical client | Beta.2 CPU / event P95 | Corrected CPU / event P95 |
+| --- | --- | --- |
+| 1280 × 800 | 1875 ms / 2.054 ms | 2109.375 ms / 1.290 ms |
+| 1920 × 1080 | 2500 ms / 2.962 ms | 2703.125 ms / 1.243 ms |
+
+Beta.2 software rendering counted about 160–162 frames/s on the 144 Hz monitor. Corrected steady samples count **144 frames/s**. Source inspection found whole-ms period truncation in pinned Slint's Windows throttle; the local gate preserves fractional phase. A rejected trial used fractional Slint timer wakes, which its internal millisecond Instant truncates; final wakes round upward and cannot become zero-ms. Foreground CPU remains above the older UI baseline, so **no lower-CPU claim** is made. GPU pacing is unchanged. The gate schedules only pending visible work, stops on hide and creates no idle repaint loop.
+
+One warm normal UI fixture responded in **59 ms**; tray working set **33,316,864 bytes**, private **12,066,816**, CPU **0 ms** over **3026 ms**. No explicit test-port MCP listener appeared. This fixture excludes activated helpers and is not a cold/elevated startup or total hardware-idle acceptance.
+
+The shared chooser changes only local drafts. Keyboard Apply, exact device bindings, opaque RGB/mode originals, recovery and startup approval remain unchanged. No firmware master-brightness byte, physical LED-boundary measurement, sustained 85 °C enforcement or HP-independent lifecycle qualification was added.
 
 ## Native UI correction — 16 November 2026
 

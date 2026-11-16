@@ -11,7 +11,10 @@ export component ActionButton inherits Rectangle {
     accessible-label: root.text;
     accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
-    min-width: max(32px, label.preferred-width + 24px);
+    in property <length> control-width: root.text == "+" || root.text == "−" || root.text == "i" ? Theme.control-height : Theme.action-width;
+    min-width: root.control-width;
+    preferred-width: root.control-width;
+    max-width: root.control-width;
     min-height: Theme.control-height;
     max-height: Theme.control-height;
     vertical-stretch: 0;
@@ -21,13 +24,13 @@ export component ActionButton inherits Rectangle {
     background: !root.enabled ? Theme.surface : root.primary ? Theme.accent : area.pressed || area.has-hover ? Theme.hover : Theme.control;
     border-width: 1px;
     border-color: root.enabled && (area.pressed || focus.has-focus) ? root.primary ? Theme.on-accent : Theme.accent : transparent;
-    animate background { duration: 120ms; }
     label := Text {
         text: root.text;
         color: !root.enabled ? Theme.quiet : root.primary ? Theme.on-accent : Theme.ink;
         font-size: 13px;
         horizontal-alignment: center;
         vertical-alignment: center;
+        wrap: word-wrap;
         accessible-role: none;
     }
 
@@ -62,7 +65,7 @@ export component SegmentedTabs inherits Rectangle {
         enabled: root.enabled;
         x: index * root.width / max(1, root.labels.length);
         width: root.width / max(1, root.labels.length);
-        min-width: 0px;
+        control-width: root.width / max(1, root.labels.length);
         text: title;
         background: index == root.selected ? Theme.hover : transparent;
         accessible-item-selectable: true;

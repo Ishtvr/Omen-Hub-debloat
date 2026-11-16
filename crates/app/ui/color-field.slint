@@ -1,0 +1,62 @@
+import { Theme } from "theme.slint";
+export component ColorField inherits Rectangle {
+    in property <string> value;
+    in property <string> text;
+    in property <color> swatch-color;
+    in property <bool> mixed;
+    in property <bool> enabled: true;
+    callback clicked();
+    forward-focus: focus;
+    height: Theme.control-height;
+    width: Theme.field-width;
+    horizontal-stretch: 0;
+    background: area.has-hover && root.enabled ? Theme.hover : Theme.control;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: focus.has-focus ? Theme.accent : Theme.line;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    Rectangle {
+        x: 10px;
+        y: 8px;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        background: root.swatch-color;
+        border-width: 1px;
+        border-color: Theme.muted;
+    }
+
+    Text {
+        x: 42px;
+        width: parent.width - 82px;
+        text: root.mixed ? Theme.tr("lighting.mixed") : root.value;
+        color: root.enabled ? Theme.ink : Theme.quiet;
+        vertical-alignment: center;
+        font-family: root.mixed ? "Segoe UI" : "Consolas";
+        accessible-role: none;
+    }
+
+    Image {
+        x: parent.width - 30px;
+        y: 9px;
+        width: 18px;
+        height: 18px;
+        source: @image-url("icons/palette.svg");
+        colorize: root.enabled ? Theme.muted : Theme.quiet;
+    }
+
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(e) => { if e.text == " " || e.text == Key.Return { root.clicked(); return accept; } return reject; }
+    }
+}

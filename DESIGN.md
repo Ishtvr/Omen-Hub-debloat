@@ -235,14 +235,14 @@ Compact work areas scroll within their bounds instead of increasing the window's
 minimum to fit every expanded section.
 
 The command bar is 44 px high with 16 px side insets, an original geometric mark and
-quiet privilege state. Overview, Cooling and Lighting occupy three equal targets
+device privilege details in the expandable device area. Overview, Cooling and Lighting occupy three equal targets
 within the navigation strip; Settings remains a separate action. The footer is
 28 px high, with bounded selectable details for long diagnostics.
 
 Content panels use the shared 20 px inset and mainly 8/12 px spacing. Ordinary
 inputs, selectors and buttons share 36 px height and six-pixel corners. Preset fields
-and settings use one 276 px value column; preset selector/name use aligned flexible
-columns. Per-core fields, chart controls and keyboard keys retain their
+and settings, including preset selector/name, use one fixed 276 px value column.
+Ordinary text actions share 128 px; compact actions use 36 px. Per-core fields, chart controls and keyboard keys retain their
 purpose-specific widths.
 
 **The One Work Area Rule.** Keep Overview's instruments and preset editor in one
@@ -259,10 +259,12 @@ without drop shadows, glass or decorative gradients. Section surfaces and popups
 remain flat. Confirmation uses the scrim and a bordered surface rather than a
 shadow vocabulary.
 
-Action-button background feedback lasts 120 ms. There is no decorative motion or
-continuous render loop. Wait for brief feedback to settle when inspecting a static
-state. Rendering remains event-driven and dashboard polling pauses when hidden or
-minimized.
+Action state feedback is immediate, avoiding animation churn during scrolling.
+Software redraws follow the monitor's fractional refresh period. Pending redraws
+coalesce; timer wakes round upward to whole milliseconds to avoid a zero-delay
+loop in Slint 1.18. The display phase survives rounding, late frames do not create
+catch-up bursts, and there is no idle repaint timer. Rendering remains event-driven
+and dashboard polling pauses when hidden or minimized.
 
 **The State Before Color Rule.** Name busy, error, draft, saved, unavailable and
 confirmed states in text. Color reinforces the wording.
@@ -330,7 +332,12 @@ and right selects zone 0, including adjacent keys. Clicking a key selects its gr
 the three group buttons provide the keyboard route. The diagram does not claim
 per-key RGB or measured physical LED boundaries.
 
-The native picker/hex field, On/Off and brightness edit a draft. Brightness adjusts
+The shared color field opens the same in-app HSV/HEX dialog used by appearance.
+Hue, saturation/value, sixteen RGB swatches and exact HEX have pointer and keyboard
+routes. Before/selection previews distinguish changes; invalid HEX cannot accept.
+Tab skips disabled controls and reveals its target in the clipped body, including
+at minimum height. Escape/Cancel restore the invoking field's focus without edits.
+Color acceptance, On/Off and the compound brightness field edit a draft. Brightness adjusts
 RGB color value from the retained full-color base, never an unqualified firmware
 master-brightness byte. A mixed Rest group can keep its separate hues during a
 brightness edit. Canceling the picker changes nothing.
@@ -342,6 +349,10 @@ return and joins preset, curve and settings exit protection. The
 [keyboard guide](docs/KEYBOARD_UI.md) owns the detailed mapping and limits.
 
 ### Settings, About and status
+
+Five equally sized theme tiles preview actual canvas/text/accent combinations.
+Three common color fields open the staged editor; appearance acceptance previews
+through the existing format/contrast guard, and Save persists it.
 
 Settings groups appearance, language, app autostart, tray/close behavior, battery
 choice and hold. App startup differs from a preset's sign-in permission. The existing
@@ -395,3 +406,5 @@ confirmed state; selectable details expose long diagnostics.
 - **Don't** claim new hardware support, independent HP-controller ownership,
   sustained 85 °C enforcement, physical DPI transitions or complete accessibility
   coverage from these visual corrections. These require their own evidence.
+
+Current extension and quality bar: [Color selection and scrolling](docs/plans/COLOR_SELECTION_AND_SCROLL.md). Curve numeric, history and viewport controls use bounded rows; chart and primary action stay inside the compact horizontal viewport.

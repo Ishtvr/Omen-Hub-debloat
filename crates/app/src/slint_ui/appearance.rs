@@ -34,6 +34,7 @@ impl Host {
         }
         *self.appearance_draft.borrow_mut() = value;
         self.preview_appearance();
+        self.sync_color_fields();
     }
     pub(super) fn preview_appearance(&self) {
         let Some(w) = self.window.upgrade() else {
@@ -113,5 +114,6 @@ impl Host {
             },
         };
         self.preview_appearance();
+        self.sync_color_fields();
     }
 }

@@ -4,6 +4,11 @@ import { Theme } from "theme.slint";
 
 export component BrightnessSlider inherits Rectangle {
     in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <bool> show-fill: true;
+    in property <bool> hue-track;
+    out property <bool> has-focus: focus.has-focus;
     in property <bool> enabled: true;
     callback edited(float);
     forward-focus: focus;
@@ -13,14 +18,15 @@ export component BrightnessSlider inherits Rectangle {
     accessible-role: slider;
     accessible-enabled: root.enabled;
     accessible-value: root.value;
-    accessible-value-minimum: 0;
-    accessible-value-maximum: 100;
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
     accessible-value-step: 1;
     accessible-action-set-value(v) => { if v.is-float() { root.change(v.to-float()); } }
     accessible-action-increment => { root.change(root.value + 1); }
     accessible-action-decrement => { root.change(root.value - 1); }
     // The host owns value; local assignment would detach its binding.
-    function change(v: float) { if root.enabled { root.edited(round(clamp(v, 0, 100))); } }
+    function change(v: float) { if root.enabled { root.edited(round(clamp(v, root.minimum, root.maximum))); } }
+    private property <float> fraction: clamp((root.value - root.minimum) / max(1, root.maximum - root.minimum), 0, 1);
     Rectangle {
         x: 8px;
         y: (parent.height - 3px) / 2;
@@ -28,18 +34,30 @@ export component BrightnessSlider inherits Rectangle {
         height: 3px;
         border-radius: 2px;
         background: Theme.line;
+        visible: !root.hue-track;
+    }
+
+    for segment in 6: Rectangle {
+        private property <[color]> colors: [#FF0000, #FFFF00, #00FF00, #00FFFF, #0000FF, #FF00FF, #FF0000];
+        visible: root.hue-track;
+        x: 8px + segment * (parent.width - 16px) / 6;
+        y: (parent.height - 6px) / 2;
+        width: (parent.width - 16px) / 6 + 1px;
+        height: 6px;
+        background: @linear-gradient(90deg, self.colors[segment] 0%, self.colors[segment + 1] 100%);
     }
 
     Rectangle {
         x: 8px;
         y: (parent.height - 3px) / 2;
-        width: (parent.width - 16px) * clamp(root.value / 100, 0, 1);
+        width: (parent.width - 16px) * root.fraction;
         height: 3px;
         background: Theme.accent;
+        visible: root.show-fill;
     }
 
     Rectangle {
-        x: (parent.width - 16px) * clamp(root.value / 100, 0, 1);
+        x: (parent.width - 16px) * root.fraction;
         y: (parent.height - 16px) / 2;
         width: 16px;
         height: 16px;
@@ -51,8 +69,8 @@ export component BrightnessSlider inherits Rectangle {
 
     area := TouchArea {
         enabled: root.enabled;
-        pointer-event(e) => { if e.button == PointerEventButton.left && e.kind == PointerEventKind.down { focus.focus(); root.change((self.mouse-x - 8px) / max(1px, self.width - 16px) * 100); } }
-        moved => { if self.pressed { root.change((self.mouse-x - 8px) / max(1px, self.width - 16px) * 100); } }
+        pointer-event(e) => { if e.button == PointerEventButton.left && e.kind == PointerEventKind.down { focus.focus(); root.change(root.minimum + (self.mouse-x - 8px) / max(1px, self.width - 16px) * (root.maximum - root.minimum)); } }
+        moved => { if self.pressed { root.change(root.minimum + (self.mouse-x - 8px) / max(1px, self.width - 16px) * (root.maximum - root.minimum)); } }
     }
 
     focus := FocusScope {
@@ -61,8 +79,8 @@ export component BrightnessSlider inherits Rectangle {
         key-pressed(e) => {
             if e.text == Key.LeftArrow || e.text == Key.DownArrow { root.change(root.value - 1); return accept; }
             if e.text == Key.RightArrow || e.text == Key.UpArrow { root.change(root.value + 1); return accept; }
-            if e.text == Key.Home { root.change(0); return accept; }
-            if e.text == Key.End { root.change(100); return accept; }
+            if e.text == Key.Home { root.change(root.minimum); return accept; }
+            if e.text == Key.End { root.change(root.maximum); return accept; }
             return reject;
         }
     }
@@ -74,6 +92,7 @@ export component LineEdit inherits Rectangle {
     in property <bool> enabled: true;
     out property <bool> has-focus: input.has-focus;
     callback edited(string);
+    callback accepted(string);
     forward-focus: input;
     accessible-role: text-input;
     accessible-enabled: root.enabled;
@@ -83,6 +102,7 @@ export component LineEdit inherits Rectangle {
     accessible-action-set-selection-offsets(a, f) => { input.set-selection-offsets(a, f); }
     min-width: 60px;
     preferred-width: Theme.field-width;
+    max-width: Theme.field-width;
     height: Theme.control-height;
     vertical-stretch: 0;
     horizontal-stretch: 1;
@@ -154,6 +174,7 @@ export component LineEdit inherits Rectangle {
             vertical-alignment: center;
             accessible-role: none;
             edited => { root.edited(self.text); }
+            accepted => { root.accepted(self.text); }
             cursor-position-changed(p) => {
                 if p.x + self.offset < 0px { self.offset = -p.x; }
                 else if p.x + self.offset > parent.width - self.text-cursor-width {
@@ -247,7 +268,8 @@ export component ComboBox inherits Rectangle {
     accessible-action-expand => { root.open(); }
     min-width: 80px;
     preferred-width: Theme.field-width;
-    horizontal-stretch: 1;
+    max-width: Theme.field-width;
+    horizontal-stretch: 0;
     vertical-stretch: 0;
     height: Theme.control-height;
     background: !root.enabled ? Theme.surface : touch.has-hover ? Theme.hover : Theme.control;

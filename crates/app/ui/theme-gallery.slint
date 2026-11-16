@@ -1,0 +1,72 @@
+import { Theme } from "theme.slint";
+export struct PaletteChoice { name: string, canvas: color, ink: color, accent: color }
+export component ThemeGallery inherits Rectangle {
+    in property <[PaletteChoice]> choices;
+    in property <int> selected;
+    in property <bool> enabled: true;
+    callback changed(int);
+    height: 74px;
+    for choice[index] in root.choices: tile := Rectangle {
+        x: index * (root.width + 8px) / max(1,root.choices.length);
+        width: (root.width - (root.choices.length - 1) * 8px) / max(1,root.choices.length);
+        height: parent.height;
+        border-radius: 6px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: index == root.selected || focus.has-focus ? Theme.accent : Theme.line;
+        accessible-role: button;
+        accessible-label: choice.name;
+        accessible-enabled: root.enabled;
+        accessible-checkable: true;
+        accessible-checked: index == root.selected;
+        accessible-action-default => { if root.enabled { root.changed(index); } }
+        forward-focus: focus;
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: parent.width - 12px;
+            height: 36px;
+            border-radius: 4px;
+            background: choice.canvas;
+            Text {
+                x: 8px;
+                text: "Aa";
+                font-size: 16px;
+                color: choice.ink;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+
+            Rectangle {
+                x: parent.width - 32px;
+                y: 12px;
+                width: 22px;
+                height: 12px;
+                border-radius: 3px;
+                background: choice.accent;
+            }
+        }
+
+        Text {
+            y: 44px;
+            height: 26px;
+            text: choice.name;
+            color: root.enabled ? Theme.ink : Theme.quiet;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            font-size: 12px;
+            accessible-role: none;
+        }
+
+        TouchArea {
+            enabled: root.enabled;
+            clicked => { focus.focus(); root.changed(index); }
+        }
+
+        focus := FocusScope {
+            width: 0px;
+            enabled: root.enabled;
+            key-pressed(e) => { if e.text == " " || e.text == Key.Return { root.changed(index); return accept; } return reject; }
+        }
+    }
+}

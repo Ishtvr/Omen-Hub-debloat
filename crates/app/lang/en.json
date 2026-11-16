@@ -680,5 +680,12 @@
   "lighting.zones_note": "Schematic zone view. “Rest” links left and middle. The right hardware zone includes the NUM pad and adjacent keys; they are controlled together.",
   "lighting.draft_note": "Color and brightness are a preview until you choose “Apply”.",
   "lighting.last_read": "Last read back: {0}",
-  "ui.test_long_preset": "Test {0}: Quiet everyday preset with GPU undervolting and efficient CPU Boost"
+  "ui.test_long_preset": "Test {0}: Quiet everyday preset with GPU undervolting and efficient CPU Boost",
+  "color.before": "Before",
+  "color.selection": "Selection",
+  "color.saturation_value": "Saturation and brightness",
+  "color.hue": "Hue",
+  "color.swatch": "Color",
+  "color.invalid_hex": "Enter a complete color as #RRGGBB.",
+  "color.use": "Use color"
 }
