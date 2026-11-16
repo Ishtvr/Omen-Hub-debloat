@@ -32,6 +32,14 @@ Private NVIDIA write contracts were measured with drivers **617.14** and **617.4
 
 ## Sign-in permission versus measured lifecycle
 
+The 16 November beta.4 manual Apply path serializes newer user intent and restores
+an existing pending checkpoint before the replacement. A failed restore retains
+the journal and blocks the new target. Waiting superseded targets are dropped;
+an active hardware call is never killed. This is software orchestration evidence,
+not new device write/lifecycle qualification. Background and sign-in commands
+retain their separate permissions. HP shortcut modes still have the limitations
+listed above even though they are visible again on Overview.
+
 The current controller **permits** sign-in authorization for supported lighting and Max-Fan settings, following the user's request. Older `startup_safe = false` descriptions are obsolete. This code permission does not establish successful real reboot, resume, hotkey or independent HP-controller operation.
 
 New CPU PPT/Slow sign-in approvals require HPOmenCap to be absent until startup handover is qualified. A temporary stop is insufficient. The public GPU power adapter is offered only with a readable configured original, valid live bounds and setter presence; those conditions currently fail on the reference laptop.
@@ -42,4 +50,4 @@ Full replacement of HP user-mode controllers, durable own ownership, safe BIOS c
 
 Direct GPU/VRAM mV controls, FPS limiter, fixed CPU clocks/voltages and the removed APU menus are intentionally absent. The current catalog contains 81 keys; it is not a count of working controls. Intel tuning was removed on 29 October at the user's request. Ten old Intel keys remain readable only through an isolated compatibility type, are absent from the UI/catalog, and block Apply until an explicit Save removes them.
 
-The tray working-set target is **50 MB total across all own resident helpers after sensor activation**. Open-window memory may exceed it. Previous short measurements do not qualify the current/future full helper stack. See [Validation](VALIDATION.md).
+Since the approved Slint rewrite on 15 November, the goal is **low background memory and CPU use across all own resident helpers after sensor activation**. The former 50 MB tray target is retained as history, not a fixed ceiling. Open-window resources may be higher for responsive interaction. Short samples do not qualify the full lifecycle; see [Validation](VALIDATION.md).

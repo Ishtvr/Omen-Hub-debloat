@@ -9,7 +9,7 @@ The normal workspaces have moved to Rust/Slint on the 0.10.0-beta.1 branch. Soft
 
 ## 1. Close recovery and status gaps
 
-- [ ] Check all pending hardware/ownership journals before dashboard HP-mode or MUX writes.
+- [ ] Complete pending ownership-journal checks for MUX and other shortcuts. Manual HP-mode replacement now verifies pending profile recovery first; its complete original/readback contract remains below.
 - [ ] Persist the MUX shortcut's original and intent before SET; add abort/error-after-effect fixtures.
 - [ ] Establish the full HP-mode original/readback contract. Keep Balanced fallback distinct from actual original restoration.
 - [ ] Separate CPU protocol ranges, model evidence and stability-tested settings; document the source of each bound. Current PPT/Slow 160 W, CO −50…+30 and PBO 10× exceed the measured trial envelope.
@@ -53,7 +53,7 @@ Current scope is investigation/planning. TPM and Secure Boot remain enabled; no 
 
 - [ ] Qualify other boards, BIOS/SMU versions and NVIDIA implementations separately.
 - [ ] Measure physical undervolting effect and longer CPU/GPU/fan stability under controlled load.
-- [ ] Measure total resident tray memory/CPU after sensor activation, including owner/guardian/fan helpers; target 50 MB. Do not transfer the earlier 48.76-MB sample to new builds.
+- [ ] Measure sustained total resident tray memory/CPU after sensor activation, including owner/guardian/fan helpers; low background use supersedes the old fixed 50 MB ceiling. Do not transfer earlier short samples to new builds or a full lifecycle.
 - [ ] Review multiple DPI/display configurations, keyboard navigation, high contrast and accessibility.
 - [ ] Update installed app, helper and protected sign-in approval to one qualified build; validate the package, licenses, corresponding sources and recovery before publishing a scoped beta.
 

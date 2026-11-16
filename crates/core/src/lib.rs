@@ -18,6 +18,7 @@ pub mod hold;
 pub mod hp;
 pub mod hp_mode;
 pub mod keyboard;
+pub mod latest_request;
 pub mod lighting_editor;
 pub mod message;
 pub mod ownership;

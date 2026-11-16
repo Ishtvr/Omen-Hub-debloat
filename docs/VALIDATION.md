@@ -1,8 +1,41 @@
 # Validation
 
-Current software summary updated **16 November 2026**, version **0.10.0-beta.3**, Windows x64 / Rust 1.99.0. Source: preserved 61955f2 baseline plus the shared color editor, uniform fields and software pacing correction, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **16 November 2026**, version **0.10.0-beta.4**, Windows x64 / Rust 1.99.0. Source: preserved fbcac55 color/scroll checkpoint plus the window, notification and manual Apply refinement, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Window lifecycle and manual Apply — 16 November 2026
+
+Normal executable: **15,529,984 bytes**, SHA-256 **08B51F4584128E964E84710F27EEA25FCA56F71646494B278A1CE244864AFDEC**. Slint 1.18.1; software default; normal release omits developer MCP. [Release notes](releases/0.10.0-beta.4.md), [direction and acceptance](plans/WINDOW_AND_APPLY_REFINEMENT.md).
+
+- Format check, **319 unit tests** (162 core / 70 app / 87 platform), **14 Guardian process/file scenarios**, all-target Clippy with warnings denied and locked normal release build passed. One manual timing test remains ignored. DE/EN catalogs have **705 matching keys**.
+- Blocked-executor regressions run the actual serialized worker loop: old success and old failure both give way to the latest intent; intermediate targets never execute and obsolete results are not recorded as current. Queued Apply cannot start during an ordinary save/recovery operation.
+- Mode-result regression keeps qualified Slow/PL1 readback separate from unqualified PM observations, preserving optional CPU-reader errors. The new notification describes a requested HP mode and its incomplete thermal-mode readback rather than claiming full confirmation.
+- Focused DE/EN UI regressions simulate a pending recovery warning. Successful Save retains and follows the destination; invalid-name Save retains the draft/selection and clears that switch intent before retry. They do not open or modify a live recovery journal.
+- The final complete matrix passed DE/software/1.25, EN/software/1, DE/FemtoVG/1.5 and EN/FemtoVG/2. Each exercised 100 alternating wheel events, 15 resizes, four minimize restores, three tray restores, exact units, native text/curve Undo, dropdowns, lighting drafts and settings process restart. Permanent client samples per transition ranged from 116 to 541 across sizes. The independent verdict scored all five listed fixes resolved at this UI scope; canonical design documentation also passed its source/token/JSON checks.
+- Actual client-pixel comparisons occur after caption/native minimize and tray return, **before** further MCP screenshots. Slint 1.18.1 snapshots reset partial-render caches themselves and could mask discarded Windows buffers. The harness compares unobscured owned client canvas/surface samples, excluding legitimate control hover changes; this is sampled presentation evidence, not an all-pixel or frame-latency benchmark.
+- Keyboard tests reach the read-only message by Tab, select it with Ctrl+A (before/after pixel assertion), cycle with Tab/Shift+Tab, close and reopen from returned Details focus, and Escape. System clipboard copying was not exercised because its owner-defined formats could not be safely preserved; the standard TextEdit copy implementation remains unchanged.
+
+The new minimum is **820 × 500** logical px with a 40 px custom caption and 160 px sidebar. Native resize/maximize/minimize and the existing close/tray policy remain; bottom action bars are preserved. Physical multi-monitor DPI transitions and pointer-driven native OS dragging are not established by programmatic resize/double-click tests.
+
+The software restore refresh is deferred once on return and drops its temporary snapshot immediately. It neither reconstructs the window/models nor adds an idle repaint loop. Manual latest-intent replacement waits for a running hardware call's safe completion; recovery failure preserves the journal and prevents the replacement target. Background/sign-in commands do not gain recovery authorization, and replacement recovery does not disable startup approval.
+
+No live power/voltage/lighting SET, vendor-service change, kernel installation or new device/lifecycle qualification was performed for this refinement. Standard HP modes retain their partial recovery/readback limitations; sustained 85 °C enforcement and HP-independent cooling ownership remain separate device acceptance.
+
+### Current normal-release resource samples
+
+A warm owned UI fixture responded in **81 ms**. Open and tray working set were
+**33,665,024 bytes**, private **12,533,760 bytes**; tray CPU did not advance over
+**3031 ms**. No MCP listener appeared at the explicit test port. This excludes
+activated sensors/helpers and is not a cold/UAC startup or total live-idle result.
+
+The optimized owned wheel experiment repeated 300 native wheel events in five
+seconds at each physical client size. CPU was **2890.625 ms** at 1280 × 800 and
+**3156.25 ms** at 1920 × 1080; event-thread P95 **1.875 / 4.709 ms**. Steady render
+counters were **144 FPS**. The UI/layout and system load differ from the earlier
+samples below; foreground CPU is higher, so this does **not** establish a CPU
+efficiency improvement. WM_NULL response and render counters are not direct
+presentation latency. The idle gate still creates no periodic repaint loop.
 
 ## Color selection and scroll pacing — 16 November 2026
 

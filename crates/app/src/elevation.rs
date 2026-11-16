@@ -14,9 +14,11 @@ use windows_sys::Win32::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Apply,
+    Replace,
     Restore,
     Startup,
     Mode(omen_core::hp_mode::HpMode),
+    ReplaceMode(omen_core::hp_mode::HpMode),
     FanService,
     Graphics(omen_core::quick_switch::GraphicsMode),
     /// `true` stops and disables HPOmenCap, `false` restores it.
@@ -25,10 +27,10 @@ pub enum Action {
 impl Action {
     fn name(self) -> &'static str {
         match self {
-            Self::Apply => "apply",
+            Self::Apply | Self::Replace => "apply",
             Self::Restore => "restore",
             Self::Startup => "startup",
-            Self::Mode(_) => "mode",
+            Self::Mode(_) | Self::ReplaceMode(_) => "mode",
             Self::FanService => "fan",
             Self::Graphics(_) => "mux",
             Self::HpService(_) => "hp_service",
@@ -38,7 +40,20 @@ impl Action {
 pub fn run(
     id: Option<&str>,
     action: Action,
+    stopped: impl FnMut() -> bool,
+) -> Result<serde_json::Value, String> {
+    run_inner(id, action, stopped, false)
+}
+/// Serialized replacement waits for the older command's real process exit.
+/// A timeout never authorizes a second hardware writer beside it.
+pub fn run_serial(id: Option<&str>, action: Action) -> Result<serde_json::Value, String> {
+    run_inner(id, action, || false, true)
+}
+fn run_inner(
+    id: Option<&str>,
+    action: Action,
     mut stopped: impl FnMut() -> bool,
+    wait_finished: bool,
 ) -> Result<serde_json::Value, String> {
     if let Some(id) = id {
         omen_core::profiles::validate_id(id)?;
@@ -58,6 +73,11 @@ pub fn run(
             id.ok_or(t("elevation.save_first"))?
         ),
         Action::Mode(mode) => format!("mode-ui-apply {} {nonce}", mode.name()),
+        Action::ReplaceMode(mode) => format!("mode-ui-replace {} {nonce}", mode.name()),
+        Action::Replace => format!(
+            "profile-ui-replace {} {nonce}",
+            id.ok_or(t("elevation.save_first"))?
+        ),
         Action::FanService => format!("fan-service-install {nonce}"),
         Action::Graphics(mode) => format!("mux-ui-apply {} {nonce}", mode.key()),
         Action::HpService(disable) => format!(
@@ -101,7 +121,7 @@ pub fn run(
             if stopped() {
                 return Err(t("elevation.window_closed").into());
             }
-            if Instant::now() >= deadline {
+            if Instant::now() >= deadline && !wait_finished {
                 return Err(t("elevation.still_running").into());
             }
         }
@@ -174,4 +194,46 @@ pub fn applied_status(record: &serde_json::Value) -> String {
         status.push_str(t("preset.applied_unconfirmed"));
     }
     status
+}
+
+/// A mode SET is not a thermal-mode GET. Keep verified CPU PL1 separate from
+/// unqualified PM observations, and retain optional read errors in the message.
+pub fn mode_written_status(mode: omen_core::hp_mode::HpMode, record: &serde_json::Value) -> String {
+    let mut text = tf("mode.written", &[&t(&format!("mode.{}", mode.name()))]);
+    let report = &record["result"]["Ok"];
+    if let Some(watts) = report["cpu_pl1_w"].as_i64() {
+        text.push(' ');
+        text.push_str(&tf("mode.cpu_readback", &[&watts]));
+    }
+    if let Some(error) = report["cpu_limits_read_error"].as_str() {
+        text.push(' ');
+        text.push_str(&tf(
+            "mode.cpu_unavailable",
+            &[&crate::i18n::error_message(error)],
+        ));
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn mode_result_never_promotes_unqualified_observations_to_cpu_limit_readback() {
+        use omen_core::hp_mode::HpMode;
+        let unavailable = serde_json::json!({"result":{"Ok":{
+            "cpu_pl1_w":null,"cpu_limit_observations_w":[55,80],"cpu_limits_read_error":"reader failed"
+        }}});
+        let message = mode_written_status(HpMode::Balanced, &unavailable);
+        assert!(message.contains("reader failed"));
+        assert!(!message.contains(&tf("mode.cpu_readback", &[&55])));
+        assert!(!message.contains(&tf("mode.cpu_readback", &[&80])));
+        let measured = serde_json::json!({"result":{"Ok":{
+            "cpu_pl1_w":60,"cpu_limit_observations_w":[55,60],"cpu_limits_read_error":null
+        }}});
+        let message = mode_written_status(HpMode::Performance, &measured);
+        assert!(message.contains(&tf("mode.cpu_readback", &[&60])));
+        assert!(!message.contains(&tf("mode.cpu_readback", &[&55])));
+        assert!(message.starts_with(&tf("mode.written", &[&t("mode.performance")])));
+    }
 }

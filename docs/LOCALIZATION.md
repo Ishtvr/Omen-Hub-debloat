@@ -60,4 +60,4 @@ Slint resolves UI text through the same process language catalog as CLI and fixe
 
 Regression checks cover Slint key references, exact localized milliwatts, Unicode name editing/Undo and real German/English interaction. A translated display value never changes the stored integer unit or grants a startup permission.
 
-The 0.10.0-beta.2 catalogs contain 682 matching keys, including appearance, clipboard actions, keyboard groups and draft/brightness guidance. Appearance changes do not change process language; ui-settings.json is independent of startup/control preferences.
+The 0.10.0-beta.4 catalogs contain 705 matching keys, including appearance, caption actions, notifications, keyboard groups, draft/brightness guidance and qualified readback wording. Appearance changes do not change process language; ui-settings.json is independent of startup/control preferences.

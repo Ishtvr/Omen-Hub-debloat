@@ -687,5 +687,21 @@
   "color.hue": "Hue",
   "color.swatch": "Color",
   "color.invalid_hex": "Enter a complete color as #RRGGBB.",
-  "color.use": "Use color"
+  "color.use": "Use color",
+  "window.minimize": "Minimize",
+  "window.maximize": "Maximize",
+  "window.restore": "Restore",
+  "notice.done": "Operation complete",
+  "notice.unsaved_preset": "This preset has unsaved changes.",
+  "notice.details_text": "Message details",
+  "mode.written": "{0} requested. GPU flags were read back; the HP thermal mode has no complete status readback.",
+  "mode.cpu_readback": "CPU Slow/PL1 readback: {0} W.",
+  "mode.cpu_unavailable": "CPU limit readback unavailable: {0}",
+  "notice.saved": "Saved",
+  "notice.failed": "Operation failed",
+  "notice.dismiss": "Dismiss notification",
+  "notice.discard": "Discard",
+  "notice.background": "Background control",
+  "notice.lighting_applied": "Lighting applied and fully read back.",
+  "apply.replacing": "The latest selection takes priority. The active hardware operation reaches its safe boundary; older waiting requests are replaced."
 }

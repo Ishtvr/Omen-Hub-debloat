@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-16T13:17:22Z",
+  "generatedAt": "2026-11-16T17:02:54Z",
   "title": "Design System: Omen Hub++",
   "extensions": {
     "platform": {
       "kind": "native-windows",
       "renderer": "Slint 1.18.1",
-      "visualAuthority": "docs/plans/APPEARANCE_REFINEMENT.md",
+      "visualAuthority": "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md",
       "tokenSources": [
         "crates/core/src/appearance.rs",
         "crates/app/ui/theme.slint",
@@ -16,10 +16,26 @@
         "crates/app/ui/keyboard.slint",
         "crates/app/ui/color-field.slint",
         "crates/app/ui/color-picker.slint",
-        "crates/app/ui/theme-gallery.slint"
+        "crates/app/ui/theme-gallery.slint",
+        "crates/app/ui/chrome.slint",
+        "crates/app/ui/notifications.slint"
       ],
       "componentPreviewPolicy": "Runtime components are native Slint. This sidecar records source and behavior; it contains no fabricated HTML/CSS component assets.",
-      "units": "Slint logical pixels. Client captures and Slint scale overrides do not establish physical Windows DPI transitions."
+      "units": "Slint logical pixels. Client captures and Slint scale overrides do not establish physical Windows DPI transitions.",
+      "directionContracts": [
+        "docs/plans/APPEARANCE_REFINEMENT.md",
+        "docs/plans/COLOR_SELECTION_AND_SCROLL.md",
+        "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md"
+      ],
+      "behaviorSources": [
+        "crates/app/src/slint_ui/surface.rs",
+        "crates/app/src/slint_ui/notices.rs",
+        "crates/app/src/slint_ui/apply.rs",
+        "crates/app/src/slint_ui/chrome.rs",
+        "crates/app/src/slint_ui.rs",
+        "crates/app/src/profile_commands.rs",
+        "crates/app/src/elevation.rs"
+      ]
     },
     "colorMeta": {
       "accent": {
@@ -126,6 +142,16 @@
       "light-accent": {
         "role": "primary",
         "displayName": "Light indigo action"
+      },
+      "caption-close": {
+        "role": "semantic",
+        "displayName": "Windows Close action",
+        "purpose": "Scoped red hover/focus fill for the native caption Close action."
+      },
+      "on-caption-close": {
+        "role": "neutral",
+        "displayName": "Caption Close ink",
+        "purpose": "White SVG ink on the scoped Close hover/focus fill."
       }
     },
     "appearance": {
@@ -197,11 +223,11 @@
       },
       "utility": {
         "displayName": "Utility label",
-        "purpose": "Privilege and footer details."
+        "purpose": "Device privilege details and secondary utility labels."
       },
       "product-mark": {
         "displayName": "Product wordmark",
-        "purpose": "Compact command-bar name beside an original geometric Path mark."
+        "purpose": "Compact name in the custom caption."
       },
       "metric": {
         "displayName": "Available instrument value",
@@ -217,11 +243,15 @@
       },
       "diagnostic": {
         "displayName": "Selectable diagnostics",
-        "purpose": "Bounded details area."
+        "purpose": "Native Segoe UI read-only TextEdit for selecting/copying notification details."
       },
       "keycap": {
         "displayName": "Schematic key label",
         "purpose": "QWERTZ/QWERTY labels inside grouped geometry."
+      },
+      "dialog-title": {
+        "displayName": "Details dialog title",
+        "purpose": "Semibold heading above selectable diagnostic text."
       }
     },
     "shadows": [],
@@ -236,18 +266,24 @@
     "breakpoints": [],
     "nativeGeometry": {
       "defaultClient": "1000 × 720 logical px",
-      "minimumClient": "720 × 500 logical px",
-      "commandBar": "44 logical px high; 16 logical px side insets",
-      "footer": "28 logical px high",
+      "minimumClient": "820 × 500 logical px",
       "controlHeight": "{components.field.height}",
       "valueColumn": "276 logical px, including preset selector/name and common color fields",
-      "navigation": "Three equal targets in a 300 logical px strip; Settings separate",
+      "navigation": "Equal 44 logical px Overview/Cooling/Lighting targets; selected fill, accent marker and focus follow each complete target",
       "density": "20 logical px content inset; predominantly 8/12 logical px spacing",
-      "compactBehavior": "Bounded scrolling with persistent mounted drafts and Undo",
+      "compactBehavior": "Bounded scrolling; editors remain mounted with selection, drafts, caret and Undo preserved",
       "popup": "Field width; bounded ScrollView; wrapped variable-height rows revealed from actual row geometry",
       "chartPlot": "46 logical px left and 12 top; width minus 60 and height minus 28; paths, markers and pointer input share the plot",
       "textActionWidth": "128 logical px; compact actions 36 logical px",
-      "curveTools": "Bounded numeric/history/viewport rows; no compact horizontal widening"
+      "curveTools": "Bounded numeric/history/viewport rows; no compact horizontal widening",
+      "caption": "40 logical px; 48 × 40 logical px minimize, maximize/restore and Close actions",
+      "sidebar": "160 logical px wide; 8 logical px inset and 6 logical px spacing; Settings pinned below flexible space and divider",
+      "nativeResize": "Six logical px while restored; zero when maximized",
+      "groupSelection": "Equal 36 logical px segmented controls for contextual groups",
+      "actionBars": "Existing bottom work-area action bars remain; no permanent status/error footer",
+      "hpModes": "Quiet, Balanced, Performance and Unleashed selector and explicit Apply directly above Presets",
+      "notification": "Width min(420px, client width - 192px); height 156–212 logical px; lower-right with 16 logical px margin above retained actions",
+      "detailsDialog": "Width min(560px, client width - 40px); height min(360px, client height - 40px)"
     },
     "nativeComponents": [
       {
@@ -283,11 +319,12 @@
         "states": "Open arrows/Home/End move and reveal the pending variable-height row. Enter/click commits; Escape cancels."
       },
       {
-        "name": "Equal navigation",
+        "name": "Sidebar navigation",
         "kind": "nav",
         "refersTo": "navigation-selected",
-        "source": "crates/app/ui/primitives.slint:SegmentedTabs",
-        "description": "Equal Overview/Cooling/Lighting targets; selected fill, focus outline and hit area use the same geometry. Settings is separate."
+        "source": "crates/app/ui/chrome.slint:NavigationItem",
+        "description": "Persistent 160 logical px sidebar with equal 44 logical px Overview/Cooling/Lighting targets and Settings pinned at the bottom.",
+        "states": "Selected tonal fill, accent marker/icon and full-target focus boundary. Overview stays selected while its GPU curve is open."
       },
       {
         "name": "Collapsible section",
@@ -334,10 +371,68 @@
         "name": "Visual palette choices",
         "source": "crates/app/ui/theme-gallery.slint",
         "description": "Five equal source-backed palette previews with checked selection."
+      },
+      {
+        "name": "Custom native caption",
+        "kind": "custom",
+        "refersTo": "caption",
+        "source": "crates/app/ui/app.slint:AppWindow",
+        "description": "Frameless owner with custom caption; WindowMoveArea drag, double-click maximize and native right-click system menu.",
+        "states": "Native resize border only while restored; Close follows existing tray/exit policy."
+      },
+      {
+        "name": "Caption action",
+        "kind": "button",
+        "refersTo": "caption-button",
+        "source": "crates/app/ui/chrome.slint:CaptionButton",
+        "description": "48 × 40 logical px action with original SVG minimize, maximize/restore or Close icon.",
+        "states": "Theme ink and hover/focus feedback; Close uses scoped red/white hover and focus. Space/Enter and semantic action activation."
+      },
+      {
+        "name": "Contextual group selector",
+        "kind": "custom",
+        "refersTo": "group-selected",
+        "source": "crates/app/ui/primitives.slint:SegmentedTabs",
+        "description": "Equal 36 logical px contextual targets retain selected fill, focus outline and hit geometry."
+      },
+      {
+        "name": "Result notification",
+        "kind": "custom",
+        "refersTo": "notification",
+        "source": "crates/app/ui/notifications.slint:NotificationPopup",
+        "description": "Bounded result overlay with wrapped scrollable body, dismissal and Details. Replaces only the status/error strip.",
+        "states": "Errors persist. Normal success uses a six-second timer while the window is visible; hiding or opening Details stops it, and visible return or closing Details rearms it. Loading/telemetry do not become success messages."
+      },
+      {
+        "name": "Selectable details dialog",
+        "kind": "custom",
+        "refersTo": "message-dialog",
+        "source": "crates/app/ui/notifications.slint:MessageDialog",
+        "description": "Bounded scrimmed dialog with native read-only TextEdit for selecting/copying diagnostics.",
+        "states": "Close is initially focused; Tab cycles between text and Close. Escape closes; focus returns to the invoking Details action.",
+        "verificationBoundary": "The native TextEdit provides copy behavior. The documentation pass does not claim a live system-clipboard copy test."
+      },
+      {
+        "name": "Save before preset switch",
+        "kind": "custom",
+        "source": "crates/app/ui/app.slint:ConfirmPrompt",
+        "description": "Save, Discard and Cancel protect an edited preset; Cancel is initially focused.",
+        "states": "Save must succeed before the target is loaded. Save failure keeps the current editor/selection. A separate recovery warning cannot erase successful Save-and-switch intent."
       }
     ],
     "documentationEvidence": {
       "sampledCaptures": [
+        ".local/slint-ui-qa-20261116-174004-de-winit-software/overview.png",
+        ".local/slint-ui-qa-20261116-174342-en-winit-software/compact-overview.png",
+        ".local/slint-ui-qa-20261116-174004-de-winit-software/save-switch-popup.png",
+        ".local/slint-ui-qa-20261116-174342-en-winit-software/saved-popup.png",
+        ".local/slint-ui-qa-20261116-174654-de-winit-femtovg/error-details.png",
+        ".local/slint-ui-qa-20261116-174654-de-winit-femtovg/frameless-maximized.png"
+      ],
+      "scope": "Current native source and sampled existing isolated client captures establish the recorded composition. This documentation pass performs no app/hardware action, physical DPI transition, lifecycle qualification or resource measurement. Current regression results and build identity remain owned by Validation; no corrected matrix result is inferred.",
+      "validationOwner": "docs/VALIDATION.md",
+      "colorScrollContract": "docs/plans/COLOR_SELECTION_AND_SCROLL.md",
+      "historicalCaptures": [
         ".local/slint-ui-qa-20261116-134815-de-winit-software/overview.png",
         ".local/slint-ui-qa-20261116-134910-en-winit-software/appearance-light.png",
         ".local/slint-ui-qa-20261116-135003-de-winit-femtovg/lighting-keyboard.png",
@@ -345,22 +440,45 @@
         ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-late.png",
         ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-reopened.png"
       ],
-      "scope": "Native source and existing isolated client captures. This documentation pass performed no app or hardware action, physical DPI transition, lifecycle qualification or resource measurement.",
-      "validationOwner": "docs/VALIDATION.md",
-      "colorScrollContract": "docs/plans/COLOR_SELECTION_AND_SCROLL.md"
+      "windowApplyContract": "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md"
+    },
+    "windowLifecycle": {
+      "sources": [
+        "crates/app/src/slint_ui/surface.rs",
+        "crates/app/src/slint_ui/chrome.rs",
+        "crates/app/src/slint_ui.rs"
+      ],
+      "presentation": "One deferred software-only partial-render-cache reset and actual redraw on window return; the temporary snapshot is dropped.",
+      "preservation": "No window/model recreation, idle repaint timer or periodic full redraw. Existing drafts, selection, caret and Undo remain.",
+      "verification": "Check owned, unobscured shown client pixels after minimize/restore and tray return before requesting an MCP snapshot; snapshots can reset software caches and mask missing presentation.",
+      "scope": "Slint scale overrides and native client checks do not establish physical Windows DPI, hardware lifecycle or total-tray-resource qualification."
+    },
+    "manualApply": {
+      "sources": [
+        "crates/app/src/slint_ui/apply.rs",
+        "crates/app/src/profile_commands.rs",
+        "crates/app/src/elevation.rs"
+      ],
+      "queue": "The latest manual mode/preset intent replaces waiting targets. One executor lets active hardware work reach a safe completion boundary; no controller kill or mid-write cancellation.",
+      "results": "Obsolete completion generations do not overwrite the current result or record obsolete successful selection.",
+      "recovery": "Restore and verify a pending original checkpoint before a replacement target or prelude. Failure preserves the journal and blocks new writes.",
+      "permissions": "Replacement recovery preserves startup selection/approval. Explicit user Restore retains its separate startup-disable contract. Background/sign-in commands gain no recovery permission.",
+      "hpWording": "Report the requested HP mode, GPU-flag readback and lack of complete HP thermal-mode readback. CPU Slow/PL1 limit readback or its unavailable reason is separate; it is not measured package power or sustained-power evidence."
     }
   },
   "components": [],
   "narrative": {
     "northStar": "The Native Tuning Workbench",
-    "overview": "The Rust/Slint system is a modern, clean Windows utility for frequent hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained indigo accent and Antigravity-style appearance choices give the workbench one shared system.\n\nMeasured GPU watts and temperature lead, with verified CPU telemetry beside them; editable presets follow in the same work area. Native editing, alignment, readable fields and explicit actions distinguish selected intent, draft edits, metadata saves and confirmed hardware state.\n\nThe UI remains native and offline. Product and hardware contracts stay authoritative; visual corrections establish no new hardware, startup, resource or lifecycle qualification.",
+    "overview": "The Rust/Slint system is a modern, clean Windows utility for frequent hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained indigo accent and Antigravity-style appearance choices give the workbench one shared system.\n\nMeasured GPU watts and temperature lead, with verified CPU telemetry beside them; editable presets follow in the same work area. Native editing, alignment, readable fields and explicit actions distinguish selected intent, draft edits, metadata saves and confirmed hardware state.\n\nThe UI remains native and offline. Product and hardware contracts stay authoritative; visual corrections establish no new hardware, startup, resource or lifecycle qualification.\n\nA custom native caption and persistent sidebar surround the same mounted editors. Standard HP modes sit above Presets. Bounded notifications replace only the former status/error strip, while bottom actions and explicit Save/Apply remain. Latest manual intent follows safe completion and verified recovery boundaries.",
     "keyCharacteristics": [
       "GPU/CPU instruments before tuning controls.",
       "Common control geometry and aligned values.",
       "Derived palettes with validated local previews.",
       "Explicit draft, saved and confirmed state.",
       "Connected paths and an original schematic keyboard.",
-      "Event-driven rendering with low background resource use."
+      "Event-driven rendering with low background resource use.",
+      "Custom native caption and persistent sidebar around mounted editors.",
+      "Bounded result notifications with selectable keyboard-accessible details."
     ],
     "rules": [
       {
@@ -380,13 +498,18 @@
       },
       {
         "name": "The One Work Area Rule",
-        "body": "Keep Overview instruments and preset editing mounted together, with explicit actions and preserved drafts/Undo.",
+        "body": "Keep instruments and preset editing mounted together; preserve all editor drafts/selection/Undo and retain explicit bottom actions across navigation and window return.",
         "section": "layout"
       },
       {
         "name": "The State Before Color Rule",
         "body": "Name busy, error, draft, saved, unavailable and confirmed states in text; color reinforces them.",
         "section": "elevation"
+      },
+      {
+        "name": "The Latest Intent Rule",
+        "body": "Replace waiting manual targets; let active hardware work finish safely, verify pending recovery before replacement, and ignore obsolete UI completions.",
+        "section": "components"
       }
     ],
     "dos": [
@@ -395,14 +518,21 @@
       "Do keep bounded telemetry, expected-state checks, readback and recovery.",
       "Do verify both languages, compact/enlarged clients, popup scrolling/focus, both renderers, drafts/Undo and palette recovery.",
       "Do isolate developer-only MCP and marked fixtures from the live user store.",
-      "Do measure total tray resources including resident helpers; keep results in Validation."
+      "Do measure total tray resources including resident helpers; keep results in Validation.",
+      "Do retain caption move/resize/system-menu behavior, sidebar geometry and bottom action bars.",
+      "Do preserve Save/Discard/Cancel switching and return focus from selectable notification details.",
+      "Do inspect actual shown client pixels before an MCP snapshot on window return.",
+      "Do distinguish requested HP mode, limited GPU/CPU-limit readback and measured performance."
     ],
     "donts": [
       "Don't infer sensor readings or call Windows MHz a measured boost clock.",
       "Don't present previews, saves, palette changes or fixtures as firmware operations.",
       "Don't describe keyboard groups as per-key RGB or numpad-only control.",
       "Don't add a browser runtime, raster decoration, downloaded fonts, decorative motion or continuous rendering.",
-      "Don't infer new hardware support, 85 °C enforcement, HP-controller independence, physical DPI transition or complete accessibility qualification from visual corrections."
+      "Don't infer new hardware support, 85 °C enforcement, HP-controller independence, physical DPI transition or complete accessibility qualification from visual corrections.",
+      "Don't replace action bars when removing the status/error strip.",
+      "Don't recreate editor models or add an idle/full repaint loop to repair software restore.",
+      "Don't kill an active controller or silently grant background/startup recovery permission."
     ]
   }
 }

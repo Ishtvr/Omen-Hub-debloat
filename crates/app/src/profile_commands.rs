@@ -68,6 +68,8 @@ pub fn handles(command: &str) -> bool {
             | "profile-apply-trace"
             | "profile-restore"
             | "profile-ui-apply"
+            | "profile-ui-replace"
+            | "mode-ui-replace"
             | "mode-ui-apply"
             | "hp-performance-step"
             | "cpu-smu-probe"
@@ -185,11 +187,14 @@ fn apply_hp_prelude(
 
 fn prepare_apply(
     profile: &omen_core::profiles::PerformanceProfile,
-    store: &ProfileStore,
+    store: &mut ProfileStore,
     startup: bool,
+    replace_pending: bool,
 ) -> Result<Controller, String> {
     // Recovery and preflight precede even the mode/TPP prelude.
-    if store.pending()? {
+    if replace_pending {
+        recover_pending(store)?;
+    } else if store.pending()? {
         return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
     }
     let mut controller = Controller::for_profile(profile)?;
@@ -205,6 +210,18 @@ fn prepare_apply(
     Ok(controller)
 }
 
+/// The recorded original is restored/verified before any replacement prelude.
+/// Recovery failure retains the pending journal and dispatches no new target.
+fn recover_pending(store: &mut ProfileStore) -> Result<(), String> {
+    if store.pending()? {
+        let saved = store.last_transaction::<RestoreState>()?;
+        let mut controller = Controller::for_recovery(&saved)?;
+        transaction::recover(&saved, &mut controller, store)
+            .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+    }
+    Ok(())
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let result = run_inner(args);
     // Return early errors (e.g. access/session/empty journal) to the matching UI
@@ -214,8 +231,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("keyboard-ui-read") if args.len() == 2 || args.len() == 3 => {
                 Some(("keyboard_read", args[1].as_str()))
             }
-            Some("profile-ui-apply") if args.len() == 3 => Some(("apply", args[2].as_str())),
-            Some("mode-ui-apply") if args.len() == 3 => Some(("mode", args[2].as_str())),
+            Some("profile-ui-apply" | "profile-ui-replace") if args.len() == 3 => {
+                Some(("apply", args[2].as_str()))
+            }
+            Some("mode-ui-apply" | "mode-ui-replace") if args.len() == 3 => {
+                Some(("mode", args[2].as_str()))
+            }
             Some("fan-service-install") if args.len() == 2 => Some(("fan", args[1].as_str())),
             Some("mux-ui-apply") if args.len() == 3 => Some(("mux", args[2].as_str())),
             Some("hp-service-ui") if args.len() == 3 => Some(("hp_service", args[2].as_str())),
@@ -338,10 +359,16 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
             return print(&report);
         }
-        Some("mode-ui-apply") if args.len() == 3 => {
+        Some("mode-ui-apply" | "mode-ui-replace") if args.len() == 3 => {
             validate_nonce(Some(&args[2]))?;
             let mode = omen_core::hp_mode::HpMode::parse(&args[1])?;
             let _lease = ControlLease::acquire_foreground()?;
+            let mut user_store = ProfileStore::user_data()?;
+            if args[0] == "mode-ui-replace" {
+                recover_pending(&mut user_store)?;
+            } else if user_store.pending()? {
+                return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
+            }
             let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
             ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
@@ -565,11 +592,14 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 &serde_json::json!({"schema":1,"profile_id":profile.id,"profile_digest":profile_digest(&profile)?,"verified":true,"hardware_applied":false}),
             )
         }
-        Some("profile-apply" | "profile-apply-trace" | "profile-ui-apply")
-            if args.len() == 2 || (args[0] == "profile-ui-apply" && args.len() == 3) =>
+        Some(
+            "profile-apply" | "profile-apply-trace" | "profile-ui-apply" | "profile-ui-replace",
+        ) if args.len() == 2
+            || (matches!(args[0].as_str(), "profile-ui-apply" | "profile-ui-replace")
+                && args.len() == 3) =>
         {
             let _lease = ControlLease::acquire_foreground()?;
-            let nonce = if args[0] == "profile-ui-apply" {
+            let nonce = if matches!(args[0].as_str(), "profile-ui-apply" | "profile-ui-replace") {
                 args.get(2).map(String::as_str)
             } else {
                 None
@@ -586,7 +616,8 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 // first so the saved selection takes effect.
                 crate::startup_setup::ensure_fan_service()?;
             }
-            let mut controller = prepare_apply(&profile, &store, false)?;
+            let mut controller =
+                prepare_apply(&profile, &mut store, false, args[0] == "profile-ui-replace")?;
             apply_hp_prelude(&profile, controller.inventory())?;
             let tracing = args[0] == "profile-apply-trace";
             if tracing {
@@ -682,7 +713,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 };
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
-                let mut controller = prepare_apply(&profile, &store, true)?;
+                let mut controller = prepare_apply(&profile, &mut store, true, false)?;
                 apply_hp_prelude(&profile, controller.inventory())?;
                 transaction::apply(&profile, &digest, &mut controller, &mut store, true)
                     .map(Some)

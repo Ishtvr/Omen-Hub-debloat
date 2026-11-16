@@ -344,6 +344,7 @@ impl Host {
             }
             self.draw_lighting(true);
             self.status(t("ui.test_saved"), false);
+            self.completed(t("ui.test_saved"));
             return;
         }
         if let Some(expected) = self.lighting.borrow().clone() {

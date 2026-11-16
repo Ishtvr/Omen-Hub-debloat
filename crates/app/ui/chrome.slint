@@ -1,0 +1,92 @@
+import { Theme } from "theme.slint";
+
+export component CaptionButton inherits Rectangle {
+    in property <int> kind;
+    in property <bool> maximized;
+    in property <string> text;
+    callback clicked();
+    width: 48px;
+    height: 40px;
+    background: area.has-hover || focus.has-focus ? root.kind == 2 ? #C42B1C : Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: focus;
+    Image {
+        width: 16px;
+        height: 16px;
+        source: root.kind == 0 ? @image-url("icons/minimize.svg") : root.kind == 2 ? @image-url("icons/close.svg") : root.maximized ? @image-url("icons/restore.svg") : @image-url("icons/maximize.svg");
+        colorize: root.kind == 2 && (area.has-hover || focus.has-focus) ? white : Theme.ink;
+        accessible-role: none;
+    }
+
+    area := TouchArea {
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(e) => { if e.text == " " || e.text == Key.Return { root.clicked(); return accept; } return reject; }
+    }
+}
+
+export component NavigationItem inherits Rectangle {
+    in property <string> text;
+    in property <int> kind;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 44px;
+    background: root.selected || area.has-hover ? Theme.hover : transparent;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+    Rectangle {
+        x: 0px;
+        y: 12px;
+        width: 2px;
+        height: 20px;
+        border-radius: 1px;
+        background: Theme.accent;
+        visible: root.selected;
+    }
+
+    Image {
+        x: 12px;
+        y: 12px;
+        width: 20px;
+        height: 20px;
+        source: root.kind == 0 ? @image-url("icons/overview.svg") : root.kind == 1 ? @image-url("icons/fan.svg") : root.kind == 2 ? @image-url("icons/keyboard.svg") : @image-url("icons/settings.svg");
+        colorize: root.selected ? Theme.accent : Theme.muted;
+        accessible-role: none;
+    }
+
+    Text {
+        x: 42px;
+        width: parent.width - 48px;
+        height: parent.height;
+        text: root.text;
+        color: root.enabled ? Theme.ink : Theme.quiet;
+        vertical-alignment: center;
+        font-size: 13px;
+        accessible-role: none;
+    }
+
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(e) => { if e.text == " " || e.text == Key.Return { root.clicked(); return accept; } return reject; }
+    }
+}

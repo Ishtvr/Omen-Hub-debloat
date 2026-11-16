@@ -36,10 +36,14 @@ use windows_sys::Win32::{
 };
 
 mod appearance;
+mod apply;
+mod chrome;
 mod colors;
 mod curve;
 mod lighting;
+mod notices;
 mod pacing;
+mod surface;
 slint::include_modules!();
 
 const AUX_DONE: u32 = WM_APP + 92;
@@ -110,7 +114,7 @@ enum Aux {
 enum AuxResult {
     Settings(Result<settings::Snapshot, String>, Option<bool>),
     SettingsSaved(Result<settings::Snapshot, String>),
-    Lighting(Result<KeyboardState, String>),
+    Lighting(Result<KeyboardState, String>, bool),
     Hp(Result<bool, String>),
     Fan(Result<Curve, String>),
     FanSaved(Result<Value, String>),
@@ -128,12 +132,16 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
             Aux::SaveSettings(base, options, appearance, startup) => {
                 AuxResult::SettingsSaved(settings::save(&base, &options, &appearance, startup))
             }
-            Aux::Lighting(target) => AuxResult::Lighting(
-                omen_platform::DirectLighting::new().and_then(|mut control| match target {
-                    Some((expected, colors, on)) => control.apply(&expected, &colors, on),
-                    None => control.read(),
-                }),
-            ),
+            Aux::Lighting(target) => {
+                let applied = target.is_some();
+                AuxResult::Lighting(
+                    omen_platform::DirectLighting::new().and_then(|mut control| match target {
+                        Some((expected, colors, on)) => control.apply(&expected, &colors, on),
+                        None => control.read(),
+                    }),
+                    applied,
+                )
+            }
             Aux::SaveFan(points) => AuxResult::FanSaved((|| {
                 ProfileStore::user_data()?.save_active_fan_curve(&points)?;
                 if !omen_platform::fan_service_installed() {
@@ -212,6 +220,13 @@ struct Host {
     pacing: RefCell<pacing::Pacer>,
     pacing_timer: slint::Timer,
     color_picker: RefCell<Option<colors::Picker>>,
+    notice_timer: slint::Timer,
+    preset_activity: Cell<Option<notices::PresetActivity>>,
+    after_save: RefCell<Option<notices::AfterSave>>,
+    apply: apply::Handle,
+    operation_busy: Cell<bool>,
+    was_minimized: Cell<bool>,
+    surface_timer: slint::Timer,
 }
 
 impl Host {
@@ -264,7 +279,10 @@ impl Host {
                 .iter()
                 .position(|(_, mode)| *mode == m)
                 .map(|i| i as i32),
-            Some(Selection::Preset(_)) => None,
+            Some(Selection::Preset(id)) => profiles
+                .iter()
+                .position(|p| p.id == id)
+                .map(|i| i as i32 + 4),
             None => None,
         }
         .unwrap_or(-1);
@@ -275,7 +293,8 @@ impl Host {
         data.set_modes(strings(
             MODES
                 .iter()
-                .map(|(key, _)| tf("mode.default_entry", &[&t(key)])),
+                .map(|(key, _)| tf("mode.default_entry", &[&t(key)]))
+                .chain(profiles.iter().map(|p| p.name.clone())),
         ));
         data.set_mode_index(index);
         data.set_modes_ready(true);
@@ -357,13 +376,17 @@ impl Host {
         if let Some(window) = self.window.upgrade() {
             let data = window.global::<Workbench>();
             data.set_status(text.into());
-            data.set_failed(failed);
-            data.set_details(text.into());
+        }
+        if failed {
+            self.notice(t("notice.failed"), text, true);
         }
     }
     fn busy(&self, value: bool) {
+        self.operation_busy.set(value);
+        self.apply.pause(value);
         if let Some(w) = self.window.upgrade() {
-            w.global::<Workbench>().set_busy(value);
+            let d = w.global::<Workbench>();
+            d.set_busy(value || d.get_apply_busy());
         }
     }
     fn is_busy(&self) -> bool {
@@ -387,6 +410,11 @@ impl Host {
         if self.blocked() {
             return;
         }
+        self.preset_activity.set(Some(match &request {
+            preset_ui::Request::Load(_) => notices::PresetActivity::Load,
+            preset_ui::Request::Save(_) => notices::PresetActivity::Save,
+            _ => notices::PresetActivity::Other,
+        }));
         self.busy(true);
         self.status(
             t(match &request {
@@ -400,6 +428,9 @@ impl Host {
             false,
         );
         if self.preset.send(request).is_err() {
+            if self.preset_activity.take() == Some(notices::PresetActivity::Save) {
+                self.abort_saved_selection();
+            }
             self.busy(false);
             self.status(t("control.unavailable"), true);
         }
@@ -730,7 +761,10 @@ impl Host {
     }
     fn save_preset(&self) {
         match self.save_data() {
-            Err(e) => self.status(&crate::i18n::error_message(&e), true),
+            Err(e) => {
+                self.abort_saved_selection();
+                self.status(&crate::i18n::error_message(&e), true);
+            }
             Ok(data) if self.test => {
                 let profile = PerformanceProfile {
                     schema: 1,
@@ -752,6 +786,8 @@ impl Host {
                 profiles.retain(|p| p.id != profile.id);
                 profiles.push(profile.clone());
                 self.display(test_view(Some(&profile.id), &profiles), t("ui.test_saved"));
+                self.saved(t("ui.test_saved"));
+                self.follow_saved_selection();
             }
             Ok(data) => self.send_preset(preset_ui::Request::Save(Box::new(data))),
         }
@@ -827,6 +863,8 @@ impl Host {
         }
         self.update_icon();
         self.visible.set(true);
+        self.arm_notice();
+        self.refresh_surface();
         let _ = self.tx.send(ui::Request::Visibility(true));
     }
     fn hide(&self) {
@@ -836,6 +874,7 @@ impl Host {
                 let _ = w.hide();
             }
             self.visible.set(false);
+            self.notice_timer.stop();
             self.pacing_timer.stop();
             self.pacing.borrow_mut().reset();
             let _ = self.tx.send(ui::Request::Visibility(false));
@@ -861,6 +900,36 @@ impl Host {
         let _ = slint::quit_event_loop();
     }
     fn drain(&self, message: u32) {
+        if message == apply::DONE {
+            while let Ok(outcome) = self.apply.results.try_recv() {
+                if !self.apply.current(outcome.generation) {
+                    continue;
+                }
+                if let Some(w) = self.window.upgrade() {
+                    let d = w.global::<Workbench>();
+                    d.set_apply_busy(false);
+                    d.set_busy(self.operation_busy.get());
+                    if let Some(pending) = outcome.pending {
+                        d.set_recovery_pending(pending);
+                        if let Some(view) = self.view.borrow_mut().as_mut() {
+                            view.pending = pending;
+                        }
+                    }
+                }
+                match outcome.result {
+                    Ok(message) => {
+                        self.status(&message, false);
+                        self.completed(&message);
+                    }
+                    Err(error) => self.status(&crate::i18n::error_message(&error), true),
+                }
+                if let Some(w) = self.window.upgrade() {
+                    w.global::<Workbench>()
+                        .set_last_apply(ui::last_apply_status().unwrap_or_default().into());
+                }
+            }
+        }
+
         if message == ui::UPDATE {
             if let Some(snapshot) = self
                 .shared
@@ -881,6 +950,9 @@ impl Host {
             self.busy(false);
             if let Some(text) = self.manual.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 self.status(&crate::i18n::message(&text.message), text.failed);
+                if !text.failed {
+                    self.completed(&crate::i18n::message(&text.message));
+                }
             }
             self.sync_quick();
             if let Some(w) = self.window.upgrade() {
@@ -897,6 +969,7 @@ impl Host {
             && !self.is_busy()
         {
             self.status(&text, false);
+            self.notice(t("notice.background"), &text, false);
         }
         if message == preset_ui::UPDATE {
             while let Ok(update) = self.preset_results.try_recv() {
@@ -932,10 +1005,20 @@ impl Host {
                         Err(e) => self.status(&crate::i18n::error_message(&e), true),
                     },
                     preset_ui::Update::View(view, status) => {
+                        let activity = self.preset_activity.take();
                         self.busy(false);
                         self.display(*view, &status);
+                        if activity == Some(notices::PresetActivity::Save) {
+                            self.saved(&status);
+                            self.follow_saved_selection();
+                        } else if activity == Some(notices::PresetActivity::Other) {
+                            self.completed(&status);
+                        }
                     }
                     preset_ui::Update::Error(e) => {
+                        if self.preset_activity.take() == Some(notices::PresetActivity::Save) {
+                            self.abort_saved_selection();
+                        }
                         self.busy(false);
                         self.status(&e, true);
                     }
@@ -981,6 +1064,7 @@ impl Host {
                         Ok(value) => {
                             *self.fan_baseline.borrow_mut() = Some(value);
                             self.status(t("curve.fan_saved"), false);
+                            self.saved(t("curve.fan_saved"));
                         }
                         Err(e) => self.status(&crate::i18n::error_message(&e), true),
                     },
@@ -988,8 +1072,13 @@ impl Host {
                         Ok(s) => self.show_settings(s, true),
                         Err(e) => self.status(&e, true),
                     },
-                    AuxResult::Lighting(result) => match result {
-                        Ok(state) => self.show_lighting(state),
+                    AuxResult::Lighting(result, applied) => match result {
+                        Ok(state) => {
+                            self.show_lighting(state);
+                            if applied {
+                                self.completed(t("notice.lighting_applied"));
+                            }
+                        }
                         Err(e) => self.status(&crate::i18n::error_message(&e), true),
                     },
                 }
@@ -998,6 +1087,9 @@ impl Host {
         if self.exit_after.get() && !self.is_busy() {
             self.exit_after.set(false);
             self.exit();
+        }
+        if !self.is_busy() {
+            self.follow_saved_selection();
         }
         if !self.is_busy()
             && !self.settings_loaded.get()
@@ -1145,6 +1237,9 @@ impl Host {
                 false,
             );
         }
+        if saved {
+            self.saved(w.global::<Workbench>().get_status().as_str());
+        }
         *self.baseline_settings.borrow_mut() = Some(s);
     }
     fn settings_target(
@@ -1207,6 +1302,9 @@ impl Host {
                     }),
                     false,
                 );
+                if let Some(w) = self.window.upgrade() {
+                    self.saved(w.global::<Workbench>().get_status().as_str());
+                }
                 return;
             }
             self.send_aux(Aux::SaveSettings(base, options, appearance, startup));
@@ -1256,7 +1354,12 @@ unsafe extern "system" fn event_proc(
             return 0;
         }
         match message {
-            ui::UPDATE | ui::MODE_RESULT | ui::AUTO_RESULT | preset_ui::UPDATE | AUX_DONE => {
+            ui::UPDATE
+            | ui::MODE_RESULT
+            | ui::AUTO_RESULT
+            | preset_ui::UPDATE
+            | AUX_DONE
+            | apply::DONE => {
                 host.drain(message);
                 0
             }
@@ -1413,6 +1516,7 @@ pub fn run(
     let (ptx, prx) = mpsc::channel();
     let (aux, auxq) = mpsc::channel();
     let (atx, arx) = mpsc::channel();
+    let (apply, apply_tx) = apply::Handle::new();
     let group_rows = (0..7)
         .map(|_| Rc::new(VecModel::default()))
         .collect::<Vec<_>>();
@@ -1478,6 +1582,13 @@ pub fn run(
         pacing: RefCell::new(pacing::Pacer::new(software)),
         pacing_timer: Default::default(),
         color_picker: Default::default(),
+        notice_timer: Default::default(),
+        preset_activity: Cell::new(None),
+        after_save: Default::default(),
+        apply,
+        operation_busy: Cell::new(false),
+        was_minimized: Cell::new(false),
+        surface_timer: Default::default(),
     });
     let initial_appearance = if test {
         host.test_settings
@@ -1625,6 +1736,7 @@ pub fn run(
         }
         let raw = hwnd as usize;
         let manual = host.manual.clone();
+        workers.push(host.apply.spawn(hwnd as usize, apply_tx));
         workers.push(thread::spawn(move || {
             ui::control_worker(raw, controls, manual)
         }));
@@ -1662,21 +1774,36 @@ pub fn run(
     window.window().on_close_requested({
         let h = host.clone();
         move || {
-            let close_tray = h.baseline_settings.borrow().as_ref().map_or_else(
-                || ProfileStore::user_data().map_or(true, |s| s.close_to_tray()),
-                |s| s.options.close_to_tray,
-            );
-            if close_tray {
-                h.hide();
-            } else {
-                h.exit();
-            }
+            h.close_window();
             slint::CloseRequestResponse::KeepWindowShown
         }
     });
     window.window().on_winit_window_event({
         let h = host.clone();
         move |window, event| {
+            if matches!(
+                event,
+                winit::event::WindowEvent::Resized(_)
+                    | winit::event::WindowEvent::Focused(_)
+                    | winit::event::WindowEvent::Occluded(_)
+            ) {
+                window.with_winit_window(|n| {
+                    let minimized = n.is_minimized().unwrap_or(false);
+                    let restored = h.was_minimized.replace(minimized) && !minimized;
+                    let visible = n.is_visible().unwrap_or(true) && !minimized;
+                    if h.visible.replace(visible) != visible {
+                        let _ = h.tx.send(ui::Request::Visibility(visible));
+                        if visible {
+                            h.arm_notice();
+                        } else {
+                            h.notice_timer.stop();
+                        }
+                    }
+                    if restored || matches!(event, winit::event::WindowEvent::Occluded(false)) {
+                        h.refresh_surface();
+                    }
+                });
+            }
             if matches!(
                 event,
                 winit::event::WindowEvent::Moved(_)
@@ -1727,6 +1854,7 @@ pub fn run(
                 h.update_icon();
             }
             if let winit::event::WindowEvent::Resized(_) = event {
+                h.window_state();
                 window.with_winit_window(|native| {
                     let visible = !native.is_minimized().unwrap_or(false)
                         && native.is_visible().unwrap_or(true);
@@ -1758,7 +1886,7 @@ pub fn run(
     slint::Timer::single_shot(std::time::Duration::ZERO, move || {
         if let (Some(w), Some(h)) = (weak.upgrade(), weak_host.upgrade()) {
             w.window().set_size(if h.test {
-                slint::LogicalSize::new(760.0, 540.0)
+                slint::LogicalSize::new(860.0, 540.0)
             } else {
                 slint::LogicalSize::new(1000.0, 720.0)
             });
@@ -1780,6 +1908,7 @@ pub fn run(
         }
     });
     let result = slint::run_event_loop_until_quit().map_err(error);
+    host.apply.stop();
     let _ = host.tx.send(ui::Request::Stop);
     let _ = host.control.send(ui::ControlRequest::Stop);
     let _ = host.preset.send(preset_ui::Request::Stop);
@@ -1868,7 +1997,7 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
             last_index: 79,
         }),
         removed_options: 0,
-        pending: false,
+        pending: std::env::var_os("OMEN_UI_TEST_PENDING").is_some(),
         applicable: false,
         blockers: vec![],
         startup_enabled: false,
@@ -1898,6 +2027,9 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     macro_rules! callback {($method:ident,|$host:ident $(,$arg:ident)*|$body:block)=>{{let $host=h.clone();d.$method(move|$($arg),*|$body);}};}
     callback!(on_navigate, |h, page| {
         h.navigate(page);
+    });
+    callback!(on_window_action, |h, action| {
+        h.window_action(action);
     });
     callback!(on_refresh, |h| {
         let _ = h.tx.send(ui::Request::Refresh);
@@ -1977,23 +2109,13 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
         h.save_preset();
     });
     callback!(on_apply_preset, |h| {
-        if h.test {
-            h.status(t("ui.test_no_write"), true);
-            return;
-        }
-        let view = h.view.borrow();
-        let request = view.as_ref().and_then(|v| {
-            if v.pending {
-                Some(preset_ui::Request::Recover)
-            } else {
-                v.selected
-                    .as_ref()
-                    .map(|p| preset_ui::Request::Apply(p.id.clone()))
-            }
-        });
-        drop(view);
-        if let Some(request) = request {
-            h.send_preset(request);
+        let id = h
+            .view
+            .borrow()
+            .as_ref()
+            .and_then(|v| v.selected.as_ref().map(|p| p.id.clone()));
+        if let Some(id) = id {
+            h.queue_apply(apply::Target::Preset(id));
         }
     });
     callback!(on_delete_preset, |h| {
@@ -2031,18 +2153,16 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     callback!(on_apply_mode, |h| {
         if let Some(w) = h.window.upgrade() {
             let i = w.global::<Workbench>().get_mode_index();
-            let request = if i < 4 {
-                MODES
-                    .get(i as usize)
-                    .map(|(_, m)| ui::ControlRequest::ApplyMode(*m))
+            let target = if (0..4).contains(&i) {
+                MODES.get(i as usize).map(|(_, m)| apply::Target::Mode(*m))
             } else {
                 h.profiles
                     .borrow()
                     .get((i - 4) as usize)
-                    .map(|p| ui::ControlRequest::ApplyPreset(p.id.clone()))
+                    .map(|p| apply::Target::Preset(p.id.clone()))
             };
-            if let Some(request) = request {
-                h.send_control(request);
+            if let Some(target) = target {
+                h.queue_apply(target);
             }
         }
     });
@@ -2078,6 +2198,27 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     });
     callback!(on_save_settings, |h| {
         h.save_settings();
+    });
+    callback!(on_confirm_save, |h| {
+        h.save_before_switch();
+    });
+    callback!(on_dismiss_notice, |h| {
+        h.notice_timer.stop();
+        if let Some(w) = h.window.upgrade() {
+            w.global::<Workbench>().set_notice_visible(false);
+        }
+    });
+    callback!(on_notice_details, |h| {
+        h.notice_timer.stop();
+        if let Some(w) = h.window.upgrade() {
+            w.global::<Workbench>().set_confirm_kind(5);
+        }
+    });
+    callback!(on_close_notice_details, |h| {
+        if let Some(w) = h.window.upgrade() {
+            w.global::<Workbench>().set_confirm_kind(0);
+        }
+        h.arm_notice();
     });
     callback!(on_settings_changed, |h| {
         if let Some(w) = h.window.upgrade() {

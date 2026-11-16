@@ -687,5 +687,21 @@
   "color.hue": "Farbton",
   "color.swatch": "Farbe",
   "color.invalid_hex": "Bitte eine vollständige Farbe als #RRGGBB eingeben.",
-  "color.use": "Farbe übernehmen"
+  "color.use": "Farbe übernehmen",
+  "window.minimize": "Minimieren",
+  "window.maximize": "Maximieren",
+  "window.restore": "Wiederherstellen",
+  "notice.done": "Vorgang abgeschlossen",
+  "notice.unsaved_preset": "Dieses Preset enthält ungespeicherte Änderungen.",
+  "notice.details_text": "Meldungsdetails",
+  "mode.written": "{0} angefordert. GPU-Flags wurden zurückgelesen; der HP-Thermalmodus besitzt keine vollständige Statusrücklesung.",
+  "mode.cpu_readback": "CPU-Slow/PL1-Rücklesung: {0} W.",
+  "mode.cpu_unavailable": "CPU-Limit-Rücklesung nicht verfügbar: {0}",
+  "notice.saved": "Gespeichert",
+  "notice.failed": "Vorgang fehlgeschlagen",
+  "notice.dismiss": "Meldung schließen",
+  "notice.discard": "Verwerfen",
+  "notice.background": "Hintergrundsteuerung",
+  "notice.lighting_applied": "Beleuchtung angewandt und vollständig zurückgelesen.",
+  "apply.replacing": "Die neueste Auswahl hat Vorrang. Der laufende Hardwarevorgang wird sicher beendet; wartende ältere Aufträge entfallen."
 }

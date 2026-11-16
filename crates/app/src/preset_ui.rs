@@ -259,7 +259,7 @@ pub(crate) fn worker(
                             if !transaction::plan(&profile, &mut controller, true).applicable {
                                 return Err(t("preset.startup_blocked").into());
                             }
-                            elevation::run(Some(&profile.id), Action::Apply, || false)?;
+                            elevation::run_serial(Some(&profile.id), Action::Replace)?;
                             elevation::run(Some(&profile.id), Action::Startup, || false)?;
                             t("preset.saved_startup")
                         }
@@ -306,7 +306,7 @@ pub(crate) fn worker(
                             {
                                 return Err(t("preset.startup_blocked").into());
                             }
-                            elevation::run(Some(&id), Action::Apply, || false)?;
+                            elevation::run_serial(Some(&id), Action::Replace)?;
                         }
                         elevation::run(Some(&id), Action::Startup, || false)?;
                     } else {

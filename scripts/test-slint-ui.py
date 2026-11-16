@@ -19,7 +19,7 @@ import time
 import tomllib
 
 from slint_mcp import McpClient, unpack
-from PIL import Image  # Developer-only screenshot assertions; never a runtime dependency.
+from PIL import Image, ImageChops  # Developer-only screenshot assertions; never a runtime dependency.
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -41,6 +41,10 @@ def run(args):
     fixture_dir = Path(tempfile.mkdtemp(prefix='omen-ui-settings-'))
     (fixture_dir / 'ui-test-only.marker').write_text('Omen Hub++ isolated UI settings\n', encoding='utf-8')
     environment['OMEN_UI_TEST_DIR'] = str(fixture_dir)
+    if args.pending_switch_only:
+        environment['OMEN_UI_TEST_PENDING'] = '1'
+    else:
+        environment.pop('OMEN_UI_TEST_PENDING',None)
     expected_version = tomllib.loads((REPO / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
     if args.scale:
         environment['SLINT_SCALE_FACTOR'] = args.scale
@@ -230,6 +234,16 @@ def run(args):
             user.IsWindowVisible.argtypes = [wt.HWND]
             user.SetWindowPos.argtypes = [wt.HWND, wt.HWND, c.c_int, c.c_int, c.c_int, c.c_int, wt.UINT]
             user.ShowWindow.argtypes = [wt.HWND, c.c_int]
+            user.GetForegroundWindow.restype = wt.HWND
+            user.SetForegroundWindow.argtypes = [wt.HWND]
+            user.WindowFromPoint.argtypes = [wt.POINT]
+            user.WindowFromPoint.restype = wt.HWND
+            user.GetDC.argtypes = [wt.HWND]
+            user.GetDC.restype = wt.HDC
+            user.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+            gdi = c.WinDLL('gdi32', use_last_error=True)
+            gdi.GetPixel.argtypes = [wt.HDC, c.c_int, c.c_int]
+            gdi.GetPixel.restype = wt.DWORD
             handles = []
 
             @c.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
@@ -245,15 +259,146 @@ def run(args):
             user.EnumWindows(enum, 0)
             assert len(handles) == 1, handles
             hwnd = handles[0]
+            presented_checks = []
+
+            def presented_reference():
+                # Slint's MCP snapshot resets partial-render caches itself.
+                # Use it only BEFORE a lifecycle transition, then read actual
+                # desktop pixels strictly inside our own foreground client.
+                shot('before-native-restore')
+                picture = Image.open(output / 'before-native-restore.png').convert('RGB')
+                scale = properties['scaleFactor']
+                grounds = {picture.getpixel((round(x*scale),round(55*scale))) for x in [5,165]}
+                samples = []
+                # Caption hover/focus can legitimately change on close/restore.
+                for y in range(round(55 * properties['scaleFactor']), picture.height - 22, 47):
+                    for x in range(22, picture.width - 22, 53):
+                        patch = picture.crop((x-4, y-4, x+5, y+5))
+                        if all(lo == hi for lo, hi in patch.getextrema()) and picture.getpixel((x,y)) in grounds:
+                            r, g, b = picture.getpixel((x, y))
+                            samples.append((x, y, r | g << 8 | b << 16))
+                assert len(samples) > 40, len(samples)
+                return samples
+
+            def assert_presented(samples, label):
+                # Only our own window is raised; focus stealing is unnecessary
+                # and can be refused by Windows while the user is in Codex.
+                assert user.SetWindowPos(hwnd, wt.HWND(-1), 0, 0, 0, 0, 0x1 | 0x2 | 0x10)
+                origin = wt.POINT(0, 0)
+                assert user.ClientToScreen(hwnd, c.byref(origin))
+                deadline = time.monotonic() + 2
+                try:
+                    while True:
+                        for x, y, _ in samples:
+                            owner = user.WindowFromPoint(wt.POINT(origin.x+x, origin.y+y))
+                            pid = wt.DWORD()
+                            user.GetWindowThreadProcessId(owner, c.byref(pid))
+                            assert pid.value == process.pid, ('Sample is occluded', label, x, y)
+                        dc = user.GetDC(None)
+                        assert dc
+                        try:
+                            bad = [(x, y, expected, gdi.GetPixel(dc, origin.x+x, origin.y+y))
+                                   for x, y, expected in samples
+                                   if gdi.GetPixel(dc, origin.x+x, origin.y+y) != expected]
+                        finally:
+                            user.ReleaseDC(None, dc)
+                        if not bad:
+                            presented_checks.append({'transition': label, 'screenPixels': len(samples)})
+                            return
+                        if time.monotonic() > deadline:
+                            raise AssertionError(('Presented client differs after ' + label, bad[:12], len(bad)))
+                        time.sleep(.04)
+                finally:
+                    user.SetWindowPos(hwnd, wt.HWND(-2), 0, 0, 0, 0, 0x1 | 0x2 | 0x10)
+            user.GetWindowLongPtrW.argtypes=[wt.HWND,c.c_int]
+            user.GetWindowLongPtrW.restype=c.c_ssize_t
+            user.IsZoomed.argtypes=[wt.HWND]
+            # Winit retains caption style bits for Windows snapping. Verify the
+            # actual client inset rather than equating those bits with paint.
+            user.ClientToScreen.argtypes=[wt.HWND,c.POINTER(wt.POINT)]
+            user.GetWindowRect.argtypes=[wt.HWND,c.POINTER(wt.RECT)]
+            bounds=wt.RECT();origin=wt.POINT(0,0)
+            user.GetWindowRect(hwnd,c.byref(bounds));user.ClientToScreen(hwnd,c.byref(origin))
+            assert abs((origin.y-bounds.top)-(origin.x-bounds.left))<=2, 'Native caption inset remains'
             wait_for(lambda: name_field())
             assert abs(name_field()['size']['width'] - 276) < .1
             assert abs(by_id('AppWindow::preset-selector')['size']['width'] - 276) < .1
             navigate('ui.overview', 'overview')
             scroll(10000)
             wait_for(lambda: any(e.get('accessibleLabel') == 'GPU · ' + texts['ui.test_data'] for e in tree()))
-            tabs = [e for e in tree() if any(i.get('id') == 'SegmentedTabs::tab' for i in e['typeNamesAndIds'])]
+            tabs = [by_id('AppWindow::navigation-'+name) for name in ['overview','cooling','lighting']]
             assert len(tabs) == 3
             assert max(e['size']['width'] for e in tabs) - min(e['size']['width'] for e in tabs) < .01
+            mode = scroll_to(texts['ui.performance'], 'Combobox')
+            assert abs(mode['size']['width'] - 276) < .1
+            click(mode)
+            choices = []
+            for menu_window in unpack(client.tool('list_windows', {}))['windowHandles']:
+                menu_root = unpack(client.tool('get_window_properties', {'windowHandle': menu_window}))['rootElementHandle']
+                choices.extend(e.get('accessibleLabel') for e in unpack(client.tool('get_element_tree',
+                    {'elementHandle': menu_root, 'maxElements': 1000}))['elements'] if e.get('accessibleRole') == 'ListItem')
+            for mode_key in ['mode.quiet', 'mode.balanced', 'mode.performance', 'mode.unleashed']:
+                assert texts['mode.default_entry'].replace('{0}',texts[mode_key]) in choices, (mode_key,choices)
+            key('\uf700');key('\n')
+            click(scroll_to(texts['preset.apply_button']))
+            wait_for(lambda: by_id('AppWindow::notification'))
+            assert any(e.get('accessibleLabel') == texts['ui.test_no_write'] for e in tree())
+            popup = by_id('AppWindow::notification')
+            for label in [texts['ui.details'], texts['notice.dismiss']]:
+                control = find(label, 'Button')
+                assert control['absolutePosition'].get('y',0) + control['size']['height'] <= popup['absolutePosition'].get('y',0) + popup['size']['height'], label
+            shot('error-popup')
+            label_click(texts['ui.details'])
+            wait_for(lambda: any(e.get('accessibleRole')=='TextInput' and e.get('accessibleValue')==texts['ui.test_no_write'] for e in tree()))
+            shot('error-details-before-selection')
+            key('\t')
+            key('\x11','Press');key('a');key('\x11','Release')
+            shot('error-details')
+            details = find(texts['notice.details_text'],'TextInput')
+            s = properties['scaleFactor']
+            left = round((details['absolutePosition'].get('x',0)+10)*s)
+            top = round((details['absolutePosition'].get('y',0)+10)*s)
+            box = (left,top,left+round((details['size']['width']-20)*s),top+round((details['size']['height']-20)*s))
+            before = Image.open(output/'error-details-before-selection.png').convert('RGB').crop(box)
+            after = Image.open(output/'error-details.png').convert('RGB').crop(box)
+            changed = sum(1 for pixel in ImageChops.difference(before,after).get_flattened_data() if pixel != (0,0,0))
+            assert changed > 200, ('Keyboard selection did not reach the message',changed)
+            key('\t');key('\t');key('\x10','Press');key('\t');key('\x10','Release');key('\n')
+            wait_for(lambda: not any(e.get('accessibleLabel')==texts['notice.details_text'] for e in tree()))
+            wait_for(lambda: by_id('AppWindow::notification'))
+            key('\n')  # Return focus to the same Details button and reopen.
+            wait_for(lambda: find(texts['notice.details_text'],'TextInput'))
+            key('\x1b')
+            label_click(texts['notice.dismiss'])
+            if args.pending_switch_only:
+                first = 'Pending-Switch'
+                set_value(name_field(),first)
+                click(scroll_to(texts['preset.new']))
+                wait_for(lambda: by_id('ConfirmPrompt::save-button'))
+                click(by_id('ConfirmPrompt::save-button'))
+                wait_for(lambda: name_field().get('accessibleValue','')=='')
+                shot('pending-switch-saved')
+                click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf701');key('\n')
+                wait_for(lambda: name_field().get('accessibleValue')==first)
+                set_value(name_field(),'')
+                click(scroll_to(texts['preset.new']))
+                wait_for(lambda: by_id('ConfirmPrompt::save-button'))
+                click(by_id('ConfirmPrompt::save-button'))
+                wait_for(lambda: any(e.get('accessibleLabel')==texts['preset.name_required'] for e in tree()))
+                assert scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')==first
+                shot('pending-switch-save-failed')
+                label_click(texts['notice.dismiss'])
+                set_value(name_field(),'Repaired')
+                click(by_id('AppWindow::save-preset'))
+                wait_for(lambda: name_field().get('accessibleValue')=='Repaired')
+                assert scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Repaired'
+                shot('pending-switch-retry')
+                (output/'result.json').write_text(json.dumps({'passed':True,'language':args.language,'backend':args.backend,
+                    'binarySha256':hashlib.sha256(args.exe.read_bytes()).hexdigest(),
+                    'saveSwitchWithPendingRecoveryWarning':True,'failedSaveRetainsDraftAndClearsSwitchIntent':True,
+                    'scope':'Isolated UI metadata, no live recovery journal or hardware access'},indent=2),encoding='utf-8')
+                print(output)
+                return
             navigate('ui.overview', 'overview')
             name = 'Scroll-Test Größe Ω'
             set_value(name_field(), name)
@@ -264,6 +409,15 @@ def run(args):
             wait_for(lambda: name_field().get('accessibleValue') == name)
             key('\x11', 'Press'); key('y'); key('\x11', 'Release')
             wait_for(lambda: name_field().get('accessibleValue') == name + 'x')
+            click(by_id('AppWindow::window-maximize'))
+            wait_for(lambda: user.IsZoomed(hwnd))
+            shot('frameless-maximized')
+            click(by_id('AppWindow::window-maximize'))
+            wait_for(lambda: not user.IsZoomed(hwnd))
+            client.tool('click_element',{'elementHandle':by_id('AppWindow::titlebar-move')['handle'],'action':'DoubleClick'})
+            wait_for(lambda: user.IsZoomed(hwnd))
+            client.tool('click_element',{'elementHandle':by_id('AppWindow::titlebar-move')['handle'],'action':'DoubleClick'})
+            wait_for(lambda: not user.IsZoomed(hwnd))
             click(scroll_to(texts['preset.new']))
             wait_for(lambda: find(texts['ui.cancel'], 'Button'))
             key('\x1b')
@@ -282,15 +436,32 @@ def run(args):
             def matches_size(width, height):
                 actual = unpack(client.tool('get_window_properties', {'windowHandle': window}))['size']
                 return abs(actual['width'] - round(width * scale)) <= 2 and abs(actual['height'] - round(height * scale)) <= 2
-            for width, height in [(760, 540), (1140, 740), (720, 500), (960, 660), (760, 540)] * 3:
+            for width, height in [(860, 540), (1140, 740), (820, 500), (960, 660), (860, 540)] * 3:
                 assert user.SetWindowPos(hwnd, None, 0, 0, round(width * scale) + frame_w, round(height * scale) + frame_h, 0x2 | 0x4 | 0x10)
                 wait_for(lambda: matches_size(width, height))
                 assert name_field()['accessibleValue'] == name + 'x'
-                if width == 720:
+                if width == 820:
                     shot('compact-overview')
-            for _ in range(3):
+            samples = presented_reference()
+            assert_presented(samples, 'baseline')
+            click(by_id('AppWindow::window-minimize'))
+            time.sleep(.1);user.ShowWindow(hwnd,9);time.sleep(.1)
+            assert_presented(samples, 'caption-minimize-restore')
+            for cycle in range(3):
                 user.ShowWindow(hwnd, 6); time.sleep(.1); user.ShowWindow(hwnd, 9); time.sleep(.1)
+                assert_presented(samples, 'native-minimize-restore-' + str(cycle))
             assert name_field()['accessibleValue'] == name + 'x'
+            # Save from the switch popup preserves the draft before selection.
+            click(scroll_to(texts['preset.new']))
+            wait_for(lambda: by_id('ConfirmPrompt::save-button'))
+            shot('save-switch-popup')
+            click(by_id('ConfirmPrompt::save-button'))
+            wait_for(lambda: name_field().get('accessibleValue','')=='')
+            assert any(e.get('accessibleLabel')==texts['notice.saved'] for e in tree())
+            shot('saved-popup')
+            click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf701');key('\n')
+            wait_for(lambda: name_field().get('accessibleValue')==name+'x')
+            label_click(texts['notice.dismiss'])
             user.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, c.c_int]
             user.RegisterWindowMessageW.argtypes = [wt.LPCWSTR]
             user.RegisterWindowMessageW.restype = wt.UINT
@@ -308,8 +479,11 @@ def run(args):
             user.EnumWindows(owner_enum, 0)
             assert len(owners) == 1
             activate = user.RegisterWindowMessageW('OmenHubPP.Activate')
-            for _ in range(3):
-                user.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE, respects stored tray behavior
+            samples = presented_reference()
+            assert_presented(samples, 'before-tray')
+            for cycle in range(3):
+                if cycle==0: click(by_id('AppWindow::window-close'))
+                else: user.PostMessageW(hwnd, 0x0010, 0, 0)  # Same close policy for OS requests.
                 wait_for(lambda: not user.IsWindowVisible(hwnd))
                 assert process.poll() is None
                 user.PostMessageW(owners[0], activate, 0, 0)
@@ -317,6 +491,7 @@ def run(args):
                 window = unpack(client.tool('list_windows', {}))['windowHandles'][0]
                 root = unpack(client.tool('get_window_properties', {'windowHandle': window}))['rootElementHandle']
                 wait_for(lambda: name_field()['accessibleValue'] == name + 'x')
+                assert_presented(samples, 'tray-restore-' + str(cycle))
                 handles.clear(); user.EnumWindows(enum, 0)
                 assert len(handles) == 1
                 hwnd = handles[0]
@@ -359,7 +534,7 @@ def run(args):
             time.sleep(.2)
             lighting_to('keyboard-preview')
             shot('lighting-keyboard')
-            assert user.SetWindowPos(hwnd, None, 0, 0, round(760 * scale) + frame_w, round(540 * scale) + frame_h, 0x2 | 0x4 | 0x10)
+            assert user.SetWindowPos(hwnd, None, 0, 0, round(860 * scale) + frame_w, round(540 * scale) + frame_h, 0x2 | 0x4 | 0x10)
             navigate('ui.overview', 'overview')
 
             # Expand/collapse and exact decimal-unit input survive virtualization.
@@ -441,14 +616,14 @@ def run(args):
                 wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == edited)
             final_y = by_id('AppWindow::point-y')['accessibleValue']
             shot('gpu-curve')
-            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(820*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
             curve_to(texts['ui.use_curve'])
             chart=by_id('AppWindow::chart')
-            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=720+.5
+            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=820+.5
             primary=find(texts['ui.use_curve'],'Button')
-            assert primary['absolutePosition'].get('x',0)+primary['size']['width']<=720+.5
+            assert primary['absolutePosition'].get('x',0)+primary['size']['width']<=820+.5
             shot('gpu-curve-minimum')
-            assert user.SetWindowPos(hwnd,None,0,0,round(760*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(860*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
             label_click(texts['ui.back'])
             click(scroll_to(texts['ui.edit_curve']))
             wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == final_y)
@@ -458,14 +633,14 @@ def run(args):
             navigate('ui.cooling', 'cooling')
             click(by_id('AppWindow::edit-fan'))
             wait_for(lambda: by_id('AppWindow::curve-editor'))
-            wait_for(lambda: any(e.get('accessibleLabel') == texts['ui.ready'] for e in tree()))
+            assert not any(e.get('accessibleLabel') == texts['control.working'] for e in tree())
             assert_curve_pixels('fan-curve-connected')
-            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(820*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
             curve_to(texts['ui.save_curve'])
             chart=by_id('AppWindow::chart')
-            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=720+.5
+            assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=820+.5
             shot('fan-curve-minimum')
-            assert user.SetWindowPos(hwnd,None,0,0,round(760*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(860*scale)+frame_w,round(540*scale)+frame_h,0x2|0x4|0x10)
             label_click(texts['ui.back'])
             navigate('settings.title', 'settings')
             shot('settings-final')
@@ -521,14 +696,14 @@ def run(args):
             # Cancel returns keyboard focus to the invoking color field.
             assert user.SetWindowPos(hwnd, None, 0, 0, round(1000 * scale)+frame_w, round(720 * scale)+frame_h, 0x2 | 0x4 | 0x10)
             key(' ')
-            assert user.SetWindowPos(hwnd,None,0,0,round(720*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(820*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
             wait_for(lambda: by_id('ColorPicker::panel'))
             key('\t');key('\t');key('\t')
             focused=by_id('ColorPicker::hex-field');body=by_id('ColorPicker::body')
             assert body['absolutePosition'].get('y',0)<=focused['absolutePosition'].get('y',0)
             assert focused['absolutePosition'].get('y',0)+focused['size']['height']<=body['absolutePosition'].get('y',0)+body['size']['height']+.5
             shot('color-picker-minimum-focus')
-            assert user.SetWindowPos(hwnd,None,0,0,round(1000*scale)+frame_w,round(720*scale)+frame_h,0x2|0x4|0x10)
+            assert user.SetWindowPos(hwnd,None,0,0,round(1000*scale)+frame_w,round(820*scale)+frame_h,0x2|0x4|0x10)
             picker_hex()
             shot('color-picker')
             view = by_id('ColorPicker::body')
@@ -548,7 +723,7 @@ def run(args):
             for _ in range(6): key('\t')
             assert not find('Slate','Button').get('accessibleEnabled',False)
             key('\x1b')
-            assert user.SetWindowPos(hwnd, None, 0, 0, round(760 * scale)+frame_w, round(540 * scale)+frame_h, 0x2 | 0x4 | 0x10)
+            assert user.SetWindowPos(hwnd, None, 0, 0, round(860 * scale)+frame_w, round(540 * scale)+frame_h, 0x2 | 0x4 | 0x10)
             set_value(settings_to('color-background'), '#16191E')
             set_value(settings_to('color-accent'), '#91A2FF')
             shot('appearance-custom')
@@ -629,7 +804,7 @@ def run(args):
             key('\x1b')
             (output / 'result.json').write_text(json.dumps({'passed': True, 'language': args.language, 'backend': args.backend,
                 'binarySha256': hashlib.sha256(args.exe.read_bytes()).hexdigest(),
-                'window': properties, 'wheelEvents': 100, 'resizes': 15, 'minimizeRestoreCycles': 3, 'trayRestoreCycles': 3,
+                'window': properties, 'wheelEvents': 100, 'resizes': 15, 'minimizeRestoreCycles': 4, 'trayRestoreCycles': 3,
                 'nameAndUndo': True, 'actualTabTransitions': True, 'equalNavigationGeometry': True, 'exactMilliwatts': 55125,
                 'curveNumericUndoRedoAndReopen': True, 'curveMouseAndModifierGestures': 4,
                 'aboutLanguageAndVersion': True, 'settingsDraftSaveAndSeparateStartup': True,
@@ -637,6 +812,10 @@ def run(args):
                 'lightingZoneMappingBrightnessResetAndDraftApply': True,
                 'sharedColorPickerHexCancelFocusAndPalette': True, 'uniformFormFieldWidth':276,
                 'wrappedDropdownOpeningKeysAndWheel': True,
+                'framelessNativeStyleCaptionActionsAndDoubleClick': True,
+                'hpModesOnOverviewAndPopupDetails': True, 'saveBeforePresetSwitch': True,
+                'detailsKeyboardSelectionTabTrapAndReturnFocus': True,
+                'presentedPixelsAfterRestore': presented_checks,
                 'scope': 'Isolated UI fixture, no hardware qualification'}, indent=2), encoding='utf-8')
             print(str(output))
         except BaseException:
@@ -660,4 +839,5 @@ if __name__ == '__main__':
     parser.add_argument('--language', choices=['de', 'en'], default='de')
     parser.add_argument('--backend', choices=['winit-software', 'winit-femtovg'], default='winit-software')
     parser.add_argument('--scale')
+    parser.add_argument('--pending-switch-only',action='store_true')
     run(parser.parse_args())

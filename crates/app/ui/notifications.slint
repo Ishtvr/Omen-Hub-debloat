@@ -1,0 +1,128 @@
+import { Theme } from "theme.slint";
+import { ActionButton } from "primitives.slint";
+import { ScrollView, TextEdit } from "std-widgets.slint";
+
+export component NotificationPopup inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+    in property <bool> failed;
+    callback dismissed();
+    callback details();
+    height: min(212px, max(156px, body.preferred-height + 112px));
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: root.failed ? Theme.error : Theme.line;
+    border-radius: 8px;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.title;
+                color: root.failed ? Theme.error : Theme.ink;
+                font-weight: 600;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+
+            ActionButton {
+                control-width: 28px;
+                text: "";
+                accessible-label: Theme.tr("notice.dismiss");
+                clicked => { root.dismissed(); }
+                Image {
+                    width: 14px;
+                    height: 14px;
+                    source: @image-url("icons/close.svg");
+                    colorize: Theme.muted;
+                }
+            }
+        }
+
+        ScrollView {
+            min-height: 0px;
+            content-width: self.visible-width;
+            content-height: body.preferred-height;
+            body := Text {
+                width: parent.width;
+                height: self.preferred-height;
+                text: root.text;
+                color: Theme.ink;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            details-button := ActionButton {
+                text: Theme.tr("ui.details");
+                clicked => { root.details(); }
+            }
+        }
+    }
+
+    public function focus-details() { details-button.focus(); }
+}
+
+export component MessageDialog inherits FocusScope {
+    in property <string> title;
+    in property <string> text;
+    callback closed();
+    init => { close.focus(); }
+    capture-key-pressed(e) => {
+        if e.text == Key.Escape { root.closed(); return accept; }
+        if e.text == Key.Tab || e.text == Key.Backtab {
+            if details.has-focus { close.focus(); } else { details.focus(); }
+            return accept;
+        }
+        return reject;
+    }
+    Rectangle {
+        background: #00000099;
+        TouchArea {
+            scroll-event(e) => { return accept; }
+        }
+    }
+
+    Rectangle {
+        width: min(560px,parent.width - 40px);
+        height: min(360px,parent.height - 40px);
+        background: Theme.surface;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.line;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            Text {
+                text: root.title;
+                color: Theme.ink;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            details := TextEdit {
+                text: root.text;
+                accessible-label: Theme.tr("notice.details_text");
+                read-only: true;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                close := ActionButton {
+                    text: Theme.tr("settings.close");
+                    clicked => { root.closed(); }
+                }
+            }
+        }
+    }
+}

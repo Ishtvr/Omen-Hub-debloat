@@ -191,7 +191,7 @@ fn apply_selection(selection: &Selection) -> Result<serde_json::Value, String> {
 }
 /// Remembers a mode or preset applied by hand: on AC it is the one to return
 /// to after battery use; either way an automatic battery switch is over.
-fn record_manual(selection: &Selection) {
+pub(crate) fn record_manual(selection: &Selection) {
     if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
         if omen_platform::power_status().ac_connected != Some(false) {
             let _ = store.save_ac_selection(selection);
