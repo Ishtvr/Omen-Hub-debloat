@@ -1,8 +1,36 @@
 # Validation
 
-Current software summary updated **16 November 2026**, version **0.10.0-beta.4**, Windows x64 / Rust 1.99.0. Source: preserved fbcac55 color/scroll checkpoint plus the window, notification and manual Apply refinement, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **16 November 2026**, version **0.10.0-beta.5**, Windows x64 / Rust 1.99.0. Source: preserved beta.4 window/color/control work plus the GPU curve opening correction, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## GPU curve opening — 16 November 2026
+
+Normal executable: **15,529,472 bytes**, SHA-256 **79A1BB697A6401F9F543772358F8FF389A96BA3D60EA75802F72B0A618F11AD5**. [Release notes](releases/0.10.0-beta.5.md).
+
+The beta.4 UI failure was reproduced with the actual sequence: check GPU V/F
+curve before its first edit, then click Edit curve. The initial empty UI value
+was passed as a complete target and failed with an anchor/order error. The
+presentation adapter now treats that empty placeholder as a new factory-based
+editor. Nonempty targets retain grid/range validation; the Apply contract still
+rejects an empty curve. No profile or hardware value is silently replaced.
+
+- Format check, **320 unit tests** (162 core / 71 app / 87 platform), **14 Guardian
+  process/file scenarios**, Clippy all targets with `-D warnings` and locked normal
+  release build passed. One manual timing test remains ignored.
+- Focused real UI interaction passed DE/software/1.25, EN/software/1,
+  DE/FemtoVG/1.5 and EN/FemtoVG/2: enable before opening, edit, Back/reopen,
+  Undo/Redo, Use curve and reopen with the same draft. The preset name remains.
+- The complete DE/software sequence also passed resize/minimize/tray, text and
+  curve Undo, dropdowns, lighting drafts and settings process restart.
+- Unit coverage starts from an applied plateau and verifies factory initialization,
+  exact preservation of a saved curve, rejection of a partial nonempty curve and
+  continued rejection of an empty Apply target.
+
+These are isolated fixtures and presentation checks. No live tuning SET, vendor
+service change, driver installation, startup reapproval or new hardware
+qualification is part of this correction. Earlier beta.4 resource measurements
+below are not new measurements of beta.5.
 
 ## Window lifecycle and manual Apply — 16 November 2026
 

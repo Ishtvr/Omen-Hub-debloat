@@ -24,6 +24,14 @@ fn path(points: &[Point], view: Viewport) -> String {
     commands
 }
 
+/// Checking a new curve field does not populate its initial empty UI value.
+/// Start that placeholder at the driver's factory curve; existing nonempty
+/// targets still undergo the editor's complete grid/range validation.
+fn gpu_editor(state: omen_core::vf::VfState, value: Option<&Value>) -> Result<Curve, String> {
+    let value = value.filter(|v| !matches!(v, Value::VfCurve(points) if points.is_empty()));
+    Curve::gpu(state, value)
+}
+
 pub(super) struct Editor {
     pub curve: Curve,
     view: Viewport,
@@ -78,7 +86,7 @@ impl Host {
                 .and_then(|(d, _)| d.included.then(|| d.value.clone()));
             view.curve
                 .clone()
-                .and_then(|state| Curve::gpu(state, value.as_ref()))
+                .and_then(|state| gpu_editor(state, value.as_ref()))
         } else if self.test {
             Curve::fan(Kind::CpuFan, None)
         } else {
@@ -384,6 +392,54 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checking_an_empty_curve_field_opens_factory_without_replacing_saved_targets() {
+        let state = omen_core::vf::VfState {
+            nodes: [(1100, 100), (1300, 100), (1400, 0), (1400, -200)]
+                .iter()
+                .enumerate()
+                .map(|(i, &(mhz, delta))| omen_core::vf::VfNode {
+                    index: i as u16,
+                    voltage_uv: 800000 + i as u32 * 100000,
+                    frequency_khz: mhz * 1000,
+                    delta_khz: delta * 1000,
+                })
+                .collect(),
+            minimum_delta_khz: -400000,
+            maximum_delta_khz: 400000,
+            first_index: 0,
+            last_index: 3,
+        };
+        let empty = Value::VfCurve(vec![]);
+        let editor = gpu_editor(state.clone(), Some(&empty)).unwrap();
+        assert_eq!(
+            editor.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1000, 1200, 1400, 1600]
+        );
+        assert!(editor.value().is_ok());
+        // This presentation fallback never makes an empty Apply target valid.
+        assert!(
+            omen_core::profiles::Setting {
+                feature: Feature::GpuVfCurve,
+                value: empty
+            }
+            .validate()
+            .is_err()
+        );
+        let saved = state.value().unwrap();
+        assert_eq!(
+            gpu_editor(state.clone(), Some(&saved))
+                .unwrap()
+                .value()
+                .unwrap(),
+            saved
+        );
+        let partial = Value::VfCurve(vec![omen_core::profiles::VfPoint {
+            voltage_mv: 800,
+            frequency_mhz: 1100,
+        }]);
+        assert!(gpu_editor(state, Some(&partial)).is_err());
+    }
     #[test]
     fn connected_curve_uses_the_same_viewport_as_markers_and_input() {
         let view = Viewport {

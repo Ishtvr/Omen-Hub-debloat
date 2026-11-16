@@ -329,6 +329,39 @@ def run(args):
             tabs = [by_id('AppWindow::navigation-'+name) for name in ['overview','cooling','lighting']]
             assert len(tabs) == 3
             assert max(e['size']['width'] for e in tabs) - min(e['size']['width'] for e in tabs) < .01
+            if args.gpu_curve_enable_only:
+                draft_name='GPU curve opening'
+                set_value(name_field(),draft_name)
+                curve_label=texts['field.GpuVfCurve']
+                include=scroll_to(curve_label,'Checkbox')
+                assert not include.get('accessibleChecked',False)
+                click(include)
+                assert find(curve_label,'Checkbox').get('accessibleChecked')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::curve-editor'))
+                original=by_id('AppWindow::point-y')['accessibleValue']
+                set_value(by_id('AppWindow::point-y'),str(int(original)+15))
+                label_click(texts['ui.set_point'])
+                label_click(texts['ui.back'])
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==str(int(original)+15))
+                label_click(texts['ui.undo'])
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==original)
+                label_click(texts['ui.redo'])
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==str(int(original)+15))
+                shot('gpu-curve-enabled-before-opening')
+                label_click(texts['ui.use_curve'])
+                wait_for(lambda: name_field().get('accessibleValue')==draft_name)
+                assert scroll_to(curve_label,'Checkbox').get('accessibleChecked')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==str(int(original)+15))
+                shot('gpu-curve-reopened-with-draft')
+                (output/'result.json').write_text(json.dumps({'passed':True,'language':args.language,'backend':args.backend,
+                    'binarySha256':hashlib.sha256(args.exe.read_bytes()).hexdigest(),
+                    'enableEmptyCurveBeforeOpening':True,'draftNameAndCurveHistoryRetained':True,
+                    'scope':'Isolated UI fixture, no profile persistence or hardware access'},indent=2),encoding='utf-8')
+                print(output)
+                return
             mode = scroll_to(texts['ui.performance'], 'Combobox')
             assert abs(mode['size']['width'] - 276) < .1
             click(mode)
@@ -840,4 +873,5 @@ if __name__ == '__main__':
     parser.add_argument('--backend', choices=['winit-software', 'winit-femtovg'], default='winit-software')
     parser.add_argument('--scale')
     parser.add_argument('--pending-switch-only',action='store_true')
+    parser.add_argument('--gpu-curve-enable-only',action='store_true')
     run(parser.parse_args())
