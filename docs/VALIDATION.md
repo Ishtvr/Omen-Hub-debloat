@@ -37,6 +37,39 @@ samples below; foreground CPU is higher, so this does **not** establish a CPU
 efficiency improvement. WM_NULL response and render counters are not direct
 presentation latency. The idle gate still creates no periodic repaint loop.
 
+### Controlled portable handover
+
+After the user saved the open draft, the old GUI and its own reader exited
+through the application's normal shutdown. The tested artifact from source
+**1ccbae3f2f200f0b571fc47d26b2c418a703aeb0** was deployed to
+`D:\Omen Gaming Hub Rewrite\dist\Omen Hub++.exe`; the Desktop link retains that
+target, `--show` and its dist working directory. This deployment record is a
+documentation follow-up; the release tag, package and build-info identify that
+immutable artifact, with the executable hash above.
+
+The normal deployed app additionally passed **three** native minimize/restore
+cycles with **24** owned static client-background samples per cycle, without MCP
+or a snapshot. Its process priority read back **High**. The integration probe
+selects the actual visible client, avoiding Winit's internal event-target window.
+
+With the activated own CPU reader and protected fan helper, a short tray sample
+summed **93,237,248 bytes working set** and **47,132,672 private bytes**, with
+**62.5 ms CPU over 3014 ms** across all three processes. Working-set sums can count
+shared pages more than once; this is not long-run/sleep/reboot acceptance. The
+window was brought back afterwards.
+
+The fan helper retained PID 10400 and its 15 November start time throughout the
+handover. Protected main/fan copies remain **0.9.0-beta.3**; they and the profile
+sign-in task were not replaced or reapproved. The app tray task already points
+to dist. HPOmenCap stayed stopped/disabled; PawnIO stayed running/Manual.
+
+All **47** live data files were compared against the snapshot made after the
+user's Save and before replacement. Only the producing `fan-service-status.json`
+changed; profiles, preferences, startup approval and control/recovery journals
+were preserved. The clean-source portable package passed its 571-file version,
+hash/module/license check. Inno Setup was unavailable, so distribution is a ZIP
+with installation scripts rather than a Setup executable.
+
 ## Color selection and scroll pacing — 16 November 2026
 
 Normal executable: **15,376,896 bytes**, SHA-256 **90EB9AA24C06C97BB8F2279DAE45228F17E9F3B6BD7B33659338214071C19712**. Slint 1.18.1, software default; developer MCP absent. [Release notes](releases/0.10.0-beta.3.md), [extension/quality bar](plans/COLOR_SELECTION_AND_SCROLL.md).
