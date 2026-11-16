@@ -34,6 +34,16 @@ No driver reset/SET, live profile edit, startup reapproval or additional device
 qualification was performed in these fixtures. Resource samples below retain
 their original versions and scopes.
 
+The controlled beta.6 handover deployed the exact executable above from source
+**da2491d26e0b223c94292d9f3e71678b5cb84fab** to the existing dist start path. The
+Desktop link retains that target and `--show`; the new GUI was observed visible.
+All 47 live data files were compared before/after: only the producing fan status
+file changed. Profiles, preferences, startup approval and recovery/control journals
+were preserved. The fan helper retained PID 10400 and its 15 November creation
+time; no protected helper was replaced or controller stopped. The package passed
+the 571-file clean-source/version/hash/module/license check. This paragraph is a
+post-deployment record; the immutable release tag/build-info identify the artifact.
+
 ## GPU curve opening — 16 November 2026
 
 Normal executable: **15,529,472 bytes**, SHA-256 **79A1BB697A6401F9F543772358F8FF389A96BA3D60EA75802F72B0A618F11AD5**. [Release notes](releases/0.10.0-beta.5.md).
