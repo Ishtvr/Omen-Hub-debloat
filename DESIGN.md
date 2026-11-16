@@ -421,6 +421,11 @@ commands gain no new recovery permission from this workflow.
 BIOS/Curve/Max cooling remains separate from custom presets. GPU curves belong to
 preset drafts. Both editors use connected Path geometry, draft/reference legends
 and readable axes. Plot clipping, point markers and input use the same viewport.
+Explicit New (+ or the New preset selector entry) loads a fresh driver snapshot
+and opens its factory GPU curve, with no inherited offset, cached edit or history.
+Startup stays on Overview. Cancel preserves the previous draft; confirmed
+Save/Discard then New follows the same fresh-curve path. The graph receives
+keyboard focus after the selector closes. This resets a preview, never hardware.
 The MSI Afterburner reference remains scoped to curve interaction/composition.
 Curve numeric, history and viewport controls use bounded rows; the chart and primary
 action stay inside the compact horizontal viewport.

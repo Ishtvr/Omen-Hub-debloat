@@ -340,6 +340,7 @@ component Measurement inherits Rectangle {
 }
 
 component CurveCanvas inherits Rectangle {
+    forward-focus: chart-focus;
     background: Theme.surface;
     clip: true;
     min-height: 190px;
@@ -511,6 +512,7 @@ component ConfirmPrompt inherits FocusScope {
 }
 
 export component AppWindow inherits Window {
+    public function focus-curve() { chart.focus(); }
     callback color-picker-closed(int);
     color-picker-closed(target) => {
         if target == 0 { color-background.focus(); }
@@ -1651,7 +1653,7 @@ export component AppWindow inherits Window {
         save-requested => { Workbench.confirm-save(); }
         accepted(value) => {
             Workbench.confirm(value);
-            if Workbench.page < 2 { preset-name.focus(); } else { settings-button.focus(); }
+            if Workbench.curve-open { chart.focus(); } else if Workbench.page < 2 { preset-name.focus(); } else { settings-button.focus(); }
         }
     }
 }

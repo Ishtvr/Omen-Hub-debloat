@@ -45,6 +45,10 @@ def run(args):
         environment['OMEN_UI_TEST_PENDING'] = '1'
     else:
         environment.pop('OMEN_UI_TEST_PENDING',None)
+    if args.new_profile_curve_only:
+        environment['OMEN_UI_TEST_CURVE_APPLIED']='1'
+    else:
+        environment.pop('OMEN_UI_TEST_CURVE_APPLIED',None)
     expected_version = tomllib.loads((REPO / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
     if args.scale:
         environment['SLINT_SCALE_FACTOR'] = args.scale
@@ -197,6 +201,18 @@ def run(args):
             def name_field():
                 return scroll_to(texts['ui.preset_name'], 'TextInput')
 
+            def new_profile_back():
+                wait_for(lambda: by_id('AppWindow::curve-editor'))
+                assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
+                label_click(texts['ui.back'])
+                wait_for(lambda: name_field().get('accessibleValue','')=='')
+
+            def dismiss_notice():
+                for e in tree():
+                    if e.get('accessibleLabel')==texts['notice.dismiss'] and e.get('accessibleRole')=='Button':
+                        click(e)
+                        break
+
             def curve_to(label,role='Button'):
                 view=by_id('AppWindow::curve-editor')
                 def wheel(delta):
@@ -329,6 +345,69 @@ def run(args):
             tabs = [by_id('AppWindow::navigation-'+name) for name in ['overview','cooling','lighting']]
             assert len(tabs) == 3
             assert max(e['size']['width'] for e in tabs) - min(e['size']['width'] for e in tabs) < .01
+            if args.new_profile_curve_only:
+                # Startup remains on Overview. The fake driver carries a live
+                # +60 MHz offset; its factory target at 950 mV is 1900 MHz.
+                assert not any(any(i.get('id')=='AppWindow::curve-editor' for i in e['typeNamesAndIds']) for e in tree())
+                set_value(name_field(),'Saved curve')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
+                set_value(by_id('AppWindow::point-y'),'1915');label_click(texts['ui.set_point'])
+                label_click(texts['ui.use_curve'])
+                click(by_id('AppWindow::save-preset'))
+                wait_for(lambda: scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Saved curve')
+                dismiss_notice()
+
+                def factory_open(capture):
+                    wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
+                    assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
+                    assert not find(texts['ui.redo'],'Button').get('accessibleEnabled',False)
+                    shot(capture)
+                    key('\uf700')  # New editor receives keyboard focus immediately.
+                    wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1901')
+                    key('\x11','Press');key('z');key('\x11','Release')
+                    wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
+                def saved_curve():
+                    click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf729');key('\uf701');key('\n')
+                    wait_for(lambda: name_field().get('accessibleValue')=='Saved curve')
+                    click(scroll_to(texts['ui.edit_curve']))
+                    wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+
+                click(scroll_to(texts['preset.new']))
+                factory_open('new-button-factory')
+                label_click(texts['ui.back'])
+                saved_curve()  # Saved target is retained, unlike the live offset.
+                set_value(by_id('AppWindow::point-y'),'1930');label_click(texts['ui.set_point'])
+                label_click(texts['ui.back'])
+                click(scroll_to(texts['preset.new']))
+                wait_for(lambda: by_id('ConfirmPrompt::save-button'));key('\x1b')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1930')
+                label_click(texts['ui.back'])
+                click(scroll_to(texts['preset.new']))
+                wait_for(lambda: by_id('ConfirmPrompt::confirm-button'))
+                click(by_id('ConfirmPrompt::confirm-button'))
+                factory_open('discard-to-new-factory')
+                label_click(texts['ui.back'])
+                saved_curve()
+                label_click(texts['ui.back'])
+                click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf729');key('\n')
+                factory_open('dropdown-new-factory')
+                label_click(texts['ui.back'])
+                click(scroll_to(texts['preset.new']))
+                factory_open('repeated-new-factory')
+                label_click(texts['ui.use_curve'])
+                set_value(name_field(),'Save then new')
+                click(scroll_to(texts['preset.new']))
+                wait_for(lambda: by_id('ConfirmPrompt::save-button'));click(by_id('ConfirmPrompt::save-button'))
+                factory_open('save-then-new-factory')
+                (output/'result.json').write_text(json.dumps({'passed':True,'language':args.language,'backend':args.backend,
+                    'binarySha256':hashlib.sha256(args.exe.read_bytes()).hexdigest(),
+                    'newButtonAndDropdownOpenFactory':True,'liveOffsetAndCachedEditNotInherited':True,
+                    'cancelRetainsDraftDiscardResetsSaveThenNewWorks':True,'savedCurveRetained':True,
+                    'scope':'Isolated UI fixture with applied driver offset, no hardware writes'},indent=2),encoding='utf-8')
+                print(output)
+                return
             if args.gpu_curve_enable_only:
                 draft_name='GPU curve opening'
                 set_value(name_field(),draft_name)
@@ -409,6 +488,7 @@ def run(args):
                 click(scroll_to(texts['preset.new']))
                 wait_for(lambda: by_id('ConfirmPrompt::save-button'))
                 click(by_id('ConfirmPrompt::save-button'))
+                new_profile_back()
                 wait_for(lambda: name_field().get('accessibleValue','')=='')
                 shot('pending-switch-saved')
                 click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf701');key('\n')
@@ -489,6 +569,7 @@ def run(args):
             wait_for(lambda: by_id('ConfirmPrompt::save-button'))
             shot('save-switch-popup')
             click(by_id('ConfirmPrompt::save-button'))
+            new_profile_back()
             wait_for(lambda: name_field().get('accessibleValue','')=='')
             assert any(e.get('accessibleLabel')==texts['notice.saved'] for e in tree())
             shot('saved-popup')
@@ -603,6 +684,7 @@ def run(args):
             # A real preset switch must refresh reused editors, not just its name.
             name_field()
             click(scroll_to(texts['preset.new']))
+            new_profile_back()
             wait_for(lambda: name_field().get('accessibleValue', '') == '')
             assert scroll_to(slow, 'TextInput')['accessibleValue'] == '55'
             assert not find(slow, 'Checkbox').get('accessibleChecked', False)
@@ -874,4 +956,5 @@ if __name__ == '__main__':
     parser.add_argument('--scale')
     parser.add_argument('--pending-switch-only',action='store_true')
     parser.add_argument('--gpu-curve-enable-only',action='store_true')
+    parser.add_argument('--new-profile-curve-only',action='store_true')
     run(parser.parse_args())

@@ -213,6 +213,7 @@ struct Host {
     visible: Cell<bool>,
     exit_after: Cell<bool>,
     pending_select: Cell<Option<i32>>,
+    new_curve_on_load: Cell<bool>,
     settings_loaded: Cell<bool>,
     loading_presets: Cell<bool>,
     appearance_draft: RefCell<omen_core::appearance::Appearance>,
@@ -428,7 +429,11 @@ impl Host {
             false,
         );
         if self.preset.send(request).is_err() {
-            if self.preset_activity.take() == Some(notices::PresetActivity::Save) {
+            let activity = self.preset_activity.take();
+            if activity == Some(notices::PresetActivity::Load) {
+                self.new_curve_on_load.set(false);
+            }
+            if activity == Some(notices::PresetActivity::Save) {
                 self.abort_saved_selection();
             }
             self.busy(false);
@@ -676,14 +681,24 @@ impl Host {
         let id = usize::try_from(index - 1)
             .ok()
             .and_then(|i| self.profiles.borrow().get(i).map(|p| p.id.clone()));
+        self.new_curve_on_load.set(index == 0);
         if self.test {
             let view = {
                 let profiles = self.profiles.borrow();
                 test_view(id.as_deref(), &profiles)
             };
-            self.display(view, t("ui.test_mode"));
+            self.loaded_preset(view, t("ui.test_mode"));
         } else {
             self.send_preset(preset_ui::Request::Load(id));
+        }
+    }
+    fn loaded_preset(&self, view: preset_ui::View, message: &str) {
+        // Only an explicit New selection opens the editor. Startup and ordinary
+        // profile refreshes keep the telemetry-first dashboard.
+        let open_factory = self.new_curve_on_load.replace(false) && view.selected.is_none();
+        self.display(view, message);
+        if open_factory {
+            self.open_new_gpu_curve();
         }
     }
     fn save_data(&self) -> Result<preset_ui::SaveData, String> {
@@ -1007,7 +1022,11 @@ impl Host {
                     preset_ui::Update::View(view, status) => {
                         let activity = self.preset_activity.take();
                         self.busy(false);
-                        self.display(*view, &status);
+                        if activity == Some(notices::PresetActivity::Load) {
+                            self.loaded_preset(*view, &status);
+                        } else {
+                            self.display(*view, &status);
+                        }
                         if activity == Some(notices::PresetActivity::Save) {
                             self.saved(&status);
                             self.follow_saved_selection();
@@ -1016,7 +1035,11 @@ impl Host {
                         }
                     }
                     preset_ui::Update::Error(e) => {
-                        if self.preset_activity.take() == Some(notices::PresetActivity::Save) {
+                        let activity = self.preset_activity.take();
+                        if activity == Some(notices::PresetActivity::Load) {
+                            self.new_curve_on_load.set(false);
+                        }
+                        if activity == Some(notices::PresetActivity::Save) {
                             self.abort_saved_selection();
                         }
                         self.busy(false);
@@ -1571,6 +1594,7 @@ pub fn run(
         visible: Cell::new(!start_in_tray),
         exit_after: Cell::new(false),
         pending_select: Cell::new(None),
+        new_curve_on_load: Cell::new(false),
         settings_loaded: Cell::new(false),
         loading_presets: Cell::new(false),
         appearance_draft: Default::default(),
@@ -1969,6 +1993,11 @@ pub fn entry(page: i32, selected: Option<String>) -> Result<(), String> {
 }
 
 fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::View {
+    let applied_delta = if std::env::var_os("OMEN_UI_TEST_CURVE_APPLIED").is_some() {
+        60000
+    } else {
+        0
+    };
     preset_ui::View {
         profiles: profiles.to_vec(),
         selected: id.and_then(|id| profiles.iter().find(|p| p.id == id).cloned()),
@@ -1987,8 +2016,8 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
                 .map(|i| omen_core::vf::VfNode {
                     index: i,
                     voltage_uv: 450000 + u32::from(i) * 10000,
-                    frequency_khz: 400000 + u32::from(i) * 30000,
-                    delta_khz: 0,
+                    frequency_khz: 400000 + u32::from(i) * 30000 + applied_delta as u32,
+                    delta_khz: applied_delta,
                 })
                 .collect(),
             minimum_delta_khz: -1000000,

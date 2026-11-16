@@ -1,8 +1,38 @@
 # Validation
 
-Current software summary updated **16 November 2026**, version **0.10.0-beta.5**, Windows x64 / Rust 1.99.0. Source: preserved beta.4 window/color/control work plus the GPU curve opening correction, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **16 November 2026**, version **0.10.0-beta.6**, Windows x64 / Rust 1.99.0. Source: preserved beta.5 work plus explicit New preset factory-curve initialization, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## New preset factory curve — 16 November 2026
+
+Normal executable: **15,533,056 bytes**, SHA-256 **8C20894C84706CFA168097923EFDD515F88FD1D8C32DA2FB18CA1E691C1500AC**. [Release notes](releases/0.10.0-beta.6.md).
+
+Explicit New (+ or the selector entry) loads a fresh driver snapshot, discards
+the accepted old editing session and opens the factory GPU curve without any
+inherited target, offset or history. Cancel preserves the old session. Saving
+before the switch and discarding before the switch both follow the same load
+completion path. Startup/ordinary refresh does not open a chart automatically.
+The graph receives focus after the selector/prompt finishes its own callback.
+These are preview operations; hardware changes remain behind explicit Apply.
+
+- Format check, **320 unit tests** (162 core / 71 app / 87 platform), **14 Guardian
+  process/file scenarios**, all-target Clippy with `-D warnings` and locked normal
+  release build passed. One manual timing test remains ignored.
+- Focused UI tests passed DE/software/1.25, EN/software/1, DE/FemtoVG/1.5 and
+  EN/FemtoVG/2. The fake driver carries an applied +60 MHz offset, the saved curve
+  another target and a cached edit another value. Every explicit New starts at
+  1900 MHz at the 950 mV fixture anchor, without inheriting any of them.
+- The same sequences cover New button, New selector, repeated New, canceled
+  switching with retained edits, approved discard, Save then New, retained saved
+  targets and immediate arrow/Undo keyboard input. Fresh history is checked
+  before the keyboard probe.
+- Complete DE/software interaction and the focused pending-recovery Save-switch
+  regressions in both languages passed with the new flow.
+
+No driver reset/SET, live profile edit, startup reapproval or additional device
+qualification was performed in these fixtures. Resource samples below retain
+their original versions and scopes.
 
 ## GPU curve opening — 16 November 2026
 

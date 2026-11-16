@@ -66,6 +66,21 @@ impl Host {
                 .as_ref()
                 .is_some_and(|e| e.curve.kind != Kind::Gpu && changed(&e.curve))
     }
+    pub(super) fn open_new_gpu_curve(&self) {
+        // New profile means a fresh driver snapshot's factory curve, even if
+        // another profile or a cached editor previously held an offset/plateau.
+        *self.gpu_draft.borrow_mut() = None;
+        let result = self
+            .view
+            .borrow()
+            .as_ref()
+            .map(|v| v.curve.clone().and_then(|state| gpu_editor(state, None)));
+        match result {
+            Some(Ok(curve)) => self.open_loaded_curve(curve),
+            Some(Err(error)) => self.status(&crate::i18n::error_message(&error), true),
+            None => self.status(t("preset.still_loading"), true),
+        }
+    }
     pub(super) fn open_curve(&self, gpu: bool) {
         let cached = if gpu {
             self.gpu_draft.borrow().clone()
@@ -124,6 +139,17 @@ impl Host {
         }
         self.draw_curve();
         self.status(t("ui.ready"), false);
+        // The selector may restore its own focus after its selected callback.
+        // Transfer focus once that callback/popup closure has completed.
+        let weak = self.window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade()
+                && w.global::<Workbench>().get_curve_open()
+                && w.global::<Workbench>().get_confirm_kind() == 0
+            {
+                w.invoke_focus_curve();
+            }
+        });
     }
     pub(super) fn draw_curve(&self) {
         let borrowed = self.curve.borrow();

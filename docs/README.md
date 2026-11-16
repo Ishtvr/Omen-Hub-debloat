@@ -1,6 +1,6 @@
 # Documentation
 
-Documentation structure refreshed **29 October 2026**; latest local software checks **16 November 2026**, `0.10.0-beta.5`, preserving the earlier Slint/window/control work and correcting initial GPU curve opening. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
+Documentation structure refreshed **29 October 2026**; latest local software checks **16 November 2026**, `0.10.0-beta.6`, preserving earlier work and opening a fresh driver-factory GPU curve when explicitly creating a new preset. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
 
 ## Start here
 

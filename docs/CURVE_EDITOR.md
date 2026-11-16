@@ -1,14 +1,15 @@
 # Curve editor
 
-The native GDI editor shares editing rules across GPU V/F and fan curves. It contains no hardware SET action. The user-provided MSI Afterburner view is an interaction reference; no MSI executable, driver, source or artwork is used by the runtime.
+The normal Rust/Slint editor and the legacy native GDI entry points share GPU V/F and fan editing rules. The GPU preset editor contains no hardware SET action. The user-provided MSI Afterburner view is an interaction reference; no MSI executable, driver, source or artwork is used by the runtime.
 
 ## Entry points and saving
 
-- **Performance profiles → GPU → GPU performance curve → Edit** opens an in-memory chart, including new unnamed or unsaved presets. Accept returns the draft; Cancel discards only that chart session. Save in the parent persists it. Other unsaved fields stay intact.
+- **Overview → + / New preset** opens a fresh driver-factory GPU curve immediately. Active driver offsets, a previous profile and cached draft/history are not inherited. Startup itself stays on Overview. Canceling an unsaved-change prompt preserves the old draft; Save/Discard followed by New opens the same fresh factory curve.
+- **Overview → NVIDIA GPU → GPU performance curve → Edit curve** opens the current preset's in-memory chart. Use curve returns it to the preset draft; Back retains its editing session. Save in the parent persists the profile. Hardware changes require explicit profile Apply. Existing saved curves and unrelated draft fields are retained.
 - `gpu-curve-ui [id]` opens the standalone saved GPU editor; `curve-ui [id]` remains the combined legacy entry.
 - **Fan curve** / `fan-ui` edits the active CPU/GPU curve for the separate helper. Saving a fan curve does not prove the helper has applied it.
 
-The preset chart shows a compact Cancel/Accept/Undo/Shortcuts action row; numeric editing, redo and zoom remain accessible from keyboard/mouse. Other views offer chart and profile/value layouts.
+The Slint work area provides Back/Use curve, numeric editing, Undo/Redo and viewport tools. The graph takes keyboard focus when it opens. Legacy standalone views retain their own Cancel/Accept action rows.
 
 Square nodes are the draft; the dotted line is the draft loaded at the start of this editing session. It can be a saved profile, not necessarily current firmware. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
 

@@ -338,7 +338,7 @@
         "kind": "custom",
         "refersTo": "curve-canvas",
         "source": "crates/app/ui/app.slint:CurveCanvas",
-        "description": "Actual connected Path for accent draft and muted opening reference, with a textual legend.",
+        "description": "Actual connected Path for accent draft and muted opening reference, with a textual legend. Explicit New opens a fresh driver-factory GPU curve without inheriting an offset, cached edit or history; startup stays on Overview. Cancel preserves the previous draft. Keyboard focus transfers after the selector closes. This is a preview reset, not a hardware write.",
         "states": "Axes are outside the clipped plot; markers and pointer input share plot coordinates in software and femtovg rendering."
       },
       {
