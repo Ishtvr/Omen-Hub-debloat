@@ -1,5 +1,6 @@
 //! Application preferences and the "Start with Windows" logon task. No hardware/startup
 //! approval API is reachable through this module.
+use omen_core::appearance::Appearance;
 use omen_core::{app_settings::AppSettings, message::msg};
 use omen_platform::profile_store::ProfileStore;
 use std::path::Path;
@@ -7,11 +8,12 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub options: AppSettings,
+    pub appearance: Appearance,
     pub run_entry: Option<String>,
 }
 trait Backend {
     fn read(&self) -> Result<Snapshot, String>;
-    fn options(&mut self, options: &AppSettings) -> Result<(), String>;
+    fn options(&mut self, options: &AppSettings, appearance: &Appearance) -> Result<(), String>;
     fn run_entry(&mut self, entry: Option<&str>) -> Result<(), String>;
 }
 struct Store(ProfileStore);
@@ -23,11 +25,12 @@ impl Backend for Store {
             .is_some_and(|entry| entry.trim_end().ends_with(" --tray"));
         Ok(Snapshot {
             options: self.0.app_settings_with_start_default(legacy_tray)?,
+            appearance: self.0.ui_appearance()?,
             run_entry,
         })
     }
-    fn options(&mut self, options: &AppSettings) -> Result<(), String> {
-        self.0.save_app_settings(options)
+    fn options(&mut self, options: &AppSettings, appearance: &Appearance) -> Result<(), String> {
+        persist_options(&self.0, options, appearance)
     }
     fn run_entry(&mut self, entry: Option<&str>) -> Result<(), String> {
         crate::autostart::set_entry(entry)
@@ -39,12 +42,14 @@ pub fn load() -> Result<Snapshot, String> {
 pub fn save(
     baseline: &Snapshot,
     options: &AppSettings,
+    appearance: &Appearance,
     autostart: bool,
 ) -> Result<Snapshot, String> {
     commit(
         &mut Store(ProfileStore::user_data()?),
         baseline,
         options,
+        appearance,
         autostart,
         &std::env::current_exe().map_err(|e| e.to_string())?,
     )
@@ -53,10 +58,12 @@ fn commit(
     backend: &mut impl Backend,
     baseline: &Snapshot,
     options: &AppSettings,
+    appearance: &Appearance,
     autostart: bool,
     executable: &Path,
 ) -> Result<Snapshot, String> {
     options.validate()?;
+    appearance.validate()?;
     if backend.read()? != *baseline {
         return Err(msg("settings.changed_elsewhere", &[]));
     }
@@ -72,13 +79,14 @@ fn commit(
     };
     let target = Snapshot {
         options: options.clone(),
+        appearance: appearance.clone(),
         run_entry,
     };
     let changed_run = target.run_entry != baseline.run_entry;
     if changed_run {
         backend.run_entry(target.run_entry.as_deref())?;
     }
-    if let Err(error) = backend.options(options) {
+    if let Err(error) = backend.options(options, appearance) {
         if changed_run {
             let current = backend.read()?;
             if current.run_entry != target.run_entry {
@@ -96,9 +104,65 @@ fn commit(
     Ok(target)
 }
 
+/// Each file is replaced atomically. Roll the cosmetic file back on a failed
+/// options write; do not overwrite a concurrent editor. Older protected helpers
+/// continue to read their unchanged app-settings schema and ignore ui-settings.
+pub(crate) fn persist_options(
+    store: &ProfileStore,
+    options: &AppSettings,
+    appearance: &Appearance,
+) -> Result<(), String> {
+    options.validate()?;
+    appearance.validate()?;
+    let before = store.ui_appearance()?;
+    let changed = before != *appearance;
+    if changed {
+        store.save_ui_appearance(appearance)?;
+    }
+    if let Err(error) = store.save_app_settings(options) {
+        if changed {
+            if store.ui_appearance()? != *appearance {
+                return Err(msg(
+                    "settings.rollback_failed",
+                    &[&error, &msg("settings.changed_elsewhere", &[])],
+                ));
+            }
+            if let Err(restore) = store.save_ui_appearance(&before) {
+                return Err(msg("settings.rollback_failed", &[&error, &restore]));
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_global_write_restores_cosmetic_file_without_touching_startup() {
+        let root = std::env::temp_dir().join(format!(
+            "omen-settings-rollback-{}",
+            crate::native_ui::token()
+        ));
+        let store = ProfileStore::at(root.clone()).unwrap();
+        let before = Appearance::default();
+        store.save_ui_appearance(&before).unwrap();
+        let appearance = Appearance {
+            palette: omen_core::appearance::PalettePreset::Vesper,
+            ..Default::default()
+        };
+        // This test owns the unique temp directory; a directory at the file
+        // destination deterministically fails atomic replacement.
+        std::fs::create_dir(root.join("app-settings.json")).unwrap();
+        assert!(persist_options(&store, &AppSettings::default(), &appearance).is_err());
+        assert_eq!(store.ui_appearance().unwrap(), before);
+        assert!(!root.join("startup.json").exists());
+        std::fs::remove_dir(root.join("app-settings.json")).unwrap();
+        std::fs::remove_file(root.join("ui-settings.json")).unwrap();
+        std::fs::remove_dir(root.join("profiles")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn saved_preferences_survive_reopen_without_granting_preset_startup() {
         struct Files {
@@ -109,11 +173,16 @@ mod tests {
             fn read(&self) -> Result<Snapshot, String> {
                 Ok(Snapshot {
                     options: self.store.app_settings()?,
+                    appearance: self.store.ui_appearance()?,
                     run_entry: self.entry.clone(),
                 })
             }
-            fn options(&mut self, options: &AppSettings) -> Result<(), String> {
-                self.store.save_app_settings(options)
+            fn options(
+                &mut self,
+                options: &AppSettings,
+                appearance: &Appearance,
+            ) -> Result<(), String> {
+                persist_options(&self.store, options, appearance)
             }
             fn run_entry(&mut self, entry: Option<&str>) -> Result<(), String> {
                 self.entry = entry.map(str::to_owned);
@@ -136,10 +205,19 @@ mod tests {
             hold_preset: true,
             ..Default::default()
         };
+        let appearance = omen_core::appearance::Appearance {
+            palette: omen_core::appearance::PalettePreset::Custom,
+            custom: omen_core::appearance::Colors {
+                background: "#16191E".into(),
+                foreground: "#ECEEF2".into(),
+                accent: "#9CA8FF".into(),
+            },
+        };
         commit(
             &mut files,
             &baseline,
             &options,
+            &appearance,
             true,
             Path::new("C:\\Omen\\app.exe"),
         )
@@ -147,12 +225,21 @@ mod tests {
         drop(files);
         let reopened = ProfileStore::at(root.clone()).unwrap();
         assert_eq!(reopened.app_settings().unwrap(), options);
+        assert_eq!(reopened.ui_appearance().unwrap(), appearance);
+        let legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("app-settings.json")).unwrap())
+                .unwrap();
+        assert!(
+            legacy.get("appearance").is_none(),
+            "Older protected helpers must still parse app-settings"
+        );
         assert_eq!(
             serde_json::to_value(reopened.startup().unwrap()).unwrap(),
             serde_json::to_value(approval).unwrap()
         );
         // Only this test's uniquely created temporary directory is removed.
         std::fs::remove_file(root.join("app-settings.json")).unwrap();
+        std::fs::remove_file(root.join("ui-settings.json")).unwrap();
         std::fs::remove_dir(root.join("profiles")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
@@ -165,11 +252,12 @@ mod tests {
         fn read(&self) -> Result<Snapshot, String> {
             Ok(self.state.clone())
         }
-        fn options(&mut self, value: &AppSettings) -> Result<(), String> {
+        fn options(&mut self, value: &AppSettings, appearance: &Appearance) -> Result<(), String> {
             if self.fail_save {
                 return Err("disk failure".into());
             }
             self.state.options = value.clone();
+            self.state.appearance = appearance.clone();
             Ok(())
         }
         fn run_entry(&mut self, value: Option<&str>) -> Result<(), String> {
@@ -182,6 +270,7 @@ mod tests {
     fn language_change_keeps_the_existing_startup_path() {
         let baseline = Snapshot {
             options: Default::default(),
+            appearance: Default::default(),
             run_entry: Some(r#""D:\dist\Omen Hub++.exe" --tray"#.into()),
         };
         let mut backend = Fake {
@@ -195,6 +284,7 @@ mod tests {
             &mut backend,
             &baseline,
             &options,
+            &baseline.appearance,
             true,
             Path::new("test.exe"),
         )
@@ -207,6 +297,7 @@ mod tests {
     fn failed_settings_save_restores_the_previous_run_entry() {
         let baseline = Snapshot {
             options: Default::default(),
+            appearance: Default::default(),
             run_entry: None,
         };
         let mut backend = Fake {
@@ -219,6 +310,7 @@ mod tests {
                 &mut backend,
                 &baseline,
                 &baseline.options,
+                &baseline.appearance,
                 true,
                 Path::new("test.exe")
             )
@@ -230,6 +322,7 @@ mod tests {
     fn stale_settings_window_cannot_overwrite_another_change() {
         let baseline = Snapshot {
             options: Default::default(),
+            appearance: Default::default(),
             run_entry: None,
         };
         let mut backend = Fake {
@@ -243,6 +336,7 @@ mod tests {
                 &mut backend,
                 &baseline,
                 &baseline.options,
+                &baseline.appearance,
                 true,
                 Path::new("test.exe")
             )

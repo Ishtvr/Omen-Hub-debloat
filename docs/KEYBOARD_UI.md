@@ -1,27 +1,53 @@
 # Keyboard lighting
 
-Open **Lighting / Beleuchtung** or `omen-hub-pp.exe keyboard-ui`. This is a separate elevated native window; the dashboard/tray remain unelevated. It shows four clickable zones including the numpad, **On/Off**, and a short status line.
+Open **Lighting / Beleuchtung** in the main Rust/Slint window. The keyboard-ui
+command selects that same work area. An original schematic keyboard supports
+QWERTZ/QWERTY display and clicking keys to select their hardware group. Keyboard
+users select the same groups with the three zone buttons.
 
-1. On enables the stored static zone colors. Off disables lighting while retaining RGB values.
-2. With lighting on, click a zone or reach it by keyboard to open the native Windows color picker, initialized from its read color.
-3. Confirm to apply and fully read back the change. Cancel writes nothing. No separate Save/Apply button is needed.
+- **WASD** selects wire zone 3.
+- **Rest** links left and middle, wire zones 2 and 1. Different existing colors
+  show as Mixed; merely selecting the group changes nothing.
+- **NUM pad & right** selects wire zone 0. The right hardware area also includes
+  adjacent main/arrow keys. It cannot be controlled as numpad-only or per-key RGB.
 
-The keyboard picture represents four zones, not individual keys. Off disables zone editing. Invalid/external state requires a fresh read; a rejected action is not retried automatically.
+Choose a color with the native picker or #RRGGBB. Brightness adjusts the selected
+color's RGB value from 0 to 100%; it does not write an unqualified master-brightness
+byte. Changing brightness repeatedly uses the retained full-color base rather
+than compounding rounding. Mixed Rest colors retain their separate hues when
+only brightness changes.
+
+Color, brightness and On/Off are **drafts**. The keyboard previews them; **Apply**
+writes through the existing guarded transaction and reads back the complete state.
+Canceling the picker changes nothing. Reset restores the last read draft.
+Unsaved lighting survives navigation/tray return and is covered by exit confirmation.
+Refresh is available after resetting an edited draft, so it cannot silently discard edits.
 
 ## Contract and recovery
 
-Writable support is **HP 8E35/F.13, capability `[1,0,0,0]`, FourZoneWithNumpad**. On this device, reading the BIOS provider also requires administrator access. The own Rust path uses Windows BIOS-WMI, without loading HP RPC/SDK wrappers.
+Writable support remains HP **8E35/F.13**, capability **[1,0,0,0]**, classic four-zone
+keyboard with numpad. The existing direct BIOS-WMI transport loads no HP SDK/RPC wrapper.
+Colors replace only bytes 25–36 of the retained 128-byte image. Mode values remain
+**0xE4 = static On** and **0x64 = Off**; the entire rest of the brightness/mode image
+and all reserved bytes are preserved.
 
-Colors replace only bytes 25–36 of the complete 128-byte state. The supported mode bytes are **0xE4 = static On** and **0x64 = Off**. Legacy `firmware_default` is retained as a serialization alias for Off on this model, not a third mode or percentage brightness.
-
-`DirectLighting` uses the typed transaction engine with its own `%USERPROFILE%\.omen-hub-pp\keyboard-control` store. Complete originals precede SET; capture/readback includes capability, colors, mode and reserved bytes. Fresh expected-state checks reject foreign changes. Pending performance recovery blocks new direct lighting writes; the shared lease serializes own writers only.
-
-Reopening can recover a valid unresolved own lighting transaction before reading a new state. Closing waits for an in-flight hardware operation; it does not kill the writing worker. The direct window does not replace the performance journal or sign-in selection. [Recovery](RECOVERY.md), [protocol details](KEYBOARD_LIGHTING.md).
+DirectLighting uses its own keyboard-control store. Complete originals precede
+SET; fresh expected-state checks reject outside changes, and readback/restore include
+capability, colors, mode and reserved bytes. Pending performance recovery blocks
+new direct lighting writes. Closing waits for an active own operation and never
+terminates a cooling helper.
 
 ## Evidence and limits
 
-On 15 October, the real UI check verified On/Off, prefilled picker, Cancel without SET, a red left-zone target with other zones preserved and complete original restore. Color evidence was full firmware readback, not observed visual color acceptance. A separate user-requested four-second **On → Off → On** probe was visibly confirmed and restored.
+The manufacturer UI assembly 1101.2609.3.0 maps indices 0/1/2/3 to right/middle/left/WASD.
+Its Khalilah classic-with-numpad path selects the corresponding four-zone layout.
+This corrects the old UI's misleading left/middle/right/numpad labels; saved RGB
+arrays and recovery images are not reordered. The new diagram is schematic, not a
+claim that every individual key has an independent LED or a newly measured boundary.
 
-The current controller permits sign-in authorization for lighting settings in a supported applied profile. That permission does **not** qualify actual reboot/resume, Fn-F4, lock/unlock, lasting ownership or operation without HP writers. Brightness percentages, animations, per-key control and other keyboard variants remain unsupported.
-
-Native synthetic renders test On/Off layouts without UAC or firmware reads; real `check-lighting-ui.ps1` tests deliberately write/restore lighting. The two are distinct. Recorded client sizes were 984×551 and 744×441 at 96 DPI; titlebars, color-dialog presentation, broader DPI/high contrast and assistive technology remain separate work. [Validation](VALIDATION.md), [hardware matrix](HARDWARE_MATRIX.md).
+The existing 15 October device trials qualified static RGB bytes and visible On/Off
+with original restore. The 16 November work adds pure mapping/RGB-brightness tests
+and isolated real-UI draft interactions. It performs no new physical lighting write.
+General firmware-brightness bytes, animation, per-key controls, exact visual zone
+boundaries and HP-independent hotkey/reboot/resume lifetime remain unqualified.
+[Protocol](KEYBOARD_LIGHTING.md) · [Validation](VALIDATION.md).

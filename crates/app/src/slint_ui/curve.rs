@@ -5,6 +5,25 @@ use omen_core::{
     curve_input::{self, Key, Modifiers},
 };
 
+/// An actual path, rather than rotated rectangles (rotation is unavailable in
+/// Slint's software renderer). One fixed viewbox scales with the input plot.
+fn path(points: &[Point], view: Viewport) -> String {
+    use std::fmt::Write;
+    let sx = (view.hi.x - view.lo.x).max(1) as f64;
+    let sy = (view.hi.y - view.lo.y).max(1) as f64;
+    let mut commands = String::with_capacity(points.len() * 26);
+    for (i, point) in points.iter().enumerate() {
+        let x = f64::from(point.x - view.lo.x) * 1000.0 / sx;
+        let y = 1000.0 - f64::from(point.y - view.lo.y) * 1000.0 / sy;
+        let _ = write!(
+            commands,
+            "{} {x:.3} {y:.3} ",
+            if i == 0 { 'M' } else { 'L' }
+        );
+    }
+    commands
+}
+
 pub(super) struct Editor {
     pub curve: Curve,
     view: Viewport,
@@ -96,6 +115,7 @@ impl Host {
             );
         }
         self.draw_curve();
+        self.status(t("ui.ready"), false);
     }
     pub(super) fn draw_curve(&self) {
         let borrowed = self.curve.borrow();
@@ -108,6 +128,8 @@ impl Host {
         let d = w.global::<Workbench>();
         let curve = &editor.curve;
         let v = editor.view;
+        d.set_curve_path(path(&curve.points, v).into());
+        d.set_reference_path(path(curve.reference(), v).into());
         let sx = (v.hi.x - v.lo.x).max(1) as f32;
         let sy = (v.hi.y - v.lo.y).max(1) as f32;
         let nodes = curve
@@ -356,5 +378,30 @@ impl Host {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn connected_curve_uses_the_same_viewport_as_markers_and_input() {
+        let view = Viewport {
+            lo: Point { x: 40, y: 0 },
+            hi: Point { x: 100, y: 100 },
+        };
+        let points = [
+            Point { x: 40, y: 20 },
+            Point { x: 70, y: 60 },
+            Point { x: 100, y: 100 },
+        ];
+        assert_eq!(
+            path(&points, view),
+            "M 0.000 800.000 L 500.000 400.000 L 1000.000 0.000 "
+        );
+        assert_eq!(points[1], Point { x: 70, y: 60 });
+        // Zoomed-out points retain their coordinates for plot clipping, rather
+        // than being clamped into a misleading horizontal or vertical segment.
+        assert!(path(&[Point { x: 10, y: 120 }], view).starts_with("M -500.000 -200.000"));
     }
 }

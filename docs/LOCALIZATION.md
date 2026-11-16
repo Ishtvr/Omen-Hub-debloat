@@ -59,3 +59,5 @@ New copy must distinguish measured state, selected preference, draft, unavailabl
 Slint resolves UI text through the same process language catalog as CLI and fixed UAC commands. Field labels, choices and explanations keep stable feature keys. Settings language changes are saved through the existing transaction and take effect after restart; open views and About keep the current language until then. Built-in Slint attribution and Windows consent/color-picker resources retain their own branding/system language.
 
 Regression checks cover Slint key references, exact localized milliwatts, Unicode name editing/Undo and real German/English interaction. A translated display value never changes the stored integer unit or grants a startup permission.
+
+The 0.10.0-beta.2 catalogs contain 682 matching keys, including appearance, clipboard actions, keyboard groups and draft/brightness guidance. Appearance changes do not change process language; ui-settings.json is independent of startup/control preferences.

@@ -1,428 +1,387 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-14T12:03:19+02:00",
+  "generatedAt": "2026-11-16T13:17:22Z",
   "title": "Design System: Omen Hub++",
   "extensions": {
+    "platform": {
+      "kind": "native-windows",
+      "renderer": "Slint 1.18.1",
+      "visualAuthority": "docs/plans/APPEARANCE_REFINEMENT.md",
+      "tokenSources": [
+        "crates/core/src/appearance.rs",
+        "crates/app/ui/theme.slint",
+        "crates/app/ui/primitives.slint",
+        "crates/app/ui/controls.slint",
+        "crates/app/ui/app.slint",
+        "crates/app/ui/keyboard.slint"
+      ],
+      "componentPreviewPolicy": "Runtime components are native Slint. This sidecar records source and behavior; it contains no fabricated HTML/CSS component assets.",
+      "units": "Slint logical pixels. Client captures and Slint scale overrides do not establish physical Windows DPI transitions."
+    },
     "colorMeta": {
-      "background": {
-        "role": "neutral",
-        "displayName": "Charcoal ground",
-        "tonalRamp": [
-          "oklch(15% 0.0069 258.37)",
-          "oklch(26% 0.0069 258.37)",
-          "oklch(38% 0.0069 258.37)",
-          "oklch(49% 0.0069 258.37)",
-          "oklch(61% 0.0069 258.37)",
-          "oklch(72% 0.0069 258.37)",
-          "oklch(84% 0.0069 258.37)",
-          "oklch(95% 0.0069 258.37)"
-        ]
+      "accent": {
+        "role": "primary",
+        "displayName": "Slate indigo action",
+        "purpose": "Primary action, focus, draft path and selected keyboard group."
       },
-      "panel": {
+      "on-accent": {
         "role": "neutral",
-        "displayName": "Sensor surface",
-        "tonalRamp": [
-          "oklch(15% 0.0114 254.07)",
-          "oklch(26% 0.0114 254.07)",
-          "oklch(38% 0.0114 254.07)",
-          "oklch(49% 0.0114 254.07)",
-          "oklch(61% 0.0114 254.07)",
-          "oklch(72% 0.0114 254.07)",
-          "oklch(84% 0.0114 254.07)",
-          "oklch(95% 0.0114 254.07)"
-        ]
+        "displayName": "Contrast-selected action ink"
       },
-      "field": {
+      "canvas": {
         "role": "neutral",
-        "displayName": "Field slate",
-        "tonalRamp": [
-          "oklch(15% 0.0177 251.89)",
-          "oklch(26% 0.0177 251.89)",
-          "oklch(38% 0.0177 251.89)",
-          "oklch(49% 0.0177 251.89)",
-          "oklch(61% 0.0177 251.89)",
-          "oklch(72% 0.0177 251.89)",
-          "oklch(84% 0.0177 251.89)",
-          "oklch(95% 0.0177 251.89)"
-        ]
+        "displayName": "Slate canvas"
       },
-      "border": {
+      "surface": {
         "role": "neutral",
-        "displayName": "Boundary gray",
-        "tonalRamp": [
-          "oklch(15% 0.0335 243.80)",
-          "oklch(26% 0.0335 243.80)",
-          "oklch(38% 0.0335 243.80)",
-          "oklch(49% 0.0335 243.80)",
-          "oklch(61% 0.0335 243.80)",
-          "oklch(72% 0.0335 243.80)",
-          "oklch(84% 0.0335 243.80)",
-          "oklch(95% 0.0335 243.80)"
-        ]
+        "displayName": "Slate section tone"
       },
-      "foreground": {
+      "control": {
         "role": "neutral",
-        "displayName": "Bright neutral",
-        "tonalRamp": [
-          "oklch(15% 0.0086 247.92)",
-          "oklch(26% 0.0086 247.92)",
-          "oklch(38% 0.0086 247.92)",
-          "oklch(49% 0.0086 247.92)",
-          "oklch(61% 0.0086 247.92)",
-          "oklch(72% 0.0086 247.92)",
-          "oklch(84% 0.0086 247.92)",
-          "oklch(95% 0.0086 247.92)"
-        ]
+        "displayName": "Slate control tone"
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Slate interaction tone"
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Slate boundary"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Bright neutral text"
       },
       "muted": {
         "role": "neutral",
-        "displayName": "Muted neutral",
-        "tonalRamp": [
-          "oklch(15% 0.0200 248.09)",
-          "oklch(26% 0.0200 248.09)",
-          "oklch(38% 0.0200 248.09)",
-          "oklch(49% 0.0200 248.09)",
-          "oklch(61% 0.0200 248.09)",
-          "oklch(72% 0.0200 248.09)",
-          "oklch(84% 0.0200 248.09)",
-          "oklch(95% 0.0200 248.09)"
-        ]
+        "displayName": "Readable supporting ink"
       },
-      "accent": {
-        "role": "primary",
-        "displayName": "Mint action",
-        "tonalRamp": [
-          "oklch(15% 0.1130 175.13)",
-          "oklch(26% 0.1130 175.13)",
-          "oklch(38% 0.1130 175.13)",
-          "oklch(49% 0.1130 175.13)",
-          "oklch(61% 0.1130 175.13)",
-          "oklch(72% 0.1130 175.13)",
-          "oklch(84% 0.1130 175.13)",
-          "oklch(95% 0.1130 175.13)"
-        ]
-      },
-      "accent-ink": {
+      "quiet": {
         "role": "neutral",
-        "displayName": "Mint action ink",
-        "tonalRamp": [
-          "oklch(15% 0.0252 172.74)",
-          "oklch(26% 0.0252 172.74)",
-          "oklch(38% 0.0252 172.74)",
-          "oklch(49% 0.0252 172.74)",
-          "oklch(61% 0.0252 172.74)",
-          "oklch(72% 0.0252 172.74)",
-          "oklch(84% 0.0252 172.74)",
-          "oklch(95% 0.0252 172.74)"
-        ]
+        "displayName": "Subordinate and disabled ink"
+      },
+      "good": {
+        "role": "semantic",
+        "displayName": "Dark-theme success"
+      },
+      "warning": {
+        "role": "semantic",
+        "displayName": "Dark-theme warning"
       },
       "error": {
         "role": "semantic",
-        "displayName": "Soft red error",
-        "tonalRamp": [
-          "oklch(15% 0.0950 19.35)",
-          "oklch(26% 0.0950 19.35)",
-          "oklch(38% 0.0950 19.35)",
-          "oklch(49% 0.0950 19.35)",
-          "oklch(61% 0.0950 19.35)",
-          "oklch(72% 0.0950 19.35)",
-          "oklch(84% 0.0950 19.35)",
-          "oklch(95% 0.0950 19.35)"
-        ]
+        "displayName": "Dark-theme error"
       },
-      "accent-hover": {
+      "good-light": {
+        "role": "semantic",
+        "displayName": "Light-theme success"
+      },
+      "warning-light": {
+        "role": "semantic",
+        "displayName": "Light-theme warning"
+      },
+      "error-light": {
+        "role": "semantic",
+        "displayName": "Light-theme error"
+      },
+      "scrim": {
+        "role": "neutral",
+        "displayName": "Confirmation scrim"
+      },
+      "graphite-canvas": {
+        "role": "neutral",
+        "displayName": "Graphite canvas"
+      },
+      "graphite-ink": {
+        "role": "neutral",
+        "displayName": "Graphite foreground"
+      },
+      "graphite-accent": {
         "role": "primary",
-        "displayName": "Mint hover",
-        "tonalRamp": [
-          "oklch(15% 0.1014 175.79)",
-          "oklch(26% 0.1014 175.79)",
-          "oklch(38% 0.1014 175.79)",
-          "oklch(49% 0.1014 175.79)",
-          "oklch(61% 0.1014 175.79)",
-          "oklch(72% 0.1014 175.79)",
-          "oklch(84% 0.1014 175.79)",
-          "oklch(95% 0.1014 175.79)"
-        ]
+        "displayName": "Graphite blue action"
       },
-      "accent-pressed": {
+      "vesper-canvas": {
+        "role": "neutral",
+        "displayName": "Vesper canvas"
+      },
+      "vesper-ink": {
+        "role": "neutral",
+        "displayName": "Vesper foreground"
+      },
+      "vesper-accent": {
         "role": "primary",
-        "displayName": "Mint pressed",
-        "tonalRamp": [
-          "oklch(15% 0.1073 172.28)",
-          "oklch(26% 0.1073 172.28)",
-          "oklch(38% 0.1073 172.28)",
-          "oklch(49% 0.1073 172.28)",
-          "oklch(61% 0.1073 172.28)",
-          "oklch(72% 0.1073 172.28)",
-          "oklch(84% 0.1073 172.28)",
-          "oklch(95% 0.1073 172.28)"
-        ]
+        "displayName": "Vesper warm action"
       },
-      "field-hover": {
+      "light-canvas": {
         "role": "neutral",
-        "displayName": "Field hover",
-        "tonalRamp": [
-          "oklch(15% 0.0214 251.19)",
-          "oklch(26% 0.0214 251.19)",
-          "oklch(38% 0.0214 251.19)",
-          "oklch(49% 0.0214 251.19)",
-          "oklch(61% 0.0214 251.19)",
-          "oklch(72% 0.0214 251.19)",
-          "oklch(84% 0.0214 251.19)",
-          "oklch(95% 0.0214 251.19)"
-        ]
+        "displayName": "Light canvas"
       },
-      "chart-background": {
+      "light-ink": {
         "role": "neutral",
-        "displayName": "Chart class ground",
-        "tonalRamp": [
-          "oklch(15% 0.0073 248.14)",
-          "oklch(26% 0.0073 248.14)",
-          "oklch(38% 0.0073 248.14)",
-          "oklch(49% 0.0073 248.14)",
-          "oklch(61% 0.0073 248.14)",
-          "oklch(72% 0.0073 248.14)",
-          "oklch(84% 0.0073 248.14)",
-          "oklch(95% 0.0073 248.14)"
-        ]
+        "displayName": "Light foreground"
       },
-      "chart-plot": {
-        "role": "neutral",
-        "displayName": "Chart plot",
-        "tonalRamp": [
-          "oklch(15% 0.0041 264.49)",
-          "oklch(26% 0.0041 264.49)",
-          "oklch(38% 0.0041 264.49)",
-          "oklch(49% 0.0041 264.49)",
-          "oklch(61% 0.0041 264.49)",
-          "oklch(72% 0.0041 264.49)",
-          "oklch(84% 0.0041 264.49)",
-          "oklch(95% 0.0041 264.49)"
-        ]
-      },
-      "chart-surface": {
-        "role": "neutral",
-        "displayName": "Chart hover surface",
-        "tonalRamp": [
-          "oklch(15% 0.0070 248.07)",
-          "oklch(26% 0.0070 248.07)",
-          "oklch(38% 0.0070 248.07)",
-          "oklch(49% 0.0070 248.07)",
-          "oklch(61% 0.0070 248.07)",
-          "oklch(72% 0.0070 248.07)",
-          "oklch(84% 0.0070 248.07)",
-          "oklch(95% 0.0070 248.07)"
-        ]
-      },
-      "chart-band": {
-        "role": "neutral",
-        "displayName": "Chart selected band",
-        "tonalRamp": [
-          "oklch(15% 0.0304 258.34)",
-          "oklch(26% 0.0304 258.34)",
-          "oklch(38% 0.0304 258.34)",
-          "oklch(49% 0.0304 258.34)",
-          "oklch(61% 0.0304 258.34)",
-          "oklch(72% 0.0304 258.34)",
-          "oklch(84% 0.0304 258.34)",
-          "oklch(95% 0.0304 258.34)"
-        ]
-      },
-      "chart-foreground": {
-        "role": "neutral",
-        "displayName": "Chart text",
-        "tonalRamp": [
-          "oklch(15% 0.0060 239.83)",
-          "oklch(26% 0.0060 239.83)",
-          "oklch(38% 0.0060 239.83)",
-          "oklch(49% 0.0060 239.83)",
-          "oklch(61% 0.0060 239.83)",
-          "oklch(72% 0.0060 239.83)",
-          "oklch(84% 0.0060 239.83)",
-          "oklch(95% 0.0060 239.83)"
-        ]
-      },
-      "chart-grid": {
-        "role": "neutral",
-        "displayName": "Chart major grid",
-        "tonalRamp": [
-          "oklch(15% 0.0089 248.09)",
-          "oklch(26% 0.0089 248.09)",
-          "oklch(38% 0.0089 248.09)",
-          "oklch(49% 0.0089 248.09)",
-          "oklch(61% 0.0089 248.09)",
-          "oklch(72% 0.0089 248.09)",
-          "oklch(84% 0.0089 248.09)",
-          "oklch(95% 0.0089 248.09)"
-        ]
-      },
-      "chart-grid-minor": {
-        "role": "neutral",
-        "displayName": "Chart minor grid",
-        "tonalRamp": [
-          "oklch(15% 0.0070 248.08)",
-          "oklch(26% 0.0070 248.08)",
-          "oklch(38% 0.0070 248.08)",
-          "oklch(49% 0.0070 248.08)",
-          "oklch(61% 0.0070 248.08)",
-          "oklch(72% 0.0070 248.08)",
-          "oklch(84% 0.0070 248.08)",
-          "oklch(95% 0.0070 248.08)"
-        ]
-      },
-      "chart-reference": {
-        "role": "neutral",
-        "displayName": "Chart loaded reference",
-        "tonalRamp": [
-          "oklch(15% 0.0183 250.93)",
-          "oklch(26% 0.0183 250.93)",
-          "oklch(38% 0.0183 250.93)",
-          "oklch(49% 0.0183 250.93)",
-          "oklch(61% 0.0183 250.93)",
-          "oklch(72% 0.0183 250.93)",
-          "oklch(84% 0.0183 250.93)",
-          "oklch(95% 0.0183 250.93)"
-        ]
-      },
-      "chart-draft": {
-        "role": "neutral",
-        "displayName": "Chart draft",
-        "tonalRamp": [
-          "oklch(15% 0.0106 247.95)",
-          "oklch(26% 0.0106 247.95)",
-          "oklch(38% 0.0106 247.95)",
-          "oklch(49% 0.0106 247.95)",
-          "oklch(61% 0.0106 247.95)",
-          "oklch(72% 0.0106 247.95)",
-          "oklch(84% 0.0106 247.95)",
-          "oklch(95% 0.0106 247.95)"
-        ]
-      },
-      "chart-selection": {
-        "role": "secondary",
-        "displayName": "Chart selection",
-        "tonalRamp": [
-          "oklch(15% 0.0907 233.14)",
-          "oklch(26% 0.0907 233.14)",
-          "oklch(38% 0.0907 233.14)",
-          "oklch(49% 0.0907 233.14)",
-          "oklch(61% 0.0907 233.14)",
-          "oklch(72% 0.0907 233.14)",
-          "oklch(84% 0.0907 233.14)",
-          "oklch(95% 0.0907 233.14)"
-        ]
+      "light-accent": {
+        "role": "primary",
+        "displayName": "Light indigo action"
       }
     },
+    "appearance": {
+      "source": "crates/core/src/appearance.rs",
+      "presets": [
+        {
+          "name": "Slate",
+          "canvas": "{colors.canvas}",
+          "foreground": "{colors.ink}",
+          "accent": "{colors.accent}",
+          "default": true
+        },
+        {
+          "name": "Graphite",
+          "canvas": "{colors.graphite-canvas}",
+          "foreground": "{colors.graphite-ink}",
+          "accent": "{colors.graphite-accent}"
+        },
+        {
+          "name": "Vesper",
+          "canvas": "{colors.vesper-canvas}",
+          "foreground": "{colors.vesper-ink}",
+          "accent": "{colors.vesper-accent}"
+        },
+        {
+          "name": "Light",
+          "canvas": "{colors.light-canvas}",
+          "foreground": "{colors.light-ink}",
+          "accent": "{colors.light-accent}"
+        },
+        {
+          "name": "Custom",
+          "format": "Opaque #RRGGBB background, foreground and accent",
+          "initialPalette": "Slate"
+        }
+      ],
+      "derivation": {
+        "space": "sRGB byte channels with rounding",
+        "surface": "mix(canvas, foreground, 0.035)",
+        "control": "mix(canvas, foreground, 0.065)",
+        "hover": "mix(canvas, foreground, 0.11)",
+        "line": "mix(canvas, foreground, 0.16)",
+        "muted": "mix(canvas, foreground, 0.70), falling back to foreground if contrast on hover is below 4.5:1",
+        "quiet": "mix(canvas, foreground, 0.40)",
+        "on-accent": "Black or white, whichever has greater contrast against accent",
+        "dark": "Background relative luminance below 0.3"
+      },
+      "validation": [
+        "Foreground on hovered control >= 4.5:1",
+        "Accent against canvas >= 3:1",
+        "Invalid or partial edits retain the last valid appearance preview",
+        "Save persists the local appearance draft"
+      ],
+      "persistence": "Separate versioned ui-settings.json preserves app-settings.json readability for older protected helpers; normal save failures retain rollback and concurrent-change checks.",
+      "authority": "Appearance preview changes no profile, hardware, recovery or startup permission."
+    },
     "typographyMeta": {
-      "small": {
-        "displayName": "Supporting text / chart labels",
-        "purpose": "Provenance, intervals, qualifications, GPU curve/capability explanations and chart coordinates."
-      },
       "body": {
-        "displayName": "Dashboard body",
-        "purpose": "Sensor labels, supporting values and dashboard actions."
+        "displayName": "Native body and control label",
+        "purpose": "Default Segoe UI text in the main and About windows."
       },
-      "editor-body": {
-        "displayName": "Native editor body",
-        "purpose": "Existing GPU, RGB and numerical-curve controls."
+      "section": {
+        "displayName": "Section title",
+        "purpose": "Semibold instruments and grouped work areas."
       },
-      "heading": {
-        "displayName": "Section heading",
-        "purpose": "Dashboard sensor and action group titles."
+      "caption": {
+        "displayName": "Supporting description",
+        "purpose": "Hints, explanations and data labels."
       },
-      "title": {
-        "displayName": "Product title",
-        "purpose": "Dashboard product name."
+      "utility": {
+        "displayName": "Utility label",
+        "purpose": "Privilege and footer details."
+      },
+      "product-mark": {
+        "displayName": "Product wordmark",
+        "purpose": "Compact command-bar name beside an original geometric Path mark."
       },
       "metric": {
-        "displayName": "Measured value",
-        "purpose": "Available dashboard power and temperature values."
+        "displayName": "Available instrument value",
+        "purpose": "Prominent readings with units."
+      },
+      "metric-unavailable": {
+        "displayName": "Unavailable instrument state",
+        "purpose": "Explicit unavailable text in the smaller metric role."
+      },
+      "chart-label": {
+        "displayName": "Chart coordinate",
+        "purpose": "Y-axis values outside the clipped plot."
+      },
+      "diagnostic": {
+        "displayName": "Selectable diagnostics",
+        "purpose": "Bounded details area."
+      },
+      "keycap": {
+        "displayName": "Schematic key label",
+        "purpose": "QWERTZ/QWERTY labels inside grouped geometry."
       }
     },
     "shadows": [],
-    "motion": [],
-    "breakpoints": []
-  },
-  "components": [
-    {
-      "name": "Primary native action",
-      "kind": "button",
-      "refersTo": "button-primary",
-      "description": "Mint dashboard entry or editor metadata save. Documentation translation of the native BUTTON.",
-      "html": "<button class=\"ds-primary\">Speichern</button>",
-      "css": ".ds-primary{font:400 18px \"Segoe UI\",sans-serif;background:#68dbbf;color:#0b1c17;border:1px solid #68dbbf;border-radius:0;min-width:160px;height:36px;cursor:default}.ds-primary:hover{background:#85e9d0;border-color:#85e9d0}.ds-primary:active{background:#4cb699;border-color:#4cb699}.ds-primary:focus-visible{outline:2px solid #0b1c17;outline-offset:-5px}.ds-primary:disabled{background:#191d22;color:#a6b1bc;border-color:#657888}"
+    "motion": [
+      {
+        "name": "action-background-feedback",
+        "value": "120ms",
+        "purpose": "ActionButton background state feedback only.",
+        "source": "crates/app/ui/primitives.slint"
+      }
+    ],
+    "breakpoints": [],
+    "nativeGeometry": {
+      "defaultClient": "1000 × 720 logical px",
+      "minimumClient": "720 × 500 logical px",
+      "commandBar": "44 logical px high; 16 logical px side insets",
+      "footer": "28 logical px high",
+      "controlHeight": "{components.field.height}",
+      "valueColumn": "{components.value-field.width}",
+      "navigation": "Three equal targets in a 300 logical px strip; Settings separate",
+      "density": "20 logical px content inset; predominantly 8/12 logical px spacing",
+      "compactBehavior": "Bounded scrolling with persistent mounted drafts and Undo",
+      "popup": "Field width; bounded ScrollView; wrapped variable-height rows revealed from actual row geometry",
+      "chartPlot": "46 logical px left and 12 top; width minus 60 and height minus 28; paths, markers and pointer input share the plot"
     },
-    {
-      "name": "Secondary native action",
-      "kind": "button",
-      "refersTo": "button-secondary",
-      "description": "A deliberate entry, check, apply or restore control. Its label and enablement describe the operation.",
-      "html": "<button class=\"ds-secondary\">Firmware prüfen …</button>",
-      "css": ".ds-secondary{font:400 18px \"Segoe UI\",sans-serif;background:#242b33;color:#edf2f7;border:1px solid #657888;border-radius:0;min-width:215px;height:36px;cursor:default}.ds-secondary:hover{background:#303943}.ds-secondary:active{background:#191d22}.ds-secondary:focus-visible{outline:2px solid #68dbbf;outline-offset:-5px}.ds-secondary:disabled{background:#191d22;color:#a6b1bc}"
-    },
-    {
-      "name": "Disabled native action",
-      "kind": "button",
-      "refersTo": "button-disabled",
-      "description": "Preserves a visible action name while the current draft or operation disallows activation.",
-      "html": "<button class=\"ds-disabled\" disabled>Gesamtes Profil anwenden …</button>",
-      "css": ".ds-disabled{font:400 18px \"Segoe UI\",sans-serif;background:#191d22;color:#a6b1bc;border:1px solid #657888;border-radius:0;min-width:340px;height:36px;cursor:default}"
-    },
-    {
-      "name": "Native text field",
-      "kind": "input",
-      "refersTo": "field",
-      "description": "Shared slate field with its explicit label. Native EDIT caret and focus behavior are implementation truth.",
-      "html": "<label class=\"ds-label\">Profilname <input class=\"ds-field\" value=\"Mein GPU-Profil\"></label>",
-      "css": ".ds-label{display:block;font:400 18px \"Segoe UI\",sans-serif;color:#edf2f7}.ds-field{display:block;margin-top:8px;font:400 18px \"Segoe UI\",sans-serif;background:#242b33;color:#edf2f7;border:1px solid #657888;border-radius:0;padding:4px 6px;width:300px}.ds-field:focus-visible{outline:1px solid #edf2f7;outline-offset:1px}.ds-field:disabled{color:#a6b1bc}"
-    },
-    {
-      "name": "Native profile selector",
-      "kind": "input",
-      "refersTo": "field",
-      "description": "Native COMBOBOX selected text, chevron and mint focused boundary; the dropdown remains native.",
-      "html": "<label class=\"ds-select-label\">HP-Leistungsmodus · Vorschau <select class=\"ds-select\"><option>Balanced</option><option>Quiet</option><option>Performance</option><option>Unleashed</option></select></label>",
-      "css": ".ds-select-label{display:block;font:400 16px \"Segoe UI\",sans-serif;color:#edf2f7}.ds-select{display:block;margin-top:8px;font:400 16px \"Segoe UI\",sans-serif;background:#242b33;color:#edf2f7;border:1px solid #657888;border-radius:0;padding:4px 8px;width:320px}.ds-select:focus-visible{outline:none;border-color:#68dbbf}.ds-select:disabled{color:#a6b1bc}"
-    },
-    {
-      "name": "Sensor panel",
-      "kind": "card",
-      "refersTo": "sensor-panel",
-      "description": "Flat tonal sensor group. This reference tile demonstrates the default unavailable state, with no live measurement.",
-      "html": "<article class=\"ds-panel\"><h2 class=\"ds-panel-title\">CPU</h2><p class=\"ds-panel-label\">CPU-Paketleistung</p><p class=\"ds-panel-value\">Nicht verfügbar</p><p class=\"ds-panel-detail\">CPU-Hardwaresensoren nicht aktiviert.</p></article>",
-      "css": ".ds-panel{background:#191d22;color:#edf2f7;border-radius:12px;padding:24px;width:360px;font:400 16px \"Segoe UI\",sans-serif}.ds-panel-title{font:600 20px \"Segoe UI\",sans-serif;margin:0 0 32px}.ds-panel-label{color:#a6b1bc;margin:0 0 8px}.ds-panel-value{margin:0 0 40px}.ds-panel-detail{color:#a6b1bc;font-size:14px;margin:0}"
+    "nativeComponents": [
+      {
+        "name": "Primary native action",
+        "kind": "button",
+        "refersTo": "button-primary",
+        "source": "crates/app/ui/primitives.slint:ActionButton",
+        "description": "Accent/on-accent action with common control geometry, keyboard activation and focus.",
+        "states": "Primary retains accent/on-accent; pressed and keyboard focus use an on-accent boundary."
+      },
+      {
+        "name": "Secondary native action",
+        "kind": "button",
+        "refersTo": "button-secondary",
+        "source": "crates/app/ui/primitives.slint:ActionButton",
+        "description": "Control/ink action with tonal hover and focus.",
+        "states": "Hover and pressed use hover/ink; pressed boundary is accent. Disabled uses surface/quiet."
+      },
+      {
+        "name": "Native text field",
+        "kind": "input",
+        "refersTo": "field",
+        "source": "crates/app/ui/controls.slint:LineEdit",
+        "description": "Native TextInput with caret, selection, IME, clipped horizontal editing, clipboard/context actions and Undo.",
+        "states": "Focus uses an accent boundary. Appearance errors retain the previous valid preview."
+      },
+      {
+        "name": "Native selector",
+        "kind": "input",
+        "refersTo": "field",
+        "source": "crates/app/ui/controls.slint:ComboBox",
+        "description": "Common closed field with bounded, scrollable, wrapped choices.",
+        "states": "Open arrows/Home/End move and reveal the pending variable-height row. Enter/click commits; Escape cancels."
+      },
+      {
+        "name": "Equal navigation",
+        "kind": "nav",
+        "refersTo": "navigation-selected",
+        "source": "crates/app/ui/primitives.slint:SegmentedTabs",
+        "description": "Equal Overview/Cooling/Lighting targets; selected fill, focus outline and hit area use the same geometry. Settings is separate."
+      },
+      {
+        "name": "Collapsible section",
+        "kind": "custom",
+        "refersTo": "section-header",
+        "source": "crates/app/ui/primitives.slint:SectionHeader",
+        "description": "Flat surface heading with a drawn chevron, focus and keyboard activation; help appears on demand."
+      },
+      {
+        "name": "Connected curve canvas",
+        "kind": "custom",
+        "refersTo": "curve-canvas",
+        "source": "crates/app/ui/app.slint:CurveCanvas",
+        "description": "Actual connected Path for accent draft and muted opening reference, with a textual legend.",
+        "states": "Axes are outside the clipped plot; markers and pointer input share plot coordinates in software and femtovg rendering."
+      },
+      {
+        "name": "Schematic keyboard",
+        "kind": "custom",
+        "refersTo": "keyboard-preview",
+        "source": "crates/app/ui/keyboard.slint:KeyboardPreview",
+        "description": "Original QWERTZ/QWERTY geometry with draft zone tint, color underline and selected-group boundary.",
+        "states": "WASD = zone 3; Rest = zones 1/2; NUM pad/right = zone 0 including adjacent keys. Group buttons provide keyboard access. This is not per-key RGB.",
+        "behavior": "Picker/hex, On/Off and RGB-value brightness remain drafts until guarded Apply/readback. Reset and exit protection preserve the transaction."
+      },
+      {
+        "name": "Native brightness control",
+        "kind": "custom",
+        "source": "crates/app/ui/controls.slint:BrightnessSlider",
+        "description": "Accent track/thumb, focus boundary and numeric alternative for RGB-value brightness.",
+        "states": "0–100 in single steps, with arrows, Home/End and semantic slider actions. No firmware master-brightness byte is invented."
+      }
+    ],
+    "documentationEvidence": {
+      "sampledCaptures": [
+        ".local/slint-ui-qa-20261116-134815-de-winit-software/overview.png",
+        ".local/slint-ui-qa-20261116-134910-en-winit-software/appearance-light.png",
+        ".local/slint-ui-qa-20261116-135003-de-winit-femtovg/lighting-keyboard.png",
+        ".local/slint-ui-qa-20261116-135102-en-winit-femtovg/gpu-curve.png",
+        ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-late.png",
+        ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-reopened.png"
+      ],
+      "scope": "Native source and existing isolated client captures. This documentation pass performed no app or hardware action, physical DPI transition, lifecycle qualification or resource measurement.",
+      "validationOwner": "docs/VALIDATION.md"
     }
-  ],
+  },
+  "components": [],
   "narrative": {
-    "northStar": "The Dark Instrument Panel",
-    "overview": "The user approved a modern, clean dark application on 14 October 2026. Charcoal surfaces, clear value fields and restrained mint actions give the native Windows interface a consistent visual language. Information density serves frequent hardware checks; typography and alignment carry the hierarchy.\n\nMeasured state, editable drafts and hardware actions keep distinct labels and places. The shared system covers the dashboard and native GPU, lighting and curve-editor controls. The curve plot retains its user-approved MSI Afterburner reference and its own data palette. No raster assets, downloaded fonts, animation or browser runtime are required.",
+    "northStar": "The Native Tuning Workbench",
+    "overview": "The Rust/Slint system is a modern, clean Windows utility for frequent hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained indigo accent and Antigravity-style appearance choices give the workbench one shared system.\n\nMeasured GPU watts and temperature lead, with verified CPU telemetry beside them; editable presets follow in the same work area. Native editing, alignment, readable fields and explicit actions distinguish selected intent, draft edits, metadata saves and confirmed hardware state.\n\nThe UI remains native and offline. Product and hardware contracts stay authoritative; visual corrections establish no new hardware, startup, resource or lifecycle qualification.",
     "keyCharacteristics": [
-      "Opaque dark surfaces and bright, legible text.",
-      "Prominent measured values, explicit unavailable and baseline states.",
-      "Flat rectangular native fields and actions, with gently curved sensor panels.",
-      "Mint for a primary action; pale blue for curve editing selection.",
-      "Event-driven rendering and bounded native resource lifetimes."
+      "GPU/CPU instruments before tuning controls.",
+      "Common control geometry and aligned values.",
+      "Derived palettes with validated local previews.",
+      "Explicit draft, saved and confirmed state.",
+      "Connected paths and an original schematic keyboard.",
+      "Event-driven rendering with low background resource use."
     ],
     "rules": [
       {
-        "name": "The State Before Color Rule",
-        "body": "Name measured, unavailable, draft, selected and preview states in text. Color reinforces that distinction.",
+        "name": "The Shared Palette Rule",
+        "body": "Reuse semantic theme roles throughout the native UI; do not create separate popup, chart or settings palettes.",
         "section": "colors"
+      },
+      {
+        "name": "The Valid Preview Rule",
+        "body": "Only valid opaque colors meeting source contrast thresholds replace the previous preview; Save persists it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Exact Value Rule",
+        "body": "Preserve units, exact numbers and configured/requested/effective/measured distinctions in both languages.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Work Area Rule",
+        "body": "Keep Overview instruments and preset editing mounted together, with explicit actions and preserved drafts/Undo.",
+        "section": "layout"
+      },
+      {
+        "name": "The State Before Color Rule",
+        "body": "Name busy, error, draft, saved, unavailable and confirmed states in text; color reinforces them.",
+        "section": "elevation"
       }
     ],
     "dos": [
-      "Do use the shared dark theme for application controls and retain the chart's scoped data colors.",
-      "Do keep native control roles, keyboard activation, readable labels and visible focus.",
-      "Do show measured values, unavailable states, drafts and previews with explicit wording.",
-      "Do preserve immediate event-driven feedback and release native view resources when the dashboard returns to tray.",
-      "Do keep hardware qualification, transaction status and memory results tied to their evidence records."
+      "Do retain native Windows behavior, native Slint text editing and visible keyboard focus.",
+      "Do distinguish selected intent, drafts, metadata saves and confirmed hardware readback.",
+      "Do keep bounded telemetry, expected-state checks, readback and recovery.",
+      "Do verify both languages, compact/enlarged clients, popup scrolling/focus, both renderers, drafts/Undo and palette recovery.",
+      "Do isolate developer-only MCP and marked fixtures from the live user store.",
+      "Do measure total tray resources including resident helpers; keep results in Validation."
     ],
     "donts": [
-      "Don't invent sensor values or present Windows MHz as measured boost/effective clock.",
-      "Don't present a metadata save or HP profile preview as a firmware change.",
-      "Don't recolor the curve selection as a general hardware-success signal.",
-      "Don't add a browser runtime, raster decoration or continuous render loop to this native visual system.",
-      "Don't claim titlebar, multiple-DPI, dynamic high-contrast or full accessibility coverage from the inspected client renders."
+      "Don't infer sensor readings or call Windows MHz a measured boost clock.",
+      "Don't present previews, saves, palette changes or fixtures as firmware operations.",
+      "Don't describe keyboard groups as per-key RGB or numpad-only control.",
+      "Don't add a browser runtime, raster decoration, downloaded fonts, decorative motion or continuous rendering.",
+      "Don't infer new hardware support, 85 °C enforcement, HP-controller independence, physical DPI transition or complete accessibility qualification from visual corrections."
     ]
   }
 }

@@ -12,16 +12,19 @@ export component ActionButton inherits Rectangle {
     accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     min-width: max(32px, label.preferred-width + 24px);
-    min-height: 32px;
-    max-height: 34px;
-    border-radius: 4px;
-    background: !root.enabled ? Theme.surface : area.pressed ? Theme.line : root.primary ? Theme.accent : area.has-hover ? Theme.hover : Theme.surface;
-    border-width: root.enabled && focus.has-focus ? 1px : 0px;
-    border-color: Theme.accent;
+    min-height: Theme.control-height;
+    max-height: Theme.control-height;
+    vertical-stretch: 0;
+    horizontal-stretch: 0;
+    border-radius: 6px;
+    // Pressed text retains one of the validated foreground/background pairs.
+    background: !root.enabled ? Theme.surface : root.primary ? Theme.accent : area.pressed || area.has-hover ? Theme.hover : Theme.control;
+    border-width: 1px;
+    border-color: root.enabled && (area.pressed || focus.has-focus) ? root.primary ? Theme.on-accent : Theme.accent : transparent;
     animate background { duration: 120ms; }
     label := Text {
         text: root.text;
-        color: !root.enabled ? Theme.quiet : Theme.ink;
+        color: !root.enabled ? Theme.quiet : root.primary ? Theme.on-accent : Theme.ink;
         font-size: 13px;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -47,31 +50,24 @@ export component ActionButton inherits Rectangle {
 
 export component SegmentedTabs inherits Rectangle {
     in property <[string]> labels;
+    in property <bool> enabled: true;
     in-out property <int> selected;
     callback changed(int);
-    height: 32px;
-    background: Theme.surface;
+    height: Theme.control-height;
+    background: transparent;
     border-radius: 6px;
-    Rectangle {
-        visible: root.selected >= 0;
-        x: root.selected * (parent.width / max(1, root.labels.length));
-        width: parent.width / max(1, root.labels.length);
-        height: parent.height;
-        background: Theme.hover;
-        border-radius: 5px;
-        animate x {
-            duration: 140ms;
-            easing: cubic-bezier(0.16, 1, 0.3, 1);
-        }
-    }
-
-    HorizontalLayout {
-        spacing: 0px;
-        for title[index] in root.labels: ActionButton {
-            text: title;
-            background: transparent;
-            clicked => { root.changed(index); }
-        }
+    // Selection and keyboard outline belong to the same equal-sized control.
+    // An independent moving background used to disagree with intrinsic widths.
+    for title[index] in root.labels: tab := ActionButton {
+        enabled: root.enabled;
+        x: index * root.width / max(1, root.labels.length);
+        width: root.width / max(1, root.labels.length);
+        min-width: 0px;
+        text: title;
+        background: index == root.selected ? Theme.hover : transparent;
+        accessible-item-selectable: true;
+        accessible-item-selected: index == root.selected;
+        clicked => { root.changed(index); }
     }
 }
 
@@ -96,8 +92,11 @@ export component SectionHeader inherits Rectangle {
     accessible-role: button;
     accessible-label: root.text;
     accessible-action-default => { root.clicked(); }
-    height: 34px;
+    height: Theme.control-height;
     background: Theme.surface;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 12px;

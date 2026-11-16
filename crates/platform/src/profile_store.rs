@@ -15,6 +15,12 @@ use std::{
 };
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSettingsFile {
+    schema: u32,
+    appearance: omen_core::appearance::Appearance,
+}
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 pub fn profile_digest(profile: &PerformanceProfile) -> Result<String, String> {
@@ -545,6 +551,33 @@ impl ProfileStore {
         self.app_settings()
             .map_or(true, |settings| settings.close_to_tray)
     }
+    /// Separate from app-settings.json: protected older helpers reject unknown
+    /// fields in that file. Cosmetic preferences must not break their lifecycle.
+    pub fn ui_appearance(&self) -> Result<omen_core::appearance::Appearance, String> {
+        let path = self.root.join("ui-settings.json");
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(Default::default());
+        }
+        let record: UiSettingsFile = read_json(&path)?;
+        if record.schema != 1 {
+            return Err(omen_core::message::msg("settings.invalid_schema", &[]));
+        }
+        record.appearance.validate()?;
+        Ok(record.appearance)
+    }
+    pub fn save_ui_appearance(
+        &self,
+        appearance: &omen_core::appearance::Appearance,
+    ) -> Result<(), String> {
+        appearance.validate()?;
+        atomic_json(
+            &self.root.join("ui-settings.json"),
+            &UiSettingsFile {
+                schema: 1,
+                appearance: appearance.clone(),
+            },
+        )
+    }
     /// Preset applied automatically when the charger is unplugged; absent or
     /// unreadable means no automatic change.
     pub fn battery_selection(&self) -> Option<Selection> {
@@ -820,6 +853,24 @@ mod tests {
         profiles::{DeviceBinding, PROFILE_SCHEMA, Setting, Value},
         transaction::Captured,
     };
+    #[test]
+    fn future_cosmetic_preferences_do_not_block_legacy_control_preferences() {
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let options = omen_core::app_settings::AppSettings {
+            close_to_tray: false,
+            ..Default::default()
+        };
+        store.save_app_settings(&options).unwrap();
+        let invalid = br#"{"schema":2,"appearance":{}}"#;
+        fs::write(store.root.join("ui-settings.json"), invalid).unwrap();
+        assert!(store.ui_appearance().is_err());
+        assert_eq!(store.app_settings().unwrap(), options);
+        assert_eq!(
+            fs::read(store.root.join("ui-settings.json")).unwrap(),
+            invalid
+        );
+    }
 
     #[test]
     fn device_defaults_belong_to_one_firmware_and_newer_readings_replace_older() {

@@ -22,6 +22,19 @@ Four RGB zones occupy bytes **25–36**. The own setter preserves all other byte
 
 ## Native-source confirmation
 
+The UI assembly HP.Omen.FourZoneModule.dll **1101.2609.3.0**, SHA-256
+**F5DB135C7D1CA4B9B35A49875A5E23DDBB4793D3E6B0FBA82A0F2F2FCFEA0D9A**,
+maps wire zones 0/1/2/3 to right/middle/left/WASD. Its Khalilah path selects the
+classic-with-numpad layout for capability type 1. The color-array order is retained
+at offsets 25 + 3 × index. These are concise interface observations from the
+privately retained source; no proprietary artwork or decompiled code is shipped.
+
+The 16 November UI groups left/middle as Rest and labels the coupled right area
+NUM pad/right. Its brightness slider is a bounded RGB value transformation through
+the existing color SET, preserving raw brightness/mode bytes except the qualified
+explicit On/Off transform. This adds no firmware master-brightness contract and
+no new physical visual/lifecycle qualification.
+
 `WMIService.dll` confirms direct BIOS-WMI transport. Its analyzed `ExecuteBiosWmiCommand` is at 0x18000DC60; input/output builders at 0x180011F10 / 0x180012410. These are static-image references, not addresses called by the app.
 
 `WMISDK.dll` is itself an RPC path through HPSysInfoRpcEndpoint/WMIService; it is not adopted. The existing `OMENLighting.sys` VHF callback uses the same BIOS-WMI GUID **5FB7F034-2C63-45E9-BE91-3D44E2C707E4** and `SECU` envelope. The app neither bundles nor installs that driver and does not require its wrapper to issue the qualified direct color commands.

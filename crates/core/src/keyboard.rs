@@ -312,6 +312,19 @@ mod tests {
         assert!(before.with_colors(&colors[..3]).is_err());
     }
     #[test]
+    fn color_brightness_draft_never_changes_the_raw_mode_or_reserved_bytes() {
+        let before = original();
+        let mut draft =
+            crate::lighting_editor::Draft::new(before.colors().unwrap().try_into().unwrap(), true);
+        draft.set_brightness(50).unwrap();
+        let target = before.with_colors(&draft.colors).unwrap();
+        assert!(before.same_opaque_controls(&target).unwrap());
+        assert_eq!(
+            target.legacy.as_ref().unwrap().brightness_raw,
+            before.legacy.as_ref().unwrap().brightness_raw
+        );
+    }
+    #[test]
     fn recovery_rejects_opaque_changes_and_forged_semantic_snapshots() {
         let before = original();
         let mut changed = before.clone();

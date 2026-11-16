@@ -81,7 +81,7 @@ This reads the ZIP without launching or installing it. Verify the exact source r
 
 ## Slint development and interaction checks
 
-The UI is compiled from `crates/app/ui/app.slint`, `primitives.slint` and `theme.slint` with pinned Slint/slint-build **1.18.1**. No Node, browser, Qt installation or online runtime is required. Winit can use FemtoVG/OpenGL or the software renderer; the development test script accepts both explicitly.
+The UI is compiled from `crates/app/ui/app.slint` and shared controls, keyboard, primitives and theme components with pinned Slint/slint-build **1.18.1**. No Node, browser, Qt installation or online runtime is required. Winit can use FemtoVG/OpenGL or the software renderer; the development test script accepts both explicitly.
 
 For the embedded developer MCP, build separately from the normal release:
 
@@ -93,7 +93,7 @@ python scripts/test-slint-ui.py --language de --backend winit-software --scale 1
 python scripts/test-slint-ui.py --language en --backend winit-femtovg --scale 2.0
 ```
 
-The script starts only an owned `--lang de|en --ui-test` subprocess, binds MCP to localhost, exercises real input/scroll/resize/minimize/tray restoration and curve history, then closes that process. Profiles/settings in this mode exist only in memory; no hardware controllers, startup tasks, manufacturer service changes or user-data writes are activated. Screenshots, trees and logs go under ignored `.local/slint-ui-qa-*/`. Python uses only the Windows standard library.
+The script starts only an owned `--lang de|en --ui-test` subprocess, binds MCP to localhost, exercises real input/scroll/resize/minimize/tray restoration and curve history, then closes that process. Profiles in this mode exist only in memory. The harness explicitly opts into a marked OS-temp settings directory to test persistence through a real process restart; no hardware controllers, startup tasks, manufacturer service changes or live user-data writes are activated. Without that opt-in, settings also stay in memory. Screenshots, trees and logs go under ignored `.local/slint-ui-qa-*/`. The harness uses Python with Pillow for pixel assertions. It checks actual client dimensions with per-monitor-aware Windows calls, diagonal curve pixels, keyboard groups/brightness and palette persistence; these are developer dependencies only.
 
 Scale overrides exercise Slint layout/rendering; they are not physical Windows display-scaling changes or multi-monitor qualification. The tests do not establish successful firmware writes or a cooling lifecycle.
 

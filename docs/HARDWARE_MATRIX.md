@@ -1,6 +1,6 @@
 # Hardware support
 
-Current status, reviewed **29 October 2026** against `0.9.0-dev.2`. This is the authoritative feature-status table. [Validation](VALIDATION.md) records the tests; [Roadmap](ROADMAP.md) records unfinished work. **Implemented**, **briefly tested on hardware** and **qualified for a full lifecycle** are different claims.
+Current status, reviewed **29 October 2026** against `0.9.0-dev.2`. UI-only zone mapping and RGB-value brightness observations were added on 16 November 2026 without a new device write trial. This is the authoritative feature-status table. [Validation](VALIDATION.md) records the tests; [Roadmap](ROADMAP.md) records unfinished work. **Implemented**, **briefly tested on hardware** and **qualified for a full lifecycle** are different claims.
 
 ## Reference configuration
 
@@ -27,7 +27,7 @@ Private NVIDIA write contracts were measured with drivers **617.14** and **617.4
 | MUX | Hybrid/discrete boot preference set, read back and restored | Physical reboot switch and iGPU-only/dGPU-off battery operation unproven; dashboard shortcut has separate recovery limits |
 | Manual Max-Fan override | Full flag, table/topology checks, readback and persisted restore | Off releases the override only; it does not prove BIOS ownership |
 | Own fan curve / helper Max | Separate helper with CPU/GPU/IR protection; short trial reached 4800/4800 firmware RPM | Helper waits for original Hub; BIOS handover pending; embedded fan curves remain unsupported in profile transactions |
-| Four-zone static lighting / On-Off | Complete RGB/mode snapshots, readback/restore; visible On/Off confirmed by user | No brightness scale, animation, per-key support or independent hotkey/power lifecycle qualification |
+| Four-zone static lighting / On-Off | Complete RGB/mode snapshots, readback/restore; visible On/Off confirmed by user. UI adds color-value brightness over qualified RGB bytes and corrected vendor zone order | No firmware master-brightness scale, animation, per-key support or independent hotkey/power lifecycle qualification; new UI diagram is schematic |
 | Profile sign-in | Protected task and exact applied-revision approval implemented | Actual reboot and full independent operation pending; editing/binary replacement invalidates approval |
 
 ## Sign-in permission versus measured lifecycle

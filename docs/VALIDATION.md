@@ -1,8 +1,34 @@
 # Validation
 
-Current software summary updated **15 November 2026**, version **0.10.0-beta.1**, Windows x64 / Rust 1.99.0. Source: the preserved `554bb55` baseline plus the Slint migration, identified by the release tag and packaged `build-info.json`. The older native measurements below remain historical. No new hardware write or HP-independent lifecycle qualification is implied.
+Current software summary updated **16 November 2026**, version **0.10.0-beta.2**, Windows x64 / Rust 1.99.0. Source: preserved Slint baseline f3b4b09 plus the appearance/curve/lighting correction, identified by the release tag and packaged build-info.json. Older measurements below remain historical. No new hardware write or HP-independent lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Native UI correction — 16 November 2026
+
+Release executable: **15,572,992 bytes**, SHA-256 **902C8635501957096AA341BEE05815E23692B28AA6F4004A6536F5F4E8EB5A6A**. Normal software rendering; Slint 1.18.1; no developer MCP. [Release notes](releases/0.10.0-beta.2.md), [design](../DESIGN.md), [refinement record](plans/APPEARANCE_REFINEMENT.md).
+
+| Check | Result |
+| --- | --- |
+| Format check | Passed |
+| Workspace unit tests | 309 passed: 158 core / 64 app / 87 platform; one manual timing benchmark ignored |
+| Guardian process/file fixtures | 14 passed, without real services/drivers |
+| Clippy workspace/all targets, -D warnings | Passed |
+| Locked normal release build | Passed; embedded pinned CPU modules retained |
+| UI interaction | Passed DE/EN, software/FemtoVG, scales 1.25/1.0/1.5/2.0 |
+| Actual compact geometry | 720 × 500 logical client; harness checks both physical dimensions with per-monitor-aware calls |
+| Curves | Actual diagonal midpoint pixels, edit/Undo/gestures, fixed anchors and loading completion |
+| Dropdowns | 24 long wrapped DE/EN names: late selection, repeated arrows, manual wheel, commit and reopening |
+| Lighting drafts | Vendor zone order, mixed Rest values, RGB dimming, reset, numeric/slider synchronization, explicit memory-only Apply |
+| Persistence/compatibility | Real isolated process restart; ui-settings.json separate from legacy app-settings; no startup grant |
+| Pressed/focus states | Owned common-component held-pointer renders in Slate/Light; reviewed contrast pairs |
+| Independent design review | Full captured-surface review; material dropdown and button-state findings resolved in scoped verdict passes; documentation gate passed |
+
+Each full sequence includes 100 alternating wheel events, 15 resize cycles plus lighting-size captures, three minimize/restore and three tray/restore cycles, Unicode input/caret/text Undo, group collapse with numeric Undo, exact 55,125 mW roundtrip, preset switching, complete boost choices, curve history/reopen and four modifier gestures. The final common-button state correction was additionally exercised by complete DE/software and EN/FemtoVG sequences and held-pointer component renders. All fixtures are visibly marked and isolate profiles from live data. Persistence opts into a marked OS-temp directory; no hardware tuning, service changes or startup task writes are performed by the tests. Both catalogs contain **682 matching keys**.
+
+One warm normal-release UI fixture responded after **252 ms**. Open working set was **43,851,776 bytes**, private bytes **11,866,112**. In tray: **44,265,472 bytes** working set, **11,866,112** private; **0 ms CPU** over **3034 ms**. An explicit MCP port produced no listener. This measures the UI fixture, without sensors/controllers; it is not total tray-idle hardware acceptance or a cold/elevated startup benchmark.
+
+Hardware contracts, exact device binding, profile precedence, readback/restore and recovery remain. Corrected keyboard group labels and RGB-value dimming do not qualify firmware master brightness, exact visual zone boundaries, per-key control or an HP-independent lifecycle. The older protected helper/startup binaries are not replaced by updating the portable UI. Deployment identity, source and package checks are recorded in build-info.json and release checksums.
 
 ## Slint UI — 15 November 2026
 

@@ -35,7 +35,9 @@ use windows_sys::Win32::{
     UI::{Shell::*, WindowsAndMessaging::*},
 };
 
+mod appearance;
 mod curve;
+mod lighting;
 slint::include_modules!();
 
 const AUX_DONE: u32 = WM_APP + 92;
@@ -94,6 +96,7 @@ enum Aux {
     SaveSettings(
         settings::Snapshot,
         omen_core::app_settings::AppSettings,
+        omen_core::appearance::Appearance,
         bool,
     ),
     Lighting(Option<(KeyboardState, [[u8; 3]; 4], bool)>),
@@ -120,8 +123,8 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     .flatten()
                     .map(|s| s.disabled),
             ),
-            Aux::SaveSettings(base, options, startup) => {
-                AuxResult::SettingsSaved(settings::save(&base, &options, startup))
+            Aux::SaveSettings(base, options, appearance, startup) => {
+                AuxResult::SettingsSaved(settings::save(&base, &options, &appearance, startup))
             }
             Aux::Lighting(target) => AuxResult::Lighting(
                 omen_platform::DirectLighting::new().and_then(|mut control| match target {
@@ -169,6 +172,7 @@ struct Host {
     hwnd: Cell<HWND>,
     icon_hwnd: Cell<HWND>,
     test: bool,
+    test_settings: Option<ProfileStore>,
     tx: mpsc::Sender<ui::Request>,
     control: mpsc::Sender<ui::ControlRequest>,
     shared: Arc<Mutex<Option<Snapshot>>>,
@@ -188,6 +192,8 @@ struct Host {
     profiles: RefCell<Vec<PerformanceProfile>>,
     battery_entries: RefCell<Vec<Selection>>,
     lighting: RefCell<Option<KeyboardState>>,
+    lighting_draft: RefCell<Option<omen_core::lighting_editor::Draft>>,
+    lighting_attempted: Cell<bool>,
     curve: RefCell<Option<curve::Editor>>,
     gpu_draft: RefCell<Option<Curve>>,
     fan_draft: RefCell<Option<Curve>>,
@@ -199,6 +205,8 @@ struct Host {
     pending_select: Cell<Option<i32>>,
     settings_loaded: Cell<bool>,
     loading_presets: Cell<bool>,
+    appearance_draft: RefCell<omen_core::appearance::Appearance>,
+    appearance_tokens: Cell<omen_core::appearance::Tokens>,
 }
 
 impl Host {
@@ -228,6 +236,7 @@ impl Host {
         if let Some(window) = self.about.borrow().as_ref() {
             let _ = window.show();
         }
+        self.paint_about();
     }
     fn set_lists(&self, profiles: Vec<PerformanceProfile>, applied: Option<Selection>) {
         let Some(w) = self.window.upgrade() else {
@@ -250,13 +259,10 @@ impl Host {
                 .iter()
                 .position(|(_, mode)| *mode == m)
                 .map(|i| i as i32),
-            Some(Selection::Preset(id)) => profiles
-                .iter()
-                .position(|p| p.id == id)
-                .map(|i| i as i32 + 4),
+            Some(Selection::Preset(_)) => None,
             None => None,
         }
-        .unwrap_or(1);
+        .unwrap_or(-1);
         data.set_profiles(strings(
             std::iter::once(t("preset.new_entry").to_owned())
                 .chain(profiles.iter().map(|p| p.name.clone())),
@@ -264,8 +270,7 @@ impl Host {
         data.set_modes(strings(
             MODES
                 .iter()
-                .map(|(key, _)| tf("mode.default_entry", &[&t(key)]))
-                .chain(profiles.iter().map(|p| p.name.clone())),
+                .map(|(key, _)| tf("mode.default_entry", &[&t(key)])),
         ));
         data.set_mode_index(index);
         data.set_modes_ready(true);
@@ -320,8 +325,13 @@ impl Host {
             return;
         }
         if let Some(w) = self.window.upgrade() {
-            w.window()
-                .with_winit_window(|native| native.set_theme(Some(winit::window::Theme::Dark)));
+            w.window().with_winit_window(|native| {
+                native.set_theme(Some(if self.appearance_tokens.get().dark {
+                    winit::window::Theme::Dark
+                } else {
+                    winit::window::Theme::Light
+                }))
+            });
         }
         unsafe {
             SendMessageW(
@@ -757,17 +767,22 @@ impl Host {
             if self.test {
                 return;
             }
-            if !self.is_busy() && page == 1 && !w.global::<Workbench>().get_preset_ready() {
+            if !self.is_busy() && page < 2 && !w.global::<Workbench>().get_preset_ready() {
                 self.loading_presets.set(false);
             }
             if !self.is_busy() && page == 4 && !w.global::<Workbench>().get_settings_ready() {
                 self.settings_loaded.set(false);
             }
-            if page == 1 && !self.loading_presets.get() && !self.test && !self.is_busy() {
+            if page < 2 && !self.loading_presets.get() && !self.test && !self.is_busy() {
                 self.loading_presets.set(true);
                 self.send_preset(preset_ui::Request::Load(None));
             }
-            if page == 3 && self.lighting.borrow().is_none() {
+            if page == 3
+                && self.lighting.borrow().is_none()
+                && !self.lighting_attempted.get()
+                && !self.is_busy()
+            {
+                self.lighting_attempted.set(true);
                 self.send_aux(Aux::Lighting(None));
             }
             if page == 4 && !self.settings_loaded.get() && !self.is_busy() {
@@ -826,7 +841,10 @@ impl Host {
             return;
         }
         if let Some(w) = self.window.upgrade()
-            && (w.global::<Workbench>().get_dirty() || self.curves_dirty() || self.settings_dirty())
+            && (w.global::<Workbench>().get_dirty()
+                || self.curves_dirty()
+                || self.settings_dirty()
+                || self.lighting_dirty())
         {
             w.global::<Workbench>().set_confirm_kind(3);
             self.show();
@@ -877,6 +895,12 @@ impl Host {
                 match update {
                     preset_ui::Update::List(result) => match result {
                         Ok((profiles, applied, pending)) => {
+                            let initial = applied.as_ref().and_then(|s| match s {
+                                Selection::Preset(id) if profiles.iter().any(|p| p.id == *id) => {
+                                    Some(id.clone())
+                                }
+                                _ => None,
+                            });
                             self.set_lists(profiles, applied);
                             if let Some(w) = self.window.upgrade() {
                                 w.global::<Workbench>().set_recovery_pending(pending);
@@ -885,6 +909,17 @@ impl Host {
                                 self.status(t("preset.pending"), true);
                             }
                             self.sync_quick();
+                            if self.view.borrow().is_none()
+                                && !self.loading_presets.get()
+                                && !self.is_busy()
+                                && self
+                                    .window
+                                    .upgrade()
+                                    .is_some_and(|w| w.global::<Workbench>().get_page() < 2)
+                            {
+                                self.loading_presets.set(true);
+                                self.send_preset(preset_ui::Request::Load(initial));
+                            }
                         }
                         Err(e) => self.status(&crate::i18n::error_message(&e), true),
                     },
@@ -970,9 +1005,18 @@ impl Host {
             && self
                 .window
                 .upgrade()
-                .is_some_and(|w| w.global::<Workbench>().get_page() == 1)
+                .is_some_and(|w| w.global::<Workbench>().get_page() < 2)
         {
-            self.navigate(1);
+            self.navigate(0);
+        }
+        if !self.is_busy()
+            && !self.lighting_attempted.get()
+            && self
+                .window
+                .upgrade()
+                .is_some_and(|w| w.global::<Workbench>().get_page() == 3)
+        {
+            self.navigate(3);
         }
     }
     fn telemetry(&self, s: &Snapshot) {
@@ -1050,6 +1094,7 @@ impl Host {
             return;
         };
         let d = w.global::<Workbench>();
+        self.show_appearance(s.appearance.clone());
         d.set_language_index(match s.options.language {
             LanguagePreference::System => 0,
             LanguagePreference::German => 1,
@@ -1099,6 +1144,7 @@ impl Host {
     ) -> Option<(
         settings::Snapshot,
         omen_core::app_settings::AppSettings,
+        omen_core::appearance::Appearance,
         bool,
     )> {
         let w = self.window.upgrade()?;
@@ -1117,82 +1163,54 @@ impl Host {
         options.battery_preset = usize::try_from(d.get_battery_index() - 1)
             .ok()
             .and_then(|i| choices.get(i).map(Selection::key));
-        Some((base, options, d.get_autostart()))
+        Some((
+            base,
+            options,
+            self.appearance_draft.borrow().clone(),
+            d.get_autostart(),
+        ))
     }
     fn save_settings(&self) {
-        if let Some((base, options, startup)) = self.settings_target() {
+        if let Some((base, options, appearance, startup)) = self.settings_target() {
+            if let Err(e) = options.validate().and_then(|_| appearance.validate()) {
+                self.status(&crate::i18n::error_message(&e), true);
+                return;
+            }
             if self.test {
+                if let Some(store) = &self.test_settings
+                    && let Err(e) = settings::persist_options(store, &options, &appearance)
+                {
+                    self.status(&crate::i18n::error_message(&e), true);
+                    return;
+                }
                 self.show_settings(
                     settings::Snapshot {
                         options,
+                        appearance,
                         run_entry: startup.then(|| "UI TEST".to_owned()),
                     },
                     false,
                 );
-                self.status(t("ui.test_saved"), false);
+                self.status(
+                    t(if self.test_settings.is_some() {
+                        "ui.test_settings_saved"
+                    } else {
+                        "ui.test_saved"
+                    }),
+                    false,
+                );
                 return;
             }
-            self.send_aux(Aux::SaveSettings(base, options, startup));
+            self.send_aux(Aux::SaveSettings(base, options, appearance, startup));
         }
     }
     fn settings_dirty(&self) -> bool {
         self.settings_target()
-            .is_some_and(|(base, options, startup)| {
-                base.options != options || base.run_entry.is_some() != startup
+            .is_some_and(|(base, options, appearance, startup)| {
+                base.options != options
+                    || base.appearance != appearance
+                    || base.run_entry.is_some() != startup
             })
-    }
-    fn show_lighting(&self, state: KeyboardState) {
-        if let Some(w) = self.window.upgrade() {
-            let d = w.global::<Workbench>();
-            d.set_lighting_ready(true);
-            d.set_lighting_on(state.custom_colors_enabled().unwrap_or(false));
-            d.set_zone_colors(
-                Rc::new(VecModel::from(
-                    state
-                        .colors()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|c| slint::Color::from_rgb_u8(c[0], c[1], c[2]))
-                        .collect::<Vec<_>>(),
-                ))
-                .into(),
-            );
-        }
-        *self.lighting.borrow_mut() = Some(state);
-        self.status(t("ui.ready"), false);
-    }
-    fn pick_zone(&self, index: i32) {
-        if self.is_busy() || self.test {
-            return;
-        }
-        let Some(state) = self.lighting.borrow().clone() else {
-            return;
-        };
-        let Ok(index) = usize::try_from(index) else {
-            return;
-        };
-        let Ok(colors) = state.colors() else { return };
-        let Some(rgb) = colors.get(index) else { return };
-        let mut custom_colors = [0u32; 16];
-        let mut picker: windows_sys::Win32::UI::Controls::Dialogs::CHOOSECOLORW =
-            unsafe { std::mem::zeroed() };
-        picker.lStructSize = size_of_val(&picker) as u32;
-        picker.hwndOwner = self.visible_hwnd();
-        picker.rgbResult = crate::theme::rgb(rgb[0], rgb[1], rgb[2]);
-        picker.lpCustColors = custom_colors.as_mut_ptr();
-        picker.Flags = windows_sys::Win32::UI::Controls::Dialogs::CC_RGBINIT
-            | windows_sys::Win32::UI::Controls::Dialogs::CC_FULLOPEN;
-        if unsafe { windows_sys::Win32::UI::Controls::Dialogs::ChooseColorW(&mut picker) } != 0 {
-            let Ok(mut target) = <[[u8; 3]; 4]>::try_from(colors) else {
-                return;
-            };
-            target[index] = [
-                (picker.rgbResult & 255) as u8,
-                ((picker.rgbResult >> 8) & 255) as u8,
-                ((picker.rgbResult >> 16) & 255) as u8,
-            ];
-            self.send_aux(Aux::Lighting(Some((state, target, true))));
-        }
     }
 }
 
@@ -1346,6 +1364,28 @@ pub fn run(
             .map_err(error)?;
     }
     let window = AppWindow::new().map_err(error)?;
+    // Optional, explicit developer fixture persistence. A marker and a direct
+    // child of the OS temp directory prevent writes into real user data.
+    let test_settings = if test {
+        std::env::var_os("OMEN_UI_TEST_DIR")
+            .map(|path| -> Result<ProfileStore, String> {
+                let path = std::fs::canonicalize(path).map_err(error)?;
+                let temp = std::fs::canonicalize(std::env::temp_dir()).map_err(error)?;
+                if path.parent() != Some(temp.as_path())
+                    || !path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("omen-ui-settings-"))
+                    || !std::fs::read_to_string(path.join("ui-test-only.marker"))
+                        .is_ok_and(|text| text.trim_end() == "Omen Hub++ isolated UI settings")
+                {
+                    return Err("Invalid isolated UI settings directory".into());
+                }
+                ProfileStore::at(path)
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let d = window.global::<Workbench>();
     d.on_tr(|key| t(key.as_str()).into());
     d.set_test_mode(test);
@@ -1384,6 +1424,7 @@ pub fn run(
         hwnd: Cell::new(ptr::null_mut()),
         icon_hwnd: Cell::new(ptr::null_mut()),
         test,
+        test_settings,
         tx,
         control,
         shared: Arc::new(Mutex::new(None)),
@@ -1403,6 +1444,8 @@ pub fn run(
         profiles: RefCell::new(vec![]),
         battery_entries: RefCell::new(vec![]),
         lighting: RefCell::new(None),
+        lighting_draft: RefCell::new(None),
+        lighting_attempted: Cell::new(test),
         curve: RefCell::new(None),
         gpu_draft: RefCell::new(None),
         fan_draft: RefCell::new(None),
@@ -1416,7 +1459,33 @@ pub fn run(
         pending_select: Cell::new(None),
         settings_loaded: Cell::new(false),
         loading_presets: Cell::new(false),
+        appearance_draft: Default::default(),
+        appearance_tokens: Cell::new(
+            omen_core::appearance::Colors::default()
+                .tokens()
+                .expect("Valid built-in palette"),
+        ),
     });
+    let initial_appearance = if test {
+        host.test_settings
+            .as_ref()
+            .map(|s| s.ui_appearance())
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        ProfileStore::user_data()
+            .and_then(|s| s.ui_appearance())
+            .unwrap_or_default()
+    };
+    host.show_appearance(initial_appearance);
+    host.keyboard_layout(if test {
+        crate::i18n::language_code() == "de"
+    } else {
+        (unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout(0) } as usize
+            & 0x3ff)
+            == 7
+    });
+
     bind(&window, &host);
     let class = crate::native_ui::wide(if test {
         "OmenHubSlintTestEvents"
@@ -1472,21 +1541,44 @@ pub fn run(
     };
     let mut workers = vec![];
     if test {
-        host.display(test_view(None, &[]), t("ui.test_mode"));
-        d.set_zone_colors(
-            Rc::new(VecModel::from(vec![
-                slint::Color::from_rgb_u8(115, 160, 200),
-                slint::Color::from_rgb_u8(165, 120, 175),
-                slint::Color::from_rgb_u8(170, 140, 100),
-                slint::Color::from_rgb_u8(110, 175, 150),
-            ]))
-            .into(),
+        let profiles = if std::env::var_os("OMEN_UI_TEST_LONG_CHOICES").is_some() {
+            let binding = test_view(None, &[]).binding;
+            (1..=24)
+                .map(|i| PerformanceProfile {
+                    schema: omen_core::profiles::PROFILE_SCHEMA,
+                    id: format!("ui-long-{i}"),
+                    name: tf("ui.test_long_preset", &[&i]),
+                    binding: binding.clone(),
+                    settings: vec![],
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        host.display(test_view(None, &profiles), t("ui.test_mode"));
+        host.init_lighting(
+            [
+                [115, 160, 200],
+                [165, 120, 175],
+                [170, 140, 100],
+                [110, 175, 150],
+            ],
+            true,
         );
-        d.set_lighting_ready(true);
-        d.set_lighting_on(true);
         host.show_settings(
             settings::Snapshot {
-                options: Default::default(),
+                options: host
+                    .test_settings
+                    .as_ref()
+                    .map(|s| s.app_settings())
+                    .transpose()?
+                    .unwrap_or_default(),
+                appearance: host
+                    .test_settings
+                    .as_ref()
+                    .map(|s| s.ui_appearance())
+                    .transpose()?
+                    .unwrap_or_default(),
                 run_entry: None,
             },
             false,
@@ -1505,7 +1597,7 @@ pub fn run(
                 },
                 ..Default::default()
             });
-            let _ = ptx.send(preset_ui::Update::List(Ok((vec![], None, false))));
+            let _ = ptx.send(preset_ui::Update::List(Ok((profiles, None, false))));
             unsafe {
                 PostMessageW(notify as HWND, ui::UPDATE, 0, 0);
                 PostMessageW(notify as HWND, preset_ui::UPDATE, 0, 0);
@@ -1539,7 +1631,7 @@ pub fn run(
         crate::preset_hold::spawn();
         crate::fan_watch::spawn();
         let _ = host.preset.send(preset_ui::Request::List);
-        if page == 1 {
+        if page < 2 && selected.is_some() {
             host.loading_presets.set(true);
             host.send_preset(preset_ui::Request::Load(selected));
         }
@@ -1609,7 +1701,11 @@ pub fn run(
     let weak_host = Rc::downgrade(&host);
     slint::Timer::single_shot(std::time::Duration::ZERO, move || {
         if let (Some(w), Some(h)) = (weak.upgrade(), weak_host.upgrade()) {
-            w.window().set_size(slint::LogicalSize::new(760.0, 540.0));
+            w.window().set_size(if h.test {
+                slint::LogicalSize::new(760.0, 540.0)
+            } else {
+                slint::LogicalSize::new(1000.0, 720.0)
+            });
             let visible = h.visible_hwnd();
             unsafe {
                 SendMessageW(
@@ -1736,6 +1832,17 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     });
     callback!(on_refresh, |h| {
         let _ = h.tx.send(ui::Request::Refresh);
+    });
+    callback!(on_palette_changed, |h, index| {
+        h.select_palette(index);
+    });
+    callback!(on_colors_changed, |h| {
+        h.edit_colors();
+    });
+    callback!(on_reset_appearance, |h| {
+        if !h.blocked() {
+            h.show_appearance(Default::default());
+        }
     });
     callback!(on_name_edited, |h, _name| {
         h.dirty();
@@ -1907,21 +2014,54 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
         }
     });
     callback!(on_lighting_power, |h| {
-        let live = h.lighting.borrow().clone();
-        let request = live.and_then(|s| {
-            let Ok(colors) = s.colors().and_then(|c| {
-                c.try_into()
-                    .map_err(|_| t("lighting.four_zones").to_owned())
-            }) else {
-                return None;
-            };
-            let on = !s.custom_colors_enabled().unwrap_or(false);
-            Some((s, colors, on))
-        });
-        h.send_aux(Aux::Lighting(request));
+        if !h.blocked() {
+            if let Some(d) = h.lighting_draft.borrow_mut().as_mut() {
+                d.enabled = !d.enabled;
+            }
+            h.draw_lighting(false);
+        }
     });
-    callback!(on_pick_zone, |h, index| {
-        h.pick_zone(index);
+    callback!(on_select_lighting_group, |h, index| {
+        h.select_lighting_group(index);
+    });
+    callback!(on_keyboard_layout, |h, german| {
+        h.keyboard_layout(german);
+    });
+    callback!(on_edit_lighting_color, |h, value| {
+        h.edit_lighting_color(value.as_str());
+    });
+    callback!(on_edit_lighting_brightness, |h, value| {
+        h.edit_lighting_brightness(value.as_str());
+    });
+    callback!(on_lighting_level_edited, |h, value| {
+        let value = value.round().clamp(0.0, 100.0).to_string();
+        if let Some(w) = h.window.upgrade() {
+            w.global::<Workbench>()
+                .set_lighting_brightness(value.as_str().into());
+        }
+        h.edit_lighting_brightness(&value);
+    });
+    callback!(on_pick_lighting_color, |h| {
+        h.pick_lighting_color();
+    });
+    callback!(on_apply_lighting, |h| {
+        h.apply_lighting();
+    });
+    callback!(on_reset_lighting, |h| {
+        if !h.blocked() {
+            if let Some(d) = h.lighting_draft.borrow_mut().as_mut() {
+                d.reset();
+            }
+            if let Some(w) = h.window.upgrade() {
+                w.global::<Workbench>().set_lighting_error("".into());
+            }
+            h.draw_lighting(true);
+        }
+    });
+    callback!(on_refresh_lighting, |h| {
+        if !h.lighting_dirty() && !h.test {
+            h.send_aux(Aux::Lighting(None));
+        }
     });
     callback!(on_hp_service, |h| {
         h.status(t("ui.hp_explicit"), false);

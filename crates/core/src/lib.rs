@@ -1,5 +1,6 @@
 //! Hardware-independent policy for Omen Hub++. No OS access or firmware writes.
 pub mod app_settings;
+pub mod appearance;
 pub mod battery;
 pub mod ccd;
 pub mod cooling;
@@ -16,6 +17,7 @@ pub mod hold;
 pub mod hp;
 pub mod hp_mode;
 pub mod keyboard;
+pub mod lighting_editor;
 pub mod message;
 pub mod ownership;
 pub mod power;

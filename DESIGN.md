@@ -1,66 +1,397 @@
-# Omen Hub++ — Precision Hardware Utility
+---
+name: Omen Hub++
+description: A native Windows tuning workbench with clear measured state, cohesive controls and explicit hardware actions.
+colors:
+  canvas: "#202127"
+  surface: "#27282E"
+  control: "#2E2F34"
+  hover: "#37383E"
+  line: "#424348"
+  ink: "#F2F3F5"
+  muted: "#B3B4B7"
+  quiet: "#747579"
+  accent: "#7C87F8"
+  on-accent: "#000000"
+  good: "#71D5A6"
+  warning: "#E5C18A"
+  error: "#F3A1AF"
+  good-light: "#147347"
+  warning-light: "#765000"
+  error-light: "#A21635"
+  scrim: "#00000099"
+  graphite-canvas: "#12151B"
+  graphite-ink: "#ECEEF2"
+  graphite-accent: "#7EB9DF"
+  vesper-canvas: "#101010"
+  vesper-ink: "#ECE6E6"
+  vesper-accent: "#FFC799"
+  light-canvas: "#F5F6FA"
+  light-ink: "#202127"
+  light-accent: "#4D57C8"
+typography:
+  body:
+    fontFamily: Segoe UI
+    fontSize: 13px
+  section:
+    fontFamily: Segoe UI
+    fontSize: 15px
+    fontWeight: 600
+  caption:
+    fontFamily: Segoe UI
+    fontSize: 12px
+  utility:
+    fontFamily: Segoe UI
+    fontSize: 11px
+  product-mark:
+    fontFamily: Segoe UI
+    fontSize: 12px
+    fontWeight: 600
+    letterSpacing: 0.8px
+  metric:
+    fontFamily: Consolas
+    fontSize: 24px
+  metric-unavailable:
+    fontFamily: Consolas
+    fontSize: 13px
+  chart-label:
+    fontFamily: Consolas
+    fontSize: 11px
+  diagnostic:
+    fontFamily: Consolas
+    fontSize: 12px
+  keycap:
+    fontFamily: Segoe UI
+    fontSize: 10px
+rounded:
+  small: 4px
+  control: 6px
+  keyboard: 8px
+spacing:
+  small: 8px
+  regular: 12px
+  inset: 16px
+  panel: 20px
+  group: 24px
+components:
+  button-primary:
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.on-accent}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    height: 36px
+  button-secondary:
+    backgroundColor: "{colors.control}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    height: 36px
+  button-primary-pressed:
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.on-accent}"
+    rounded: "{rounded.control}"
+    height: 36px
+  button-secondary-pressed:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: 36px
+  button-secondary-hover:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: 36px
+  button-disabled:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.quiet}"
+    rounded: "{rounded.control}"
+    height: 36px
+  field:
+    backgroundColor: "{colors.control}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    height: 36px
+  value-field:
+    backgroundColor: "{colors.control}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: 36px
+    width: 276px
+  navigation-selected:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: 36px
+  section-header:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.control}"
+    height: 36px
+  curve-canvas:
+    backgroundColor: "{colors.surface}"
+  keyboard-preview:
+    backgroundColor: "{colors.surface}"
+    rounded: "{rounded.keyboard}"
+---
 
-Slint migration specification, 15 November 2026. This describes the new UI being implemented on `codex/slint-ui-rework`; it is not a claim that the deployed beta.3 already uses Slint. Confirmed functions and device contracts remain authoritative in PRODUCT.md and docs/HARDWARE_MATRIX.md.
+# Design System: Omen Hub++
 
-## Product and operating context
+## Overview
 
-A local Windows hardware utility used alongside demanding games/development workloads, often in a dim room. The dark graphite surface reduces glare. Its first job is to show GPU watts/temperature with CPU performance beside it, then offer deliberate tuning and cooling controls. Mode: Operate. All existing tuning, recovery, startup, cooling and lighting workflows survive the visual replacement.
+**Creative North Star: "The Native Tuning Workbench"**
 
-The approved brief replaces the Win32/GDI visual world. It does not request a browser runtime, a debloat service manager or new snapshot operations. Do not copy the brief's generic three-tab feature examples. Keep the backend flat and reuse existing core/platform policies and sleeping workers. System calls never execute in Slint callbacks on the event thread.
+The implemented Rust/Slint system is a modern, clean Windows utility for frequent
+hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained
+indigo accent and Antigravity-style appearance choices replace the initial palette.
+The user's pinned direction is recorded in [the appearance brief](docs/plans/APPEARANCE_REFINEMENT.md).
+This record describes the implementation refined on 16 November 2026 for 0.10.0-beta.2.
 
-## Composition and geometry
+Measured GPU watts and temperature lead, with verified CPU telemetry beside them.
+Editable presets follow in the same work area. Information density supports scanning;
+alignment, readable fields and explicit actions carry the hierarchy. Missing readings
+stay unavailable, and Windows-reported MHz never becomes a measured boost clock.
 
-Use one resizable native Windows window with the system caption, window menu, minimize/maximize and resize behavior. Default client size 760 × 540 logical px, minimum 720 × 500. Validate rather than assume readability at 100/125/150/200% scale. The window can grow; at compact sizes each work area scrolls within its own bounds. No controls move outside their viewport or over the command/status bars.
+The system is native and offline: Slint 1.18.1 owns layout and input, with a Windows
+event/tray owner. The shared palette covers the main window and About. Product and
+device contracts remain in [PRODUCT.md](PRODUCT.md) and the
+[hardware matrix](docs/HARDWARE_MATRIX.md); a visual change grants no hardware,
+startup or lifecycle qualification.
 
-- Top command bar: 44 px, 16 px horizontal inset, original geometric app mark, Omen Hub++ label, quiet actual privilege status. Flat segmented navigation: Overview, Presets, Cooling, Lighting. A separate Settings action stays visible. No wide sidebar or hero.
-- Main work area: 20 px horizontal inset, 16 px vertical inset, 8 px row rhythm and 20 px group separation. Headers 32 px; controls at least 32 px, primary actions 34 px. Label/value columns share edges.
-- Overview: two open instrument regions separated by one hairline, GPU first and CPU beside it; concise measured values and provenance, no symmetric KPI-card row. Power source and device identity are secondary. Mode/preset selection and Apply are distinct. Fan/graphics requests show saved preference separately from confirmed state.
-- Presets: pinned selection/New/name row; independent scrolling groups GPU, CPU limits/PBO/CO/per-core and Windows processor/energy/display. Name input is plain left-aligned and vertically centered. Save, Apply/Recovery, Delete and sign-in permission remain explicit. Long choice text wraps in the open chooser/detail area rather than being silently cut off. Help opens on demand, never a repetitive explanation under every row.
-- Curves: GPU curve belongs to the preset draft. Cooling owns the shared fan curve and BIOS/Curve/Max choices. A chart takes the available work area; a compact numeric point editor, Undo/Redo, fit/zoom, selection and modifier editing remain accessible. Closing/applying the curve draft does not itself write GPU hardware.
-- Lighting: four keyboard zones including numpad, On/Off, native color picker and real readback/error state. Color picker cancellation changes nothing. Opening the view only reads.
-- Settings: language System/Deutsch/English, app autostart, start in tray, close behavior, battery selection and preset hold. Preserve the explicit existing HP-service action, separate from ordinary settings saves. App startup and a preset's sign-in approval are different contracts.
-- Footer: 28 px high, one actionable status line. Busy, failed, saved and confirmed/partial Apply use text, not color alone. Clicking details expands a bounded diagnostic area; long failure details remain selectable/readable.
+**Key Characteristics:**
 
-## Tokens
+- GPU/CPU instruments before tuning controls.
+- Common field and action geometry, with one aligned value column.
+- Complete palette choices and validated local appearance previews.
+- Distinct selected, edited, saved and confirmed hardware states.
+- Connected curve plots and a schematic keyboard drawn from original geometry.
+- Event-driven rendering and low background resource use.
 
-| Role | Value | Use |
-| --- | --- | --- |
-| surface-0 | #0A0B0E | window canvas |
-| surface-1 | #111318 | command bar, fields |
-| surface-2 | #171A21 | hover/selected segment |
-| hairline | #1E222B | one-pixel separators |
-| text-high | #ECEEF2 | primary text/values |
-| text-mid | #8A93A2 | secondary labels |
-| text-mono | #5E6673 | nonessential metadata only; essential text uses readable higher contrast |
-| signal-crimson | #E11D48 | single primary action/focus, at most two concurrent accents |
-| signal-clean | #10B981 | small confirmed-status point only |
-| warning | #E5B76B | explicit degraded/pending state |
-| error | #F3A1AF | readable error text |
+## Colors
 
-Segoe UI Variable/Segoe UI for controls; Consolas for aligned measurements and technical identifiers only. Type scale 11 px nonessential metadata, 12 px secondary, 13 px body/control, 15 px group heading, 24 px measurement. Preserve native caret, text selection, keyboard navigation and visible focus. Never put essential explanations at the low-contrast mono token.
+Slate is the default: cool dark neutrals with one indigo action and focus accent.
+The frontmatter records its derived tokens, the three other preset base palettes
+and the theme-dependent semantic colors. Custom appearance accepts opaque sRGB
+background, foreground and accent values.
 
-Use 4 px field/button radius and 6 px segment radius. No nested bordered panels, glass, gradients, decorative shadows, KPI tiles, colored pill stacks, emoji icons or continuous decoration. Draw the original app mark and action icons as geometry; do not ship vendor logos/fonts or downloaded artwork.
+### Primary
 
-Motion is limited to hover/segment changes at 120–160 ms, ease-out cubic-bezier(0.16,1,0.3,1). No entrance delays, bouncing, animated telemetry numbers or redraw loop at rest. The signature interaction is the precise curve/draft selection guide, driven by actual editing state.
+**Indigo action** (`accent`) identifies primary actions, focus, draft curves and the
+selected keyboard group. **On-accent ink** (`on-accent`) is whichever of black or
+white gives the higher contrast against the active accent.
 
-## State, threading and lifecycle
+### Neutral
 
-Rust owns state and editing history. Slint owns layout, clipping, rendering and input. Keep stable models and update changed rows without recreating the whole form on each telemetry tick. Virtualize long lists. The bounded preset form stays mounted inside a clipped ScrollView, including collapsed groups, so input selection and native text Undo survive scrolling and group toggles. Group visibility, scroll position and viewport geometry never mutate profile contents or Undo history.
+**Canvas**, **surface**, **control**, **hover** and **line** separate the work area,
+section headers, fields, interaction feedback and boundaries. Runtime appearance
+derives surface/control/hover/line by mixing foreground into canvas at
+3.5/6.5/11/16%, with channel rounding. These are reused tonal roles, not shadows.
 
-Reuse existing bounded telemetry children, CPU reader, controller lease, Apply/preflight/readback/recovery, cooling helper and persistent stores. Manual controls do not queue behind telemetry. Hold/battery operations retain their existing independent completion paths. Controls remain busy until their own operation finishes; a telemetry or automatic result cannot unlock them.
+**Ink** carries essential content. **Muted** is a 70% foreground mix when it meets
+the control-text contrast check, otherwise full ink. **Quiet** is a 40% mix reserved
+for disabled or subordinate state. The dialog scrim dims the covered work area.
 
-A hidden Win32 event/tray owner can retain power notifications, single-instance activation and Explorer recreation while Slint supplies the visible windows. Hiding/minimizing pauses sensor polling and rendering. Closing during a write waits for that write's completion. Exiting must preserve cooling ownership and journals; never kill active controllers as part of UI tests.
+Slate, Graphite, Vesper and Light are complete presets. Custom uses the same derived
+roles, so a palette change reaches fields, buttons, plots and About together. Standard
+Slint attribution and diagnostic controls use the matching light/dark scheme.
 
-Settings save atomically through the existing settings contract and detects concurrent edits. Language stays process-consistent; a saved language change clearly requires restart. Do not discard drafts or restart automatically. New subprocess/UAC actions carry the current language. Do not silently change startup permissions.
+### Semantic
 
-A dedicated developer test mode isolates UI interaction from hardware writes, user profiles/settings, startup tasks and cooling helpers. It is visibly labeled. MCP exists only in explicit developer builds; normal release builds have no localhost server or network client.
+Good, warning and error have separate dark/light colors and accompany readable
+wording. Neither an accent nor a colored status dot proves a hardware operation.
 
-## Acceptance and truthfulness
+**The Shared Palette Rule.** Reuse semantic theme roles throughout the native UI.
+Do not introduce a separate chart, popup or settings palette.
 
-Rapid alternating scroll, repeated resize, minimize/restore, group toggles, dropdowns and keyboard/name input must be tested in the running app. Verify drafts, selection, native text Undo and curve history survive. Test both languages, compact dimensions and DPI; inspect screenshots and actual element geometry.
+**The Valid Preview Rule.** Foreground on the hovered control must meet 4.5:1 and
+accent against canvas must meet 3:1. Valid edits preview immediately; partial or
+low-contrast input retains the last valid preview and gives inline recovery guidance.
+Save persists the appearance. These validation thresholds do not establish full
+Windows high-contrast or accessibility coverage.
 
-Show requested limit, successful limit readback and measured Tctl as different data. Missing telemetry stays unavailable; do not cap the temperature display or guess power/clock values. Stored requests and historical successful Apply are not current hardware proof. Intel controls stay removed and legacy cleanup remains explicit on Save. Max-Fan stays outside custom presets.
+## Typography
 
-The latest brief removes an extreme fixed RAM limit; low tray-idle CPU/RAM including helpers remains a measured goal. Executable size is not a target. Measure startup and interaction latency and renderer behavior on actual views. Update validation with measured scope and limits, not blanket claims.
+Segoe UI is the native text face. Consolas is restricted to measured values,
+coordinates and diagnostics. The frontmatter records the observed logical-pixel
+roles; there is no decorative display face or downloaded font.
 
-Run format, workspace tests, Clippy with warnings denied and a release build, plus targeted regressions. Do not replace dist, redirect shortcuts or publish a partially migrated UI. Record exact source/version/SHA-256 when a complete tested build is deployed.
+Section titles use the semibold section role. Body text carries controls and ordinary
+labels; caption and utility roles cover descriptions, privilege and footer details.
+The product wordmark uses its own small semibold role and measured letter spacing.
+Keyboard labels use the compact keycap role within the schematic.
+
+Available instrument readings use the larger metric role; unavailable readings use
+the smaller metric-unavailable role. Long explanations wrap. Control text may elide
+inside its fixed field, while wrapped popup choices expose the full selection.
+
+**The Exact Value Rule.** Preserve units, exact numeric values and the distinction
+between configured, requested, effective and measured state. Essential descriptions
+must remain readable in both German and English.
+
+## Layout
+
+One resizable native window retains the system caption, menu, minimize/maximize and
+resize behavior. Default client size is 1000 × 720 logical px; minimum is 720 × 500.
+Compact work areas scroll within their bounds instead of increasing the window's
+minimum to fit every expanded section.
+
+The command bar is 44 px high with 16 px side insets, an original geometric mark and
+quiet privilege state. Overview, Cooling and Lighting occupy three equal targets
+within the navigation strip; Settings remains a separate action. The footer is
+28 px high, with bounded selectable details for long diagnostics.
+
+Content panels use the shared 20 px inset and mainly 8/12 px spacing. Ordinary
+inputs, selectors and buttons share 36 px height and six-pixel corners. Preset fields
+and settings use one 276 px value column; preset selector/name use aligned flexible
+columns. Per-core fields, chart controls and keyboard keys retain their
+purpose-specific widths.
+
+**The One Work Area Rule.** Keep Overview's instruments and preset editor in one
+mounted scroll area. Selection, drafts and Undo survive scrolling and navigation.
+Save, Apply/Recovery, Delete and sign-in approval remain explicit below that area.
+
+Slint-scale checks at 100/125/150/200% are layout evidence. Physical Windows DPI
+transitions require their own observed validation; scale overrides do not prove them.
+
+## Elevation & Depth
+
+The system uses opaque tonal layering, hairline boundaries and focus outlines,
+without drop shadows, glass or decorative gradients. Section surfaces and popups
+remain flat. Confirmation uses the scrim and a bordered surface rather than a
+shadow vocabulary.
+
+Action-button background feedback lasts 120 ms. There is no decorative motion or
+continuous render loop. Wait for brief feedback to settle when inspecting a static
+state. Rendering remains event-driven and dashboard polling pauses when hidden or
+minimized.
+
+**The State Before Color Rule.** Name busy, error, draft, saved, unavailable and
+confirmed states in text. Color reinforces the wording.
+
+## Shapes
+
+Controls and confirmation surfaces share the gently rounded control shape. Popup
+rows, checkboxes and keycaps use the smaller corner; the keyboard's enclosing
+surface uses the larger keyboard corner. One-pixel borders and original Path
+geometry supply the remaining structure.
+
+Charts use actual connected paths. Rotated thin rectangles are not an alternative:
+transforms are unavailable in the supported software renderer. Path, markers and
+pointer input must share the same plot viewport, with axes outside that clipped area.
+
+## Components
+
+### Buttons and navigation
+
+Primary actions use accent/on-accent; ordinary actions use control/ink with tonal
+hover feedback. Pressed primary actions retain accent/on-accent with a contrasting
+on-accent boundary; pressed ordinary actions retain hover/ink with an accent boundary.
+Disabled actions retain their labels with subdued ink and surface.
+Keyboard focus uses the on-accent boundary for primary actions and accent for
+ordinary actions, following the same geometry as the interactive target.
+Space and Enter activate buttons. Equal navigation targets keep selected fill,
+keyboard outline and hit area together.
+
+### Inputs and selectors
+
+Shared fields have inset native Slint text input, a visible accent focus boundary,
+caret, selection, IME, clipboard/context actions and Undo. Do not replace the editor
+with painted text. Checkboxes and the brightness slider expose keyboard interaction
+and semantic roles.
+
+Selectors use the same closed-field geometry. The popup is bounded and scrollable;
+choices grow to wrap long names. Opening starts at the current choice. Arrows,
+Home and End move the pending highlight and reveal its actual variable-height row;
+Enter/click commits, Escape cancels. A highlighted open choice is not yet a selected
+preset.
+
+### Overview and presets
+
+GPU and CPU instruments precede the selected preset's name and directly editable
+GPU, CPU and Windows groups. Device, provenance, mode and graphics details expand
+on demand. The last recorded AC preset loads if it still exists; stored intent and
+historical Apply never imply a current hardware readback.
+
+Help is disclosed on demand. Save, Apply/Recovery, Delete and a preset's explicit
+sign-in permission keep their separate meanings. Rust owns stable draft/history
+models; telemetry must not rebuild the editor or release another worker's busy state.
+
+### Curves and cooling
+
+BIOS/Curve/Max cooling remains separate from custom presets. GPU curves belong to
+preset drafts. Both editors use connected Path geometry, draft/reference legends
+and readable axes. Plot clipping, point markers and input use the same viewport.
+The MSI Afterburner reference remains scoped to curve interaction/composition.
+
+### Keyboard lighting
+
+An original schematic QWERTZ/QWERTY keyboard previews four hardware zones through
+three selectable groups: WASD selects wire zone 3; Rest links zones 1 and 2; NUM pad
+and right selects zone 0, including adjacent keys. Clicking a key selects its group;
+the three group buttons provide the keyboard route. The diagram does not claim
+per-key RGB or measured physical LED boundaries.
+
+The native picker/hex field, On/Off and brightness edit a draft. Brightness adjusts
+RGB color value from the retained full-color base, never an unqualified firmware
+master-brightness byte. A mixed Rest group can keep its separate hues during a
+brightness edit. Canceling the picker changes nothing.
+
+Apply uses the existing guarded transaction and complete readback. Reset restores
+the last read draft; refresh cannot silently discard edits. Outside changes are
+rejected by the expected-state check. Unsaved lighting survives navigation/tray
+return and joins preset, curve and settings exit protection. The
+[keyboard guide](docs/KEYBOARD_UI.md) owns the detailed mapping and limits.
+
+### Settings, About and status
+
+Settings groups appearance, language, app autostart, tray/close behavior, battery
+choice and hold. App startup differs from a preset's sign-in permission. The existing
+explicit HP-service action is separate from normal settings saves.
+
+Appearance lives in a separate versioned `ui-settings.json`, preserving the
+`app-settings.json` schema for older protected main/fan/startup binaries. Failed
+normal saves restore prior appearance and the Run entry with concurrent-change
+checks. A palette preview grants or rewrites no profile, startup or recovery record.
+
+German and English use stable language keys and professional wording. Language
+stays consistent for the process and UAC actions; a saved language change requires
+restart without discarding drafts. Footer wording distinguishes busy/error/saved/
+confirmed state; selectable details expose long diagnostics.
+
+## Do's and Don'ts
+
+### Do
+
+- **Do** retain native Windows window behavior, native Slint text editing and visible
+  keyboard focus.
+- **Do** keep selected intent, draft edits, metadata saves and hardware readback
+  distinct in wording and actions.
+- **Do** preserve bounded telemetry, controller leases, expected-state checks,
+  readback and recovery. Closing waits for an active own write; a UI update never
+  terminates an active cooling helper.
+- **Do** verify both languages, compact/enlarged clients, popup focus/scrolling,
+  drafts/Undo, profile switches, exact units, connected curves and palette recovery
+  in both supported renderers. Exercise real wheel input, true compact client
+  geometry, repeated resize/minimize/tray restore and settings persistence through
+  a real process restart.
+- **Do** keep developer-only MCP and marked UI fixtures isolated. Fixture files are
+  restricted to a marked OS-temp directory and never write the live user store.
+  Normal releases have no MCP server.
+- **Do** measure total tray resources including resident helpers in the actual
+  configuration. The low-background-resource goal supersedes the historic fixed
+  50 MB ceiling; responsiveness and correctness take priority over executable size.
+- **Do** publish only a tested, identified build with source/version/SHA-256 and
+  truthful device/lifecycle limits. Current checks belong in
+  [Validation](docs/VALIDATION.md).
+
+### Don't
+
+- **Don't** infer sensor readings, claim CPU package power/temperature without a
+  verified reader, or present Windows MHz as measured boost.
+- **Don't** present a preset preview, metadata save, palette change or UI fixture as
+  a firmware operation.
+- **Don't** describe a keyboard group as per-key RGB or numpad-only control.
+- **Don't** add a browser runtime, raster decoration, downloaded fonts, decorative
+  motion or a continuous renderer to this native system.
+- **Don't** claim new hardware support, independent HP-controller ownership,
+  sustained 85 °C enforcement, physical DPI transitions or complete accessibility
+  coverage from these visual corrections. These require their own evidence.
