@@ -64,6 +64,45 @@ installation or helper replacement was part of these checks. Sustained 85 °C
 enforcement and HP-independent lifecycle remain separate device acceptance.
 Earlier resource samples keep their original builds and scopes.
 
+### Beta.7 handover and normal runtime sample
+
+The controlled 17 November handover deployed source
+**c81241f0400be7f5124911903d1d7c57a4fc60ee** to
+`D:\Omen Gaming Hub Rewrite\dist\Omen Hub++.exe`. The Desktop link retains that
+target, `--show` and the dist working directory. The normal GUI was observed visible
+from this exact executable and returned visibly after a normal close-to-tray cycle.
+The link's metadata and direct qualified target were verified; the `.lnk` itself
+was not executed by automation.
+
+All **47 live data files** were compared before/after; only the producing
+`fan-service-status.json` changed. Profiles, preferences, sign-in selection and
+recovery/control journals remained byte-identical. All five protected installation
+files and all three own scheduled-task definitions were unchanged. The fan helper
+retained PID 13628 and its 17 November 08:29:50 creation time. Protected main/fan
+images remain **0.9.0-beta.3**; no helper was upgraded and no existing startup grant
+was reapproved. HPOmenCap remained stopped/disabled; PawnIO remained running/Manual.
+
+The clean-source **571-file** ZIP passed version/hash/module/license checks and was
+published as [0.10.0-beta.7](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.10.0-beta.7).
+ZIP size **9,906,706 bytes**, SHA-256
+**1CF06670D189202C3F5BCE4FECC3F6713D53A34ED4C69424BBDA4E33D59ECA04**.
+An unauthenticated public API read confirmed its source, asset size/digest and
+published prerelease state. The [GitHub Windows checks](https://github.com/Ishtvr/Omen-Hub-debloat/actions/runs/44080120074)
+also passed format, workspace tests, warnings-denied Clippy and release build.
+The tagged artifact/build-info remains immutable; this paragraph is a later
+documentation-only deployment record.
+
+A warm normal-build sample included the main process, CPU sensor child and the
+unchanged fan helper. Open aggregate working set was **90.28 MiB**, private bytes
+**47.00 MiB**. After ten seconds in the tray, a **20.06-second** interval held at
+**90.25 MiB** summed working sets and **46.95 MiB** private bytes. Combined CPU time
+was **0.857% of one logical processor**; the CPU-reader child's CPU time did not
+increase during that interval. The GUI returned visibly with the same main PID.
+Working-set sums count shared mappings per process; private bytes are a commit
+measure. This short sample does not establish sustained memory growth, physical
+power use, transition safety or a new RAM ceiling. The low-background-resource
+goal supersedes the historical fixed 50-MB budget.
+
 ## New preset factory curve — 16 November 2026
 
 Normal executable: **15,533,056 bytes**, SHA-256 **8C20894C84706CFA168097923EFDD515F88FD1D8C32DA2FB18CA1E691C1500AC**. [Release notes](releases/0.10.0-beta.6.md).
@@ -150,7 +189,7 @@ The software restore refresh is deferred once on return and drops its temporary 
 
 No live power/voltage/lighting SET, vendor-service change, kernel installation or new device/lifecycle qualification was performed for this refinement. Standard HP modes retain their partial recovery/readback limitations; sustained 85 °C enforcement and HP-independent cooling ownership remain separate device acceptance.
 
-### Current normal-release resource samples
+### Beta.4 normal-release resource samples
 
 A warm owned UI fixture responded in **81 ms**. Open and tray working set were
 **33,665,024 bytes**, private **12,533,760 bytes**; tray CPU did not advance over
