@@ -5,8 +5,9 @@ use omen_core::lighting_editor::{Draft, Group};
 fn group_index(group: Group) -> i32 {
     match group {
         Group::Wasd => 0,
-        Group::Rest => 1,
-        Group::NumpadRight => 2,
+        Group::Left => 1,
+        Group::Middle => 2,
+        Group::NumpadRight => 3,
     }
 }
 fn hex(c: [u8; 3]) -> String {
@@ -372,7 +373,7 @@ mod tests {
             assert!(
                 keys.iter()
                     .filter(|k| k.x >= 16.0)
-                    .all(|k| k.zone == 0 && k.group == 2)
+                    .all(|k| k.zone == 0 && k.group == 3)
             );
             assert!(
                 keys.iter()

@@ -1,12 +1,12 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-16T17:02:54Z",
+  "generatedAt": "2026-11-17T12:04:20Z",
   "title": "Design System: Omen Hub++",
   "extensions": {
     "platform": {
       "kind": "native-windows",
       "renderer": "Slint 1.18.1",
-      "visualAuthority": "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md",
+      "visualAuthority": "docs/plans/PRESET_AND_LIGHTING_REFINEMENT.md",
       "tokenSources": [
         "crates/core/src/appearance.rs",
         "crates/app/ui/theme.slint",
@@ -25,7 +25,8 @@
       "directionContracts": [
         "docs/plans/APPEARANCE_REFINEMENT.md",
         "docs/plans/COLOR_SELECTION_AND_SCROLL.md",
-        "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md"
+        "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md",
+        "docs/plans/PRESET_AND_LIGHTING_REFINEMENT.md"
       ],
       "behaviorSources": [
         "crates/app/src/slint_ui/surface.rs",
@@ -34,7 +35,11 @@
         "crates/app/src/slint_ui/chrome.rs",
         "crates/app/src/slint_ui.rs",
         "crates/app/src/profile_commands.rs",
-        "crates/app/src/elevation.rs"
+        "crates/app/src/elevation.rs",
+        "crates/app/src/slint_ui/cooling.rs",
+        "crates/app/src/slint_ui/curve.rs",
+        "crates/app/src/profile_fan.rs",
+        "crates/platform/src/profile_store/fan_presets.rs"
       ]
     },
     "colorMeta": {
@@ -247,7 +252,7 @@
       },
       "keycap": {
         "displayName": "Schematic key label",
-        "purpose": "QWERTZ/QWERTY labels inside grouped geometry."
+        "purpose": "Adaptive QWERTZ/QWERTY labels, 10 px base up to 16 px with keyboard width."
       },
       "dialog-title": {
         "displayName": "Details dialog title",
@@ -275,15 +280,19 @@
       "popup": "Field width; bounded ScrollView; wrapped variable-height rows revealed from actual row geometry",
       "chartPlot": "46 logical px left and 12 top; width minus 60 and height minus 28; paths, markers and pointer input share the plot",
       "textActionWidth": "128 logical px; compact actions 36 logical px",
-      "curveTools": "Bounded numeric/history/viewport rows; no compact horizontal widening",
+      "curveTools": "Bounded numeric/range/history/viewport rows; vertical scroll at minimum size; inclusive mV selection and visible count/band",
       "caption": "40 logical px; 48 × 40 logical px minimize, maximize/restore and Close actions",
       "sidebar": "160 logical px wide; 8 logical px inset and 6 logical px spacing; Settings pinned below flexible space and divider",
       "nativeResize": "Six logical px while restored; zero when maximized",
       "groupSelection": "Equal 36 logical px segmented controls for contextual groups",
-      "actionBars": "Existing bottom work-area action bars remain; no permanent status/error footer",
+      "actionBars": "Bottom actions retained; preset actions use two rows below 720 logical px available width; no status/error footer",
       "hpModes": "Quiet, Balanced, Performance and Unleashed selector and explicit Apply directly above Presets",
       "notification": "Width min(420px, client width - 192px); height 156–212 logical px; lower-right with 16 logical px margin above retained actions",
-      "detailsDialog": "Width min(560px, client width - 40px); height min(360px, client height - 40px)"
+      "detailsDialog": "Width min(560px, client width - 40px); height min(360px, client height - 40px)",
+      "workspace": "Centered beside sidebar; max 1280 logical px; natural content height within Cooling/Lighting/Settings scrolling",
+      "fieldRows": "44 logical px rows with vertically centered 36 px controls and 4 px section-body top/bottom padding",
+      "longAction": "HP restore and About use 276 logical px; label inset 8 px on each side and wrapped",
+      "keyboard": "Full work-area width; height min(480 px, width * 0.33); adaptive labels clamp(width / 64, 10 px, 16 px)"
     },
     "nativeComponents": [
       {
@@ -338,7 +347,7 @@
         "kind": "custom",
         "refersTo": "curve-canvas",
         "source": "crates/app/ui/app.slint:CurveCanvas",
-        "description": "Actual connected Path for accent draft and muted opening reference, with a textual legend. Explicit New opens a fresh driver-factory GPU curve without inheriting an offset, cached edit or history; startup stays on Overview. Cancel preserves the previous draft. Keyboard focus transfers after the selector closes. This is a preview reset, not a hardware write.",
+        "description": "Actual connected Path for accent draft and muted opening reference, with a textual legend. Explicit New opens a fresh driver-factory GPU curve without inheriting an offset, cached edit or history; startup stays on Overview. Cancel preserves the previous draft. Keyboard focus transfers after the selector closes. This is a preview reset, not a hardware write. Visible GPU range mode supports pointer and numeric selection; Equalize changes selected points only in one Undo step, with driver/order validation and an empty-range guard.",
         "states": "Axes are outside the clipped plot; markers and pointer input share plot coordinates in software and femtovg rendering."
       },
       {
@@ -347,7 +356,7 @@
         "refersTo": "keyboard-preview",
         "source": "crates/app/ui/keyboard.slint:KeyboardPreview",
         "description": "Original QWERTZ/QWERTY geometry with draft zone tint, color underline and selected-group boundary.",
-        "states": "WASD = zone 3; Rest = zones 1/2; NUM pad/right = zone 0 including adjacent keys. Group buttons provide keyboard access. This is not per-key RGB.",
+        "states": "Independent WASD = wire 3; left = wire 2; middle = wire 1; numpad/right = wire 0 including adjacent keys. Four group buttons provide keyboard access. Full-width schematic, not per-key RGB or measured LED boundaries; compact Preview badge replaces body explanations.",
         "behavior": "Picker/hex, On/Off and RGB-value brightness remain drafts until guarded Apply/readback. Reset and exit protection preserve the transaction."
       },
       {
@@ -429,7 +438,7 @@
         ".local/slint-ui-qa-20261116-174654-de-winit-femtovg/error-details.png",
         ".local/slint-ui-qa-20261116-174654-de-winit-femtovg/frameless-maximized.png"
       ],
-      "scope": "Current native source and sampled existing isolated client captures establish the recorded composition. This documentation pass performs no app/hardware action, physical DPI transition, lifecycle qualification or resource measurement. Current regression results and build identity remain owned by Validation; no corrected matrix result is inferred.",
+      "scope": "Native source and isolated client captures establish the recorded composition. Software interaction tests are owned by Validation. No physical DPI, hardware policy uptake, cooling handover, lifecycle or total-tray qualification is implied.",
       "validationOwner": "docs/VALIDATION.md",
       "colorScrollContract": "docs/plans/COLOR_SELECTION_AND_SCROLL.md",
       "historicalCaptures": [
@@ -440,7 +449,41 @@
         ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-late.png",
         ".local/slint-ui-qa-20261116-140544-de-winit-software/long-dropdown-reopened.png"
       ],
-      "windowApplyContract": "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md"
+      "windowApplyContract": "docs/plans/WINDOW_AND_APPLY_REFINEMENT.md",
+      "presetLightingContract": "docs/plans/PRESET_AND_LIGHTING_REFINEMENT.md",
+      "presetLightingCaptures": [
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/cancel-to-saved-preset.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/selected-equalized-range.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/pointer-selected-voltage-band.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/centered-wide-overview.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/large-four-zone-keyboard.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/centered-settings-hp-action.png",
+        ".local/slint-ui-qa-20261117-124431-de-winit-software/compact-hp-action.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/cancel-to-saved-preset.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/selected-equalized-range.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/pointer-selected-voltage-band.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/centered-wide-overview.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/large-four-zone-keyboard.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/centered-settings-hp-action.png",
+        ".local/slint-ui-qa-20261117-124652-en-winit-software/compact-hp-action.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/cancel-to-saved-preset.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/selected-equalized-range.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/pointer-selected-voltage-band.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/centered-wide-overview.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/large-four-zone-keyboard.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/centered-settings-hp-action.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/compact-hp-action.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/cancel-to-saved-preset.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/selected-equalized-range.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/pointer-selected-voltage-band.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/centered-wide-overview.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/large-four-zone-keyboard.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/centered-settings-hp-action.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/compact-hp-action.png",
+        ".local/slint-ui-qa-20261117-124900-de-winit-femtovg/named-fan-library.png",
+        ".local/slint-ui-qa-20261117-125134-en-winit-femtovg/named-fan-library.png"
+      ],
+      "finishReview": "Independent final native review: all 30 listed captures opened; six screenshot findings and named cooling view resolved. Software/UI scope only; physical policy/LED/lifecycle acceptance is not inferred."
     },
     "windowLifecycle": {
       "sources": [
@@ -464,12 +507,22 @@
       "recovery": "Restore and verify a pending original checkpoint before a replacement target or prelude. Failure preserves the journal and blocks new writes.",
       "permissions": "Replacement recovery preserves startup selection/approval. Explicit user Restore retains its separate startup-disable contract. Background/sign-in commands gain no recovery permission.",
       "hpWording": "Report the requested HP mode, GPU-flag readback and lack of complete HP thermal-mode readback. CPU Slow/PL1 limit readback or its unavailable reason is separate; it is not measured package power or sustained-power evidence."
+    },
+    "presetEditing": {
+      "sources": [
+        "crates/app/src/slint_ui.rs",
+        "crates/app/src/slint_ui/cooling.rs",
+        "crates/app/src/preset_ui.rs"
+      ],
+      "cancel": "Restore loaded saved baseline including name, per-core values, GPU curve, sign-in checkbox draft and fan snapshot. No storage/hardware/permission write; Reset remains defaults.",
+      "fanLibrary": "Separate named library; profile copies shared CPU/GPU points, immutable under later library edits/deletion.",
+      "requestBoundary": "Installed helper only; exact preference originals, checkpoint identity and previous-owner recovery. Direct values verified separately from cooling requested; no curve-digest ACK, BIOS handover or linked sign-in authorization."
     }
   },
   "components": [],
   "narrative": {
     "northStar": "The Native Tuning Workbench",
-    "overview": "The Rust/Slint system is a modern, clean Windows utility for frequent hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained indigo accent and Antigravity-style appearance choices give the workbench one shared system.\n\nMeasured GPU watts and temperature lead, with verified CPU telemetry beside them; editable presets follow in the same work area. Native editing, alignment, readable fields and explicit actions distinguish selected intent, draft edits, metadata saves and confirmed hardware state.\n\nThe UI remains native and offline. Product and hardware contracts stay authoritative; visual corrections establish no new hardware, startup, resource or lifecycle qualification.\n\nA custom native caption and persistent sidebar surround the same mounted editors. Standard HP modes sit above Presets. Bounded notifications replace only the former status/error strip, while bottom actions and explicit Save/Apply remain. Latest manual intent follows safe completion and verified recovery boundaries.",
+    "overview": "The Rust/Slint system is a modern, clean Windows utility for frequent hardware checks and careful editing. Discord-inspired Slate neutrals, a restrained indigo accent and Antigravity-style appearance choices give the workbench one shared system.\n\nMeasured GPU watts and temperature lead, with verified CPU telemetry beside them; editable presets follow in the same work area. Native editing, alignment, readable fields and explicit actions distinguish selected intent, draft edits, metadata saves and confirmed hardware state.\n\nThe UI remains native and offline. Product and hardware contracts stay authoritative; visual corrections establish no new hardware, startup, resource or lifecycle qualification.\n\nA custom native caption and persistent sidebar surround the same mounted editors. Standard HP modes sit above Presets. Bounded notifications replace only the former status/error strip, while bottom actions and explicit Save/Apply remain. Latest manual intent follows safe completion and verified recovery boundaries.\n\nBounded content is centered beside the sidebar; a full-width schematic exposes four independent lighting groups. GPU range/equalize and cancel-to-saved editing preserve explicit draft boundaries. Named fan snapshots distinguish verified direct controls from a requested helper policy.",
     "keyCharacteristics": [
       "GPU/CPU instruments before tuning controls.",
       "Common control geometry and aligned values.",

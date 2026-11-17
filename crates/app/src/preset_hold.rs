@@ -49,7 +49,7 @@ impl Applied {
             && self.settings.iter().all(|s| requested.contains(s))
     }
     fn current(&self, store: &ProfileStore) -> Result<bool, String> {
-        if !store.app_settings()?.hold_preset || store.pending()? {
+        if !store.app_settings()?.hold_preset || store.pending()? || store.fan_policy_pending()? {
             return Ok(false);
         }
         let Some((id, digest, requested)) = store.applied_settings()? else {
@@ -121,7 +121,7 @@ fn tick(
         return Ok(());
     };
     // Never during a transaction or a pending recovery.
-    if store.pending()? {
+    if store.pending()? || store.fan_policy_pending()? {
         return Ok(());
     }
     let Some((id, applied_digest, settings)) = store.applied_settings()? else {
@@ -383,6 +383,31 @@ mod tests {
             .save_control_result(&result("first", std::slice::from_ref(&setting)))
             .unwrap();
         let old = Applied::from_result(&store.control_result().unwrap()).unwrap();
+        assert!(old.current(&store).unwrap());
+        let pending_fan = store
+            .prepare_fan_policy(
+                omen_platform::profile_store::FanPolicyOwner::Library {
+                    id: "fan-test".into(),
+                },
+                "8E35",
+                "F.13",
+                &[
+                    omen_core::profiles::FanPoint {
+                        temperature_c: 30,
+                        duty_percent: 30,
+                    },
+                    omen_core::profiles::FanPoint {
+                        temperature_c: 90,
+                        duty_percent: 100,
+                    },
+                ],
+            )
+            .unwrap();
+        assert!(
+            !old.current(&store).unwrap(),
+            "Hold pauses during a fan recovery duty"
+        );
+        store.restore_fan_policy(&pending_fan).unwrap();
         assert!(old.current(&store).unwrap());
         // Even reapplying the same digest invalidates the old in-flight work.
         store

@@ -1,8 +1,68 @@
 # Validation
 
-Current software summary updated **16 November 2026**, version **0.10.0-beta.6**, Windows x64 / Rust 1.99.0. Source: preserved beta.5 work plus explicit New preset factory-curve initialization, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **17 November 2026**, version **0.10.0-beta.7**, Windows x64 / Rust 1.99.0. Source: preserved beta.6 work plus preset/range/cooling/lighting refinement, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Preset editing, cooling requests and lighting — 17 November 2026
+
+Normal executable: **15,934,976 bytes**, SHA-256
+**0AD1A1FA40D8242F8036D9C0B3D3ABF51D682B1BFE1E7310AAE233A9D1787463**.
+Slint 1.18.1; software default; normal release excludes developer MCP.
+[Release notes](releases/0.10.0-beta.7.md),
+[direction and acceptance](plans/PRESET_AND_LIGHTING_REFINEMENT.md).
+
+- Format check, **337 unit tests** (167 core / 71 app / 99 platform), **14 Guardian
+  process/file scenarios**, all-target Clippy with `-D warnings` and locked normal
+  release build passed. One manual timing test remains ignored. DE/EN catalogs
+  contain **768 matching keys**.
+- Core regressions verify selected-only equalization, unchanged outside anchors,
+  one-step Undo and atomic rejection of empty/invalid ranges. Fan snapshots require
+  a valid identical CPU/GPU pair, preserve unlinked device binding and cannot gain
+  sign-in permission. A fan-only request uses the separate cooling route.
+- Twelve isolated storage/request tests cover library revision conflicts and
+  deletion archives, unchanged profile snapshots/permissions, exact original bytes
+  and absence, interruption between curve/mode files, foreign preference/journal
+  ownership, corrupt originals and durable Recovering barriers. They also cover
+  Direct Applied before fan completion, byte-identical repeated checkpoints using
+  file identity, and early aborted replacement retaining the prior owner's originals.
+  Missing/corrupt history is retryable and never reported as successful reattachment.
+- The existing hold regression now covers active → fan Prepared → paused → exact
+  preference restore → active. Both initial and under-lease checks pause on a fan
+  recovery duty. Linked+CCD uses the installed receipt-bound helper, not its updater.
+- Both the extension and complete UI matrices passed DE/software/1.25,
+  EN/software/1, DE/FemtoVG/1.5 and EN/FemtoVG/2 on the same developer executable.
+  Each complete run covers 100 alternating wheel events, 15 resizes, four
+  minimize/restore cycles, three tray returns, Unicode/Undo, dropdowns, curves,
+  keyboard drafts and settings persistence across a process restart.
+- Extension runs cover pointer/numeric range selection, selected-only equalization
+  and Undo, empty-range rejection, cancel-to-saved name/CPU/per-core/curve/fan link,
+  sign-in rejection before Save, centered top-telemetry overview, bounded HP/About
+  actions at wide/minimum size and four independently editable large keyboard zones.
+- The final source and rendered review found all six screenshot findings resolved,
+  plus readable named-library Save/Request controls. This is UI/software evidence;
+  selected frequency targets or zone tint do not establish physical behavior.
+- Focused New-preset factory-curve and pending-recovery Save/switch regressions
+  also passed in both languages. No live profile, recovery journal or tuning target
+  was used by those fixtures.
+
+Presented-pixel assertions precede any post-transition MCP snapshot. The owned
+200% fixture is positioned on screen; its desktop pixels are copied in one BitBlt
+before comparison, avoiding live per-pixel reads across compositor frames. Separate
+caption double-click gestures wait for layout and the system click interval.
+These harness corrections do not alter product repaint behavior or weaken expected
+colors. Physical monitor-DPI transitions and all-pixel/frame-latency acceptance
+remain outside this scope.
+
+Named fan presets and performance links are **request-level software support**.
+The existing 0.9.0-beta.3 helper has no exact curve-digest acknowledgement. Success
+separates verified direct settings from cooling requested; restored preference
+files do not prove physical fan uptake, firmware rollback or BIOS ownership.
+Linked snapshots cannot gain sign-in authorization; rejection precedes profile/grant writes.
+No live power/voltage/lighting SET, fan-policy request, service change, driver
+installation or helper replacement was part of these checks. Sustained 85 °C
+enforcement and HP-independent lifecycle remain separate device acceptance.
+Earlier resource samples keep their original builds and scopes.
 
 ## New preset factory curve — 16 November 2026
 

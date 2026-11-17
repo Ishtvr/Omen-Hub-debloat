@@ -22,9 +22,12 @@ The measured topology is CPU/GPU with capability bytes 0/0 and thermal-policy ve
 
 IR selector 0 has manufacturer Celsius semantics, not a calibrated physical location. Unknown/sentinel values, wrong reserved bytes or bad timing are errors. The diagnostic plausibility range is not a certified control-safety threshold.
 
-## Max-Fan preset override
+## Legacy Max-Fan instruction and separate control
 
 The optional boolean stores On or Off. Unchecking removes only the instruction; it does not reset an override. Off releases that override and does not select a BIOS mode.
+
+New custom presets expose no Max-Fan field. The separate Cooling Max choice stays
+available; legacy files and their recovery images retain this decoder/restore path.
 
 Capture checks board/BIOS, full flag, table hash, topology and design data before any SET. Complete originals are persisted, fresh expected state is checked and full readback follows. A new process can restore only matching original/own-target states; foreign or forged images are rejected. RPM values are observations, never restore targets.
 
@@ -40,7 +43,48 @@ The own “fan service” is a protected elevated **scheduled-task helper**, not
 | Curve (`curve`) | Use the saved active shared curve with CPU/GPU/IR protection |
 | Max (`max`) | Request both levels 48, independent of CPU/GPU reader availability |
 
-Absent preference defaults to Auto. Legacy `auto` meant “follow curve” and is read compatibly. The fan editor stores the active shared curve in `active-fan-curve.json`; complete performance-profile fan-curve instructions remain unsupported. [Curve editor](CURVE_EDITOR.md).
+Absent preference defaults to Auto. Legacy `auto` meant “follow curve” and is read
+compatibly. The active shared curve remains `active-fan-curve.json`.
+[Curve editor](CURVE_EDITOR.md).
+
+## Named fan presets and manual profile links
+
+From 0.10.0-beta.7, Cooling has a separate named library (`fan-presets/`). Use curve
+stages an editor draft; Save stores library metadata. Request uses the saved
+revision, after checking its model, protected cooling duties and the installed
+receipt-bound helper. A stale edited/deleted library revision is rejected before
+helper resumption or preference writes. Delete archives metadata only.
+
+A performance profile may copy a library curve into matching CPU/GPU fan-curve
+instructions. The saved snapshot survives library edits/deletion. Unchanged omits
+the pair and leaves the global fan choice alone. A custom saved snapshot remains
+editable. Fan-only profiles use Cooling instead of the performance transaction.
+
+The request-level coordinator captures exact `fan-mode.json` and
+`active-fan-curve.json` originals, including absence, before helper resumption or
+the HP prelude. Only a completely verified direct-control subset without skips
+commits the curve/mode pair. Partial or failed direct results attempt direct
+recovery and exact preference restoration; existing HP mode/TPP prelude limits
+remain explicitly unconfirmed. File conflicts retain a pending duty.
+
+`fan-profile-journal.json` records Prepared/Requested/Recovering/Restored ownership;
+completed records go to `fan-policy-history/`. Direct checkpoint content and file
+identity distinguish repeated identical revisions. An early aborted replacement
+reattaches the prior matching owner atomically, retaining its original images.
+Foreign choices and missing/corrupt archives are not silently overwritten.
+
+This flow resumes/uses the **installed** helper and never replaces it merely for a
+new UI build, including a profile with CCD selection. The current 0.9.0-beta.3
+helper supplies no curve-digest acknowledgement. Success says cooling **requested**,
+separately from verified direct settings; it does not prove physical curve uptake,
+complete firmware rollback or BIOS ownership. Linked curves cannot gain sign-in authorization:
+sign-in approval is rejected before saving or changing grants. Existing unlinked
+startup permissions keep their contract.
+
+An already configured AC/DC selection still uses the same runtime Apply route,
+including this coordinator, if it references such a profile. No battery choice is
+changed or enabled by creating a library/link. Actual AC/DC transitions with linked
+curves remain unqualified; this does not grant sign-in permission.
 
 The loop checks full known layout before first arm, uses a model-bound heartbeat at 20 seconds and level cycles at roughly two seconds, waits while the original Hub is detected and releases unused readers while paused. Curves use fixed CPU Tctl, public GPU temperature and IR/protection observations, with smoothing and emergency maximum. Max avoids loading the CPU/GPU reader libraries.
 
@@ -54,6 +98,12 @@ The same helper enforces saved foreground CCD preferences and releases original 
 
 15 October Max-Fan trials verified full flags, separate-process recovery and preserved other controls. A 22 October conservative helper trial reached **4800/4800 firmware RPM**. The 23 October watchdog/FAMC observations did not qualify a direct BIOS-Auto switch. HP services were still present in these trials.
 
-The dashboard now describes Curve/Max as a selected request after saving the choice, without claiming measured fan operation. Fresh matching helper acknowledgement remains the status-confirmation [review item](PROJECT_REVIEW.md). Durable own cooling, safe BIOS return, actual power transitions, full profile integration and independent HP replacement remain open. [Validation](VALIDATION.md), [HP control](HP_CONTROL.md).
+The dashboard describes Curve/Max as a selected request, without claiming measured
+fan operation. The 17 November linking/recovery changes have isolated software
+tests only, with no live curve request or new device write trial. Fresh exact-policy
+helper acknowledgement remains the status-confirmation [review item](PROJECT_REVIEW.md).
+Durable own cooling, safe BIOS return, actual power transitions, fully verified
+profile integration and independent HP replacement remain open.
+[Validation](VALIDATION.md), [HP control](HP_CONTROL.md).
 
 `fan-read` and `cooling-read` are fixed diagnostics needing suitable permissions. `fan-validate-max`, `check-system-controls.ps1` and the opt-in migration trial perform changes; they are not ordinary status checks.

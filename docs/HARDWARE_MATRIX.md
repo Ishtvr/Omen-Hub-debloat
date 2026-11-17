@@ -1,6 +1,6 @@
 # Hardware support
 
-Current status, reviewed **29 October 2026** against `0.9.0-dev.2`. UI-only zone mapping and RGB-value brightness observations were added on 16 November 2026 without a new device write trial. This is the authoritative feature-status table. [Validation](VALIDATION.md) records the tests; [Roadmap](ROADMAP.md) records unfinished work. **Implemented**, **briefly tested on hardware** and **qualified for a full lifecycle** are different claims.
+Current hardware status, reviewed **29 October 2026** against `0.9.0-dev.2`. Software-only updates through **17 November 2026 / 0.10.0-beta.7** add UI zone mapping, RGB-value brightness and manual fan-snapshot request/recovery coordination without a new device write trial. This is the authoritative feature-status table. [Validation](VALIDATION.md) records the tests; [Roadmap](ROADMAP.md) records unfinished work. **Implemented**, **briefly tested on hardware** and **qualified for a full lifecycle** are different claims.
 
 ## Reference configuration
 
@@ -26,8 +26,8 @@ Private NVIDIA write contracts were measured with drivers **617.14** and **617.4
 | CCD affinity | Saved preference and actual owned test process, both CCDs and original-mask release | Own helper needed; other user programs and real power transitions not qualified |
 | MUX | Hybrid/discrete boot preference set, read back and restored | Physical reboot switch and iGPU-only/dGPU-off battery operation unproven; dashboard shortcut has separate recovery limits |
 | Manual Max-Fan override | Full flag, table/topology checks, readback and persisted restore | Off releases the override only; it does not prove BIOS ownership |
-| Own fan curve / helper Max | Separate helper with CPU/GPU/IR protection; short trial reached 4800/4800 firmware RPM | Helper waits for original Hub; BIOS handover pending; embedded fan curves remain unsupported in profile transactions |
-| Four-zone static lighting / On-Off | Complete RGB/mode snapshots, readback/restore; visible On/Off confirmed by user. UI adds color-value brightness over qualified RGB bytes and corrected vendor zone order | No firmware master-brightness scale, animation, per-key support or independent hotkey/power lifecycle qualification; new UI diagram is schematic |
+| Own fan curve / helper Max | Separate helper with CPU/GPU/IR protection; short trial reached 4800/4800 firmware RPM. Named library and manual profile snapshots add journaled preference requests | Exact policy-digest ACK, physical linked-curve uptake and BIOS handover pending; no linked-curve sign-in approval or helper replacement |
+| Four-zone static lighting / On-Off | Complete RGB/mode snapshots, readback/restore; visible On/Off confirmed by user. UI adds RGB-value brightness and four independent WASD/left/middle/right groups in the vendor order | No firmware master-brightness scale, animation, per-key support or independent hotkey/power lifecycle qualification; large UI diagram remains schematic |
 | Profile sign-in | Protected task and exact applied-revision approval implemented | Actual reboot and full independent operation pending; editing/binary replacement invalidates approval |
 
 ## Sign-in permission versus measured lifecycle

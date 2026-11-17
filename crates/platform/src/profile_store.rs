@@ -15,6 +15,8 @@ use std::{
 };
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
+mod fan_presets;
+pub use fan_presets::{FanPolicyOwner, FanPolicyPhase, FanPolicyRequest};
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiSettingsFile {
@@ -323,6 +325,7 @@ impl ProfileStore {
     /// Startup can select only the exact, successfully applied profile revision.
     pub fn startup_eligibility(&self, id: &str) -> Result<StartupSelection, String> {
         let profile = self.load(id)?;
+        omen_core::fan_profile::startup_allowed(&profile, true)?;
         let digest = profile_digest(&profile)?;
         let journal: JournalFile<serde_json::Value> = read_json(&self.journal_path())?;
         journal.transaction.validate()?;
@@ -448,6 +451,8 @@ impl ProfileStore {
         &self,
         points: &[omen_core::profiles::FanPoint],
     ) -> Result<(), String> {
+        #[cfg(windows)]
+        let _preference = lock_fan_preference(&self.root)?;
         omen_core::profiles::Setting {
             feature: omen_core::features::Feature::CpuFanCurve,
             value: omen_core::profiles::Value::FanCurve(points.to_vec()),

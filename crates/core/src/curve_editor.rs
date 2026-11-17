@@ -544,7 +544,10 @@ impl Curve {
             i64::from(start[selected].y) + i64::from(delta) - i64::from(basis[selected].y);
         let mut lo = i64::MIN;
         let mut hi = i64::MAX;
-        let gpu = self.gpu.as_ref().ok_or("GPU-Treibergrenzen fehlen.")?;
+        let gpu = self
+            .gpu
+            .as_ref()
+            .ok_or_else(|| msg("curve.err.driver_limits", &[]))?;
         for (i, p) in basis.iter().enumerate().take(last + 1).skip(first) {
             let n = &gpu.nodes[i];
             let base = i64::from(n.frequency_khz) - i64::from(n.delta_khz);
@@ -564,7 +567,7 @@ impl Curve {
             hi = hi.min(i64::from(start[last + 1].y) - i64::from(basis[last].y));
         }
         if lo > hi {
-            return Err("Auswahl und Nachbarpunkte erlauben keinen gemeinsamen Offset.".into());
+            return Err(msg("curve.err.no_shared_offset", &[]));
         }
         let offset = requested.clamp(lo, hi);
         let mut points = start.to_vec();
@@ -578,11 +581,22 @@ impl Curve {
         if self.kind != Kind::Gpu {
             return Err(msg("curve.err.flatten_gpu", &[]));
         }
-        let Some((first, last)) = self.selection else {
+        if self.selection.is_none() {
             return self.plateau(self.points[self.selected].y);
-        };
-        let mut points = self.points.clone();
+        }
         let frequency = self.points[self.selected].y;
+        self.flatten_selection_to(frequency)
+    }
+    /// One undoable edit of only the selected voltage anchors. A missing
+    /// selection is never interpreted as a request to flatten the whole tail.
+    pub fn flatten_selection_to(&mut self, frequency: i32) -> Result<bool, String> {
+        if self.kind != Kind::Gpu {
+            return Err(msg("curve.err.flatten_gpu", &[]));
+        }
+        let (first, last) = self
+            .selection
+            .ok_or_else(|| msg("curve.err.selection_required", &[]))?;
+        let mut points = self.points.clone();
         for p in &mut points[first..=last] {
             p.y = frequency;
         }
@@ -709,6 +723,37 @@ mod tests {
             c.points.iter().map(|p| p.x).collect::<Vec<_>>(),
             [800, 900, 1000, 1100]
         );
+    }
+    #[test]
+    fn equalizing_a_voltage_band_preserves_outside_anchors_and_is_one_undo_step() {
+        let mut curve = editor();
+        let before = curve.points.clone();
+        assert!(curve.select_voltage_range(1000, 900));
+        curve.flatten_selection_to(1300).unwrap();
+        assert_eq!(
+            curve.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1000, 1300, 1300, 1600]
+        );
+        assert_eq!(
+            curve.points.iter().map(|p| p.x).collect::<Vec<_>>(),
+            before.iter().map(|p| p.x).collect::<Vec<_>>()
+        );
+        assert!(curve.undo());
+        assert_eq!(curve.points, before);
+        assert!(!curve.can_undo());
+        assert!(curve.redo());
+    }
+    #[test]
+    fn empty_or_invalid_equalization_never_becomes_a_tail_edit_or_partial_change() {
+        let mut curve = editor();
+        let before = curve.points.clone();
+        assert!(!curve.select_voltage_range(901, 999));
+        assert!(curve.flatten_selection_to(1300).is_err());
+        assert_eq!(curve.points, before);
+        assert!(curve.select_voltage_range(900, 1000));
+        assert!(curve.flatten_selection_to(3000).is_err());
+        assert_eq!(curve.points, before);
+        assert!(!curve.can_undo());
     }
     #[test]
     fn a_selected_band_shares_one_bound_and_a_drag_is_one_undo_step() {

@@ -39,6 +39,7 @@ mod appearance;
 mod apply;
 mod chrome;
 mod colors;
+mod cooling;
 mod curve;
 mod lighting;
 mod notices;
@@ -98,6 +99,13 @@ fn selection_label(selection: &Selection, profiles: &[PerformanceProfile]) -> St
     }
 }
 enum Aux {
+    FanLibrary(String, String),
+    SaveFanPreset(
+        omen_core::fan_profile::FanPreset,
+        Option<omen_core::fan_profile::FanPreset>,
+    ),
+    DeleteFanPreset(omen_core::fan_profile::FanPreset),
+    RequestFanPreset(omen_core::fan_profile::FanPreset),
     Settings,
     SaveSettings(
         settings::Snapshot,
@@ -106,22 +114,57 @@ enum Aux {
         bool,
     ),
     Lighting(Option<(KeyboardState, [[u8; 3]; 4], bool)>),
-    SaveFan(Vec<omen_core::profiles::FanPoint>),
-    ReadFan,
     HpService(bool),
     Stop,
 }
 enum AuxResult {
+    FanLibrary(Result<cooling::Snapshot, String>),
+    FanPresetSaved(
+        Result<
+            (
+                omen_core::fan_profile::FanPreset,
+                Vec<omen_core::fan_profile::FanPreset>,
+            ),
+            String,
+        >,
+    ),
+    FanPresetDeleted(Result<(String, String, Vec<omen_core::fan_profile::FanPreset>), String>),
+    FanPolicyRequested(Result<(), String>, bool),
     Settings(Result<settings::Snapshot, String>, Option<bool>),
     SettingsSaved(Result<settings::Snapshot, String>),
     Lighting(Result<KeyboardState, String>, bool),
     Hp(Result<bool, String>),
-    Fan(Result<Curve, String>),
-    FanSaved(Result<Value, String>),
 }
 fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>) {
     while let Ok(request) = rx.recv() {
         let result = match request {
+            Aux::FanLibrary(board, bios) => AuxResult::FanLibrary((|| {
+                let store = ProfileStore::user_data()?;
+                Ok(cooling::Snapshot {
+                    presets: store.fan_presets()?,
+                    active: store.active_fan_curve(),
+                    board,
+                    bios,
+                })
+            })()),
+            Aux::SaveFanPreset(preset, baseline) => AuxResult::FanPresetSaved((|| {
+                let store = ProfileStore::user_data()?;
+                store.save_fan_preset(&preset, baseline.as_ref())?;
+                Ok((preset, store.fan_presets()?))
+            })()),
+            Aux::DeleteFanPreset(preset) => AuxResult::FanPresetDeleted((|| {
+                let store = ProfileStore::user_data()?;
+                store.delete_fan_preset(&preset)?;
+                Ok((preset.board, preset.bios, store.fan_presets()?))
+            })()),
+            Aux::RequestFanPreset(preset) => {
+                let result = ProfileStore::user_data()
+                    .and_then(|store| crate::profile_fan::request_library(&store, &preset));
+                let pending = ProfileStore::user_data()
+                    .and_then(|s| Ok(s.pending()? || s.fan_policy_pending()?))
+                    .unwrap_or(true);
+                AuxResult::FanPolicyRequested(result, pending)
+            }
             Aux::Settings => AuxResult::Settings(
                 settings::load(),
                 omen_platform::hp_control::oem_service()
@@ -142,20 +185,6 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     applied,
                 )
             }
-            Aux::SaveFan(points) => AuxResult::FanSaved((|| {
-                ProfileStore::user_data()?.save_active_fan_curve(&points)?;
-                if !omen_platform::fan_service_installed() {
-                    crate::elevation::run(None, crate::elevation::Action::FanService, || false)?;
-                }
-                Ok(Value::FanCurve(points))
-            })()),
-            Aux::ReadFan => AuxResult::Fan(
-                ProfileStore::user_data()
-                    .and_then(|s| s.active_fan_curve())
-                    .and_then(|value| {
-                        Curve::fan(Kind::CpuFan, value.map(Value::FanCurve).as_ref())
-                    }),
-            ),
             Aux::HpService(disable) => AuxResult::Hp(
                 crate::elevation::run(None, crate::elevation::Action::HpService(disable), || false)
                     .and_then(|_| {
@@ -177,6 +206,12 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
 }
 
 struct Host {
+    fan_library: RefCell<Option<cooling::Library>>,
+    library_attempted: Cell<bool>,
+    profile_fan_points: RefCell<Option<Vec<omen_core::profiles::FanPoint>>>,
+    profile_fan_changed: Cell<bool>,
+    profile_fan_invalid: Cell<bool>,
+    profile_fan_choices: RefCell<Vec<cooling::Choice>>,
     window: slint::Weak<AppWindow>,
     about: RefCell<Option<AboutWindow>>,
     hwnd: Cell<HWND>,
@@ -207,7 +242,6 @@ struct Host {
     curve: RefCell<Option<curve::Editor>>,
     gpu_draft: RefCell<Option<Curve>>,
     fan_draft: RefCell<Option<Curve>>,
-    fan_baseline: RefCell<Option<Value>>,
     tray: crate::tray::TrayIcon,
     taskbar: u32,
     visible: Cell<bool>,
@@ -451,12 +485,14 @@ impl Host {
         self.busy(true);
         self.status(
             t(match &request {
-                Aux::Settings | Aux::ReadFan | Aux::Lighting(None) => "ui.loading",
+                Aux::Settings | Aux::FanLibrary(..) | Aux::Lighting(None) => "ui.loading",
                 Aux::SaveSettings(..) => "ui.settings_saving",
                 Aux::Lighting(Some(_)) => "lighting.applying",
-                Aux::SaveFan(_) => "curve.saving",
                 Aux::HpService(true) => "hp_service.disabling",
                 Aux::HpService(false) => "hp_service.restoring",
+                Aux::SaveFanPreset(..) => "preset.saving",
+                Aux::DeleteFanPreset(..) => "preset.deleting",
+                Aux::RequestFanPreset(..) => "control.working",
                 Aux::Stop => "control.working",
             }),
             false,
@@ -661,6 +697,7 @@ impl Host {
             self.status(t("preset.pending"), true);
         }
         *self.view.borrow_mut() = Some(view);
+        self.reset_profile_fan();
         self.update_fields();
     }
     fn select(&self, index: i32) {
@@ -676,6 +713,36 @@ impl Host {
             return;
         }
         self.load_preset(index);
+    }
+    fn cancel_preset_edit(&self) {
+        if self.blocked() {
+            return;
+        }
+        let baseline = self.view.borrow().clone();
+        let Some(baseline) = baseline else {
+            return;
+        };
+        self.new_curve_on_load.set(false);
+        self.pending_select.set(None);
+        self.after_save.borrow_mut().take();
+        if self
+            .curve
+            .borrow()
+            .as_ref()
+            .is_some_and(|e| e.curve.kind == Kind::Gpu)
+        {
+            self.curve.borrow_mut().take();
+        }
+        let pending = baseline.pending;
+        self.display(baseline, t("preset.edits_discarded"));
+        if let Some(w) = self.window.upgrade() {
+            let d = w.global::<Workbench>();
+            d.set_dirty(false);
+            d.set_curve_open(false);
+        }
+        if !pending {
+            self.completed(t("preset.edits_discarded"));
+        }
     }
     fn load_preset(&self, index: i32) {
         let id = usize::try_from(index - 1)
@@ -766,10 +833,14 @@ impl Host {
             );
         }
         Ok(preset_ui::SaveData {
+            // Fan linkage is an explicit point snapshot, not a mutable library id.
             baseline: view.selected.clone(),
             binding: view.binding.clone(),
             name,
-            edits,
+            edits: {
+                self.append_profile_fan(&mut edits, data.get_preset_startup())?;
+                edits
+            },
             startup: (data.get_preset_startup() != view.startup_enabled)
                 .then_some(data.get_preset_startup()),
         })
@@ -781,21 +852,32 @@ impl Host {
                 self.status(&crate::i18n::error_message(&e), true);
             }
             Ok(data) if self.test => {
-                let profile = PerformanceProfile {
-                    schema: 1,
-                    id: data.baseline.as_ref().map_or_else(
-                        || format!("ui-test-{}", crate::native_ui::token()),
-                        |p| p.id.clone(),
-                    ),
-                    name: data.name,
-                    binding: data.binding,
-                    settings: data
-                        .edits
-                        .into_iter()
-                        .filter_map(|(feature, value)| {
-                            value.map(|value| omen_core::profiles::Setting { feature, value })
-                        })
-                        .collect(),
+                let profile = if let Some(base) = &data.baseline {
+                    match omen_core::preset::merge(base, base, &data.name, &data.edits) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            self.abort_saved_selection();
+                            self.status(&crate::i18n::error_message(&e), true);
+                            return;
+                        }
+                    }
+                } else {
+                    PerformanceProfile {
+                        schema: 1,
+                        id: data.baseline.as_ref().map_or_else(
+                            || format!("ui-test-{}", crate::native_ui::token()),
+                            |p| p.id.clone(),
+                        ),
+                        name: data.name,
+                        binding: data.binding,
+                        settings: data
+                            .edits
+                            .into_iter()
+                            .filter_map(|(feature, value)| {
+                                value.map(|value| omen_core::profiles::Setting { feature, value })
+                            })
+                            .collect(),
+                    }
                 };
                 let mut profiles = self.profiles.borrow().clone();
                 profiles.retain(|p| p.id != profile.id);
@@ -1052,6 +1134,53 @@ impl Host {
             while let Ok(result) = self.aux_results.try_recv() {
                 self.busy(false);
                 match result {
+                    AuxResult::FanLibrary(result) => match result {
+                        Ok(snapshot) => self.show_fan_library(snapshot, None),
+                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
+                    },
+                    AuxResult::FanPresetSaved(result) => match result {
+                        Ok((preset, presets)) => {
+                            let id = preset.id.clone();
+                            self.show_fan_library(
+                                cooling::Snapshot {
+                                    presets,
+                                    active: Ok(None),
+                                    board: preset.board,
+                                    bios: preset.bios,
+                                },
+                                Some(id),
+                            );
+                            self.saved(t("fan_profile.saved"));
+                        }
+                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
+                    },
+                    AuxResult::FanPresetDeleted(result) => match result {
+                        Ok((board, bios, presets)) => {
+                            self.show_fan_library(
+                                cooling::Snapshot {
+                                    presets,
+                                    active: Ok(None),
+                                    board,
+                                    bios,
+                                },
+                                None,
+                            );
+                            self.completed(t("fan_profile.deleted"));
+                        }
+                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
+                    },
+                    AuxResult::FanPolicyRequested(result, pending) => {
+                        if let Some(w) = self.window.upgrade() {
+                            w.global::<Workbench>().set_recovery_pending(pending);
+                        }
+                        if let Some(v) = self.view.borrow_mut().as_mut() {
+                            v.pending = pending;
+                        }
+                        match result {
+                            Ok(()) => self.completed(t("fan_profile.requested")),
+                            Err(e) => self.status(&crate::i18n::error_message(&e), true),
+                        }
+                    }
                     AuxResult::Settings(result, hp) => {
                         if let Some(w) = self.window.upgrade() {
                             let data = w.global::<Workbench>();
@@ -1079,18 +1208,6 @@ impl Host {
                         }
                         Err(e) => self.status(&crate::i18n::error_message(&e), true),
                     },
-                    AuxResult::Fan(result) => match result {
-                        Ok(curve) => self.open_loaded_curve(curve),
-                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
-                    },
-                    AuxResult::FanSaved(result) => match result {
-                        Ok(value) => {
-                            *self.fan_baseline.borrow_mut() = Some(value);
-                            self.status(t("curve.fan_saved"), false);
-                            self.saved(t("curve.fan_saved"));
-                        }
-                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
-                    },
                     AuxResult::SettingsSaved(result) => match result {
                         Ok(s) => self.show_settings(s, true),
                         Err(e) => self.status(&e, true),
@@ -1113,6 +1230,15 @@ impl Host {
         }
         if !self.is_busy() {
             self.follow_saved_selection();
+        }
+        if !self.is_busy()
+            && !self.library_attempted.get()
+            && self
+                .window
+                .upgrade()
+                .is_some_and(|w| w.global::<Workbench>().get_page() < 3)
+        {
+            self.load_fan_library();
         }
         if !self.is_busy()
             && !self.settings_loaded.get()
@@ -1556,6 +1682,12 @@ pub fn run(
     ));
     d.set_groups(groups.clone().into());
     let host = Rc::new(Host {
+        fan_library: Default::default(),
+        library_attempted: Cell::new(false),
+        profile_fan_points: Default::default(),
+        profile_fan_changed: Cell::new(false),
+        profile_fan_invalid: Cell::new(false),
+        profile_fan_choices: Default::default(),
         window: window.as_weak(),
         about: RefCell::new(None),
         hwnd: Cell::new(ptr::null_mut()),
@@ -1586,7 +1718,6 @@ pub fn run(
         curve: RefCell::new(None),
         gpu_draft: RefCell::new(None),
         fan_draft: RefCell::new(None),
-        fan_baseline: RefCell::new(None),
         tray: Default::default(),
         taskbar: unsafe {
             RegisterWindowMessageW(crate::native_ui::wide("TaskbarCreated").as_ptr())
@@ -1689,6 +1820,7 @@ pub fn run(
     };
     let mut workers = vec![];
     if test {
+        window.global::<Workbench>().set_hp_disabled(true);
         let profiles = if std::env::var_os("OMEN_UI_TEST_LONG_CHOICES").is_some() {
             let binding = test_view(None, &[]).binding;
             (1..=24)
@@ -2006,9 +2138,9 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
             board: "TEST".into(),
             bios: "TEST".into(),
             cpu_names: vec![],
-            nvidia_uuid: None,
-            nvidia_driver: None,
-            nvidia_vbios: None,
+            nvidia_uuid: Some("TEST-GPU".into()),
+            nvidia_driver: Some("TEST-DRIVER".into()),
+            nvidia_vbios: Some("TEST-VBIOS".into()),
         },
         defaults: BTreeMap::new(),
         curve: Ok(omen_core::vf::VfState {
@@ -2178,6 +2310,39 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
         }
         h.dirty();
         h.update_fields();
+    });
+    callback!(on_cancel_preset, |h| {
+        h.cancel_preset_edit();
+    });
+    callback!(on_profile_fan_selected, |h, index| {
+        h.choose_profile_fan(index);
+    });
+    callback!(on_fan_library_selected, |h, index| {
+        h.choose_fan_library(index);
+    });
+    callback!(on_fan_library_new, |h| {
+        h.choose_fan_library(0);
+    });
+    callback!(on_fan_library_name_edited, |h, name| {
+        h.edit_fan_library_name(name.as_str());
+    });
+    callback!(on_fan_library_refresh, |h| {
+        if !h.fan_library_dirty() && !h.blocked() {
+            h.library_attempted.set(false);
+            h.load_fan_library();
+        }
+    });
+    callback!(on_fan_library_reset, |h| {
+        h.reset_fan_library();
+    });
+    callback!(on_fan_library_save, |h| {
+        h.save_fan_library();
+    });
+    callback!(on_fan_library_delete, |h| {
+        h.delete_fan_library();
+    });
+    callback!(on_fan_library_request, |h| {
+        h.request_fan_library();
     });
     callback!(on_apply_mode, |h| {
         if let Some(w) = h.window.upgrade() {

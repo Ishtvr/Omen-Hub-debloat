@@ -1,6 +1,11 @@
 # Documentation
 
-Documentation structure refreshed **29 October 2026**; latest local software checks **16 November 2026**, `0.10.0-beta.6`, preserving earlier work and opening a fresh driver-factory GPU curve when explicitly creating a new preset. See [Validation](VALIDATION.md) for the tested implementation and exact build identity. Hardware observations remain tied to their recorded device, date and build.
+Documentation structure refreshed **29 October 2026**; latest local software checks
+**17 November 2026**, `0.10.0-beta.7`, preserving earlier work and adding GPU range
+editing, cancel-to-saved presets, manual fan snapshots and larger independent
+keyboard zones. See [Validation](VALIDATION.md) for the tested implementation and
+exact build identity. Hardware observations remain tied to their recorded device,
+date and build.
 
 ## Start here
 

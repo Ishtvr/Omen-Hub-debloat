@@ -2,20 +2,22 @@
 
 A lightweight, native Windows control tool for HP OMEN laptops, written in Rust and Slint. Built to bring hardware monitoring and tuning into one clean, offline app—without ads, telemetry, accounts or a background updater.
 
-**In development · `0.10.0-beta.6` · Windows x64**
+**In development · `0.10.0-beta.7` · Windows x64**
 
 ## Features
 
 - GPU power, temperature and clock monitoring alongside CPU telemetry.
-- GPU/VRAM clock offsets and an interactive voltage/frequency curve editor.
+- GPU/VRAM clock offsets and a voltage/frequency editor with range selection,
+  equalization and Undo.
 - CPU power limits, Curve Optimizer, PBO and Windows power settings.
 - Direct preset editing on the overview, with optional application at Windows sign-in.
-- Connected fan/GPU curves, maximum cooling and keyboard zone/color/brightness controls.
+- Named fan curves with manual preset links, maximum cooling and four-zone keyboard
+  color/brightness controls. Linked cooling reports a request, not physical policy confirmation.
 - A native German/English interface with configurable dark/light palettes and system tray integration.
 
 **Hardware support is currently limited to the tested HP OMEN 16-ap0xxx, board 8E35, BIOS F.13, Ryzen 9 8940HX and RTX 5070 Laptop configuration.** GPU V/F and clock offsets accept an installed NVIDIA driver on the qualified board/GPU/VBIOS; runtime ABI checks, readback and restore guard each write. Other adapters retain their specific qualification gates. CPU hardware features require the separately installed, verified PawnIO driver.
 
-This is an experimental application. Full replacement of HP's background services, real reboot/sleep recovery and freely adjustable GPU TGP are still in progress. See the [hardware matrix](docs/HARDWARE_MATRIX.md) and [roadmap](docs/ROADMAP.md). The first beta was withdrawn; the current prerelease is [0.10.0-beta.6](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.10.0-beta.6).
+This is an experimental application. Full replacement of HP's background services, real reboot/sleep recovery and freely adjustable GPU TGP are still in progress. See the [hardware matrix](docs/HARDWARE_MATRIX.md) and [roadmap](docs/ROADMAP.md). The first beta was withdrawn; the current prerelease is [0.10.0-beta.7](https://github.com/Ishtvr/Omen-Hub-debloat/releases/tag/v0.10.0-beta.7).
 
 ## Build
 

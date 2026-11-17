@@ -7,9 +7,21 @@ The normal Rust/Slint editor and the legacy native GDI entry points share GPU V/
 - **Overview → + / New preset** opens a fresh driver-factory GPU curve immediately. Active driver offsets, a previous profile and cached draft/history are not inherited. Startup itself stays on Overview. Canceling an unsaved-change prompt preserves the old draft; Save/Discard followed by New opens the same fresh factory curve.
 - **Overview → NVIDIA GPU → GPU performance curve → Edit curve** opens the current preset's in-memory chart. Use curve returns it to the preset draft; Back retains its editing session. Save in the parent persists the profile. Hardware changes require explicit profile Apply. Existing saved curves and unrelated draft fields are retained.
 - `gpu-curve-ui [id]` opens the standalone saved GPU editor; `curve-ui [id]` remains the combined legacy entry.
-- **Fan curve** / `fan-ui` edits the active CPU/GPU curve for the separate helper. Saving a fan curve does not prove the helper has applied it.
+- **Cooling → Edit curve** edits the selected named fan-preset draft. Use curve
+  stages it, Save stores library metadata and Request applies the saved preference
+  through the existing helper coordinator. `fan-ui` opens the same work area;
+  legacy standalone editors keep their original active-curve behavior.
 
 The Slint work area provides Back/Use curve, numeric editing, Undo/Redo and viewport tools. The graph takes keyboard focus when it opens. Legacy standalone views retain their own Cancel/Accept action rows.
+
+The GPU toolbar also provides **Select range**, All, To end and Clear. In range
+mode, plain dragging selects anchors without moving their frequencies. Numeric
+From/To mV bounds include their end anchors, and a count/band identifies the range.
+Enter the target MHz and choose **Equalize selection** to set only those points.
+One action is one Undo step. Non-monotone/out-of-driver-range targets fail atomically;
+an empty range is an error and disables tail flattening. Clear the range/mode to
+use the separate **Flatten to end** action. **Cancel editing** restores the whole
+currently loaded preset baseline; it differs from Back, Use curve and Reset.
 
 Square nodes are the draft; the dotted line is the draft loaded at the start of this editing session. It can be a saved profile, not necessarily current firmware. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
 
@@ -63,7 +75,12 @@ Fan curves retain 2–32 points, strictly ordered temperatures within 0–110 °
 
 GPU frequency-at-voltage Apply/restore is qualified for the exact 8E35/F.13 / RTX 5070 Laptop / VBIOS with drivers **617.14 and 617.42**. Since 29 October 2026 any installed NVIDIA driver is accepted on this device; other versions are unmeasured and rely on the runtime ABI checks, readback and restore. Memory writes preserve coupled Graphics controls. Direct mV, hard voltage lock, Afterburner L lock and OC Scanner are not supported. A plateau is not a physical voltage ceiling or a load-stability result.
 
-Fan curves do run through the separate own helper. They remain unsupported as `CpuFanCurve`/`GpuFanCurve` instructions inside a complete performance-profile transaction, and BIOS ownership handover is not qualified. [GPU contracts](GPU_PROFILES.md), [fan control](FAN_CONTROL.md), [hardware matrix](HARDWARE_MATRIX.md).
+Fan curves run through the separate own helper. A shared CPU/GPU snapshot can now
+be attached to a manual performance profile through a request-level coordinator.
+The helper has no exact policy-digest acknowledgement: physical fan uptake,
+full firmware rollback and BIOS handover remain unqualified. Linked snapshots
+cannot gain sign-in authorization. [GPU contracts](GPU_PROFILES.md),
+[fan control](FAN_CONTROL.md), [hardware matrix](HARDWARE_MATRIX.md).
 
 ## Implementation and validation
 

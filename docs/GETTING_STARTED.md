@@ -2,7 +2,11 @@
 
 ## Current Slint workspaces
 
-From 0.10.0-beta.1 the top navigation opens **Overview**, **Presets**, **Cooling** and **Lighting**. The separate **Settings** action holds app-wide language, Windows startup, tray/close behavior, battery selection and preset hold. GPU curve editing is inside Presets; the shared fan curve and BIOS/Curve/Max selection are under Cooling.
+The sidebar opens **Overview**, **Cooling** and **Lighting**, with **Settings**
+at the bottom. Overview shows GPU/CPU telemetry before the HP modes and editable
+presets. Settings holds app-wide language, Windows startup, tray/close behavior,
+battery selection and preset hold. GPU curves open inside the preset work area;
+named fan curves and BIOS/Curve/Max are under Cooling.
 
 Save stores a preset; Apply runs the existing device-bound preflight, original capture and readback/restore. A selected sign-in permission can also apply/re-authorize when saving; its notice is shown in the editor. App startup does not grant preset startup. Requested values, historical Apply results and measured Tctl remain different facts.
 
@@ -54,7 +58,12 @@ The default HP-mode and dashboard MUX shortcuts currently have weaker recovery c
 ## Curves, cooling and lighting
 
 - **GPU V/F:** open **Performance profiles → GPU → GPU performance curve → Edit**. The chart works on an in-memory draft, including a new unnamed preset. Accept returns the draft; Save persists it; Apply is separate. [Gestures and shortcuts](CURVE_EDITOR.md).
-- **Fans:** **Fan curve** edits the active curve used by the own background helper. Auto pauses own regulation, Curve uses the saved curve and Max requests full cooling. A saved choice or a quick-switch message is not yet a verified physical state. BIOS handover remains pending after own regulation. [Fan control](FAN_CONTROL.md).
+- **Fans:** Under Cooling, edit/save a named shared fan curve, then request it or
+  attach its snapshot to a manual performance preset. Library saves do not change
+  hardware. Auto pauses own regulation, Curve requests the active curve and Max
+  requests full cooling. A saved request is not verified physical state; exact
+  helper policy acknowledgement and BIOS handover remain pending. Linked curves
+  cannot be applied at sign-in. [Fan control](FAN_CONTROL.md).
 - **Lighting:** choose one of four zones, confirm a color in the native color dialog, or use On/Off. Confirmed changes are applied immediately and read back; Cancel does not write. The window requests UAC once. [Lighting UI](KEYBOARD_UI.md).
 - **Graphics:** the dashboard offers Hybrid and GPU only boot preferences. A change requires a restart to take effect. Physical switching and iGPU-only battery operation are not yet qualified. [Hardware matrix](HARDWARE_MATRIX.md).
 

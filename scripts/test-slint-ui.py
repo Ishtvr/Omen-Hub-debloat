@@ -203,7 +203,7 @@ def run(args):
 
             def new_profile_back():
                 wait_for(lambda: by_id('AppWindow::curve-editor'))
-                assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
+                assert not curve_to(texts['ui.undo']).get('accessibleEnabled',False)
                 label_click(texts['ui.back'])
                 wait_for(lambda: name_field().get('accessibleValue','')=='')
 
@@ -243,6 +243,19 @@ def run(args):
                     wheel(-80)
                 raise AssertionError('Lighting control not reachable: ' + name)
 
+            def pane_to(view_id,label,role='Button'):
+                for direction in [0,10000]:
+                    for step in range(35):
+                        view=by_id('AppWindow::'+view_id);top=view['absolutePosition'].get('y',0)
+                        for e in tree():
+                            y=e['absolutePosition'].get('y',0)
+                            if e.get('accessibleLabel')==label and e.get('accessibleRole')==role and top<=y and y+e['size']['height']<=top+view['size']['height']:
+                                return e
+                        delta=direction if step==0 and direction else -90
+                        client.tool('dispatch_pointer_scroll',{'windowHandle':window,'deltaY':delta,'position':{
+                            'x':view['absolutePosition'].get('x',0)+5,'y':top+view['size']['height']/2}})
+                raise AssertionError('Pane control not reachable: '+label)
+
             # Use only the native window belonging to our --ui-test subprocess.
             user = c.WinDLL('user32', use_last_error=True)
             user.GetWindowThreadProcessId.argtypes = [wt.HWND, c.POINTER(wt.DWORD)]
@@ -250,6 +263,8 @@ def run(args):
             user.IsWindowVisible.argtypes = [wt.HWND]
             user.SetWindowPos.argtypes = [wt.HWND, wt.HWND, c.c_int, c.c_int, c.c_int, c.c_int, wt.UINT]
             user.ShowWindow.argtypes = [wt.HWND, c.c_int]
+            user.GetClientRect.argtypes = [wt.HWND, c.POINTER(wt.RECT)]
+            user.GetDoubleClickTime.restype = wt.UINT
             user.GetForegroundWindow.restype = wt.HWND
             user.SetForegroundWindow.argtypes = [wt.HWND]
             user.WindowFromPoint.argtypes = [wt.POINT]
@@ -260,6 +275,13 @@ def run(args):
             gdi = c.WinDLL('gdi32', use_last_error=True)
             gdi.GetPixel.argtypes = [wt.HDC, c.c_int, c.c_int]
             gdi.GetPixel.restype = wt.DWORD
+            gdi.CreateCompatibleDC.argtypes=[wt.HDC];gdi.CreateCompatibleDC.restype=wt.HDC
+            gdi.CreateCompatibleBitmap.argtypes=[wt.HDC,c.c_int,c.c_int];gdi.CreateCompatibleBitmap.restype=wt.HANDLE
+            gdi.SelectObject.argtypes=[wt.HDC,wt.HANDLE];gdi.SelectObject.restype=wt.HANDLE
+            gdi.DeleteObject.argtypes=[wt.HANDLE];gdi.DeleteObject.restype=wt.BOOL
+            gdi.DeleteDC.argtypes=[wt.HDC];gdi.DeleteDC.restype=wt.BOOL
+            gdi.BitBlt.argtypes=[wt.HDC,c.c_int,c.c_int,c.c_int,c.c_int,wt.HDC,c.c_int,c.c_int,wt.DWORD]
+            gdi.BitBlt.restype=wt.BOOL
             handles = []
 
             @c.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
@@ -312,11 +334,22 @@ def run(args):
                             assert pid.value == process.pid, ('Sample is occluded', label, x, y)
                         dc = user.GetDC(None)
                         assert dc
+                        memory=gdi.CreateCompatibleDC(dc);assert memory
+                        width=max(x for x,_,_ in samples)+1;height=max(y for _,y,_ in samples)+1
+                        bitmap=gdi.CreateCompatibleBitmap(dc,width,height);assert bitmap
+                        previous=gdi.SelectObject(memory,bitmap)
                         try:
-                            bad = [(x, y, expected, gdi.GetPixel(dc, origin.x+x, origin.y+y))
-                                   for x, y, expected in samples
-                                   if gdi.GetPixel(dc, origin.x+x, origin.y+y) != expected]
+                            # Copy the shown desktop once. Hundreds of live
+                            # GetPixel calls can straddle compositor frames and
+                            # consume the entire retry deadline themselves.
+                            # This does not request a Slint snapshot/cache reset.
+                            assert gdi.BitBlt(memory,0,0,width,height,dc,origin.x,origin.y,0x00CC0020)
+                            bad=[]
+                            for x,y,expected in samples:
+                                actual=gdi.GetPixel(memory,x,y)
+                                if actual!=expected:bad.append((x,y,expected,actual))
                         finally:
+                            gdi.SelectObject(memory,previous);gdi.DeleteObject(bitmap);gdi.DeleteDC(memory)
                             user.ReleaseDC(None, dc)
                         if not bad:
                             presented_checks.append({'transition': label, 'screenPixels': len(samples)})
@@ -345,6 +378,113 @@ def run(args):
             tabs = [by_id('AppWindow::navigation-'+name) for name in ['overview','cooling','lighting']]
             assert len(tabs) == 3
             assert max(e['size']['width'] for e in tabs) - min(e['size']['width'] for e in tabs) < .01
+            if args.editor_extensions_only:
+                user.GetClientRect.argtypes=[wt.HWND,c.POINTER(wt.RECT)]
+                scale=properties['scaleFactor']
+                def resize(w,h):
+                    outer=wt.RECT();inner=wt.RECT();user.GetWindowRect(hwnd,c.byref(outer));user.GetClientRect(hwnd,c.byref(inner))
+                    assert user.SetWindowPos(hwnd,None,0,0,round(w*scale)+outer.right-outer.left-inner.right,round(h*scale)+outer.bottom-outer.top-inner.bottom,0x2|0x4|0x10)
+                    time.sleep(.1)
+                def cooling_to(label,role='Button'):return pane_to('cooling',label,role)
+                def field(label):return scroll_to(label,'TextInput')
+                navigate('ui.cooling','cooling')
+                wait_for(lambda: find(texts['fan_profile.name'],'TextInput').get('accessibleEnabled'))
+                set_value(cooling_to(texts['fan_profile.name'],'TextInput'),'Fan one')
+                click(cooling_to(texts['preset.save']))
+                wait_for(lambda: find(texts['fan_profile.preset'],'Combobox').get('accessibleValue')=='Fan one')
+                dismiss_notice()
+                shot('named-fan-library')
+                navigate('ui.overview','overview')
+                set_value(name_field(),'Saved baseline')
+                temp=texts['field.CpuTemperatureLimitC']
+                click(scroll_to(temp,'Checkbox'));set_value(field(temp),'85')
+                click(scroll_to(texts['group.curve_optimizer_per_core']))
+                click(scroll_to(texts['field.CpuCurveOptimizerPerCore'],'Checkbox'))
+                set_value(field('CCD0 · 0'),'-10')
+                fan=scroll_to(texts['fan_profile.link'],'Combobox');click(fan);key('\uf72b');key('\n')
+                wait_for(lambda: find(texts['fan_profile.link'],'Combobox').get('accessibleValue')=='Fan one')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y'))
+                set_value(by_id('AppWindow::point-y'),'1915');label_click(texts['ui.set_point']);label_click(texts['ui.use_curve'])
+                click(by_id('AppWindow::save-preset'))
+                wait_for(lambda: scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Saved baseline')
+                dismiss_notice()
+                set_value(name_field(),'Edited name');set_value(field(temp),'95');set_value(field('CCD0 · 0'),'-20')
+                click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf729');key('\n')
+                click(by_id('AppWindow::startup'))
+                click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf72b');key('\n')
+                click(by_id('AppWindow::save-preset'))
+                wait_for(lambda: any(e.get('accessibleLabel')==texts['fan_profile.err.startup'] for e in tree()))
+                dismiss_notice()
+                click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf729');key('\n')
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+                set_value(by_id('AppWindow::point-y'),'1930');label_click(texts['ui.set_point'])
+                label_click(texts['preset.cancel_edit'])
+                wait_for(lambda: name_field().get('accessibleValue')=='Saved baseline')
+                assert field(temp)['accessibleValue']=='85'
+                assert field('CCD0 · 0')['accessibleValue']=='-10'
+                assert scroll_to(texts['fan_profile.link'],'Combobox').get('accessibleValue')=='Fan one'
+                assert not by_id('AppWindow::startup').get('accessibleChecked',False)
+                shot('cancel-to-saved-preset')
+                dismiss_notice()
+                click(scroll_to(texts['ui.edit_curve']))
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+                assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
+                set_value(curve_to(texts['curve.range_from'],'TextInput'),'950')
+                set_value(curve_to(texts['curve.range_to'],'TextInput'),'1000')
+                label_click(texts['curve.select_range'])
+                set_value(by_id('AppWindow::point-y'),'1900');label_click(texts['curve.equalize'])
+                def nodes():return [e for e in tree() if any(i.get('id')=='CurveCanvas::draft-node' for i in e['typeNamesAndIds'])]
+                selected=[e for e in nodes() if e['size']['width']==8]
+                assert len(selected)==6,len(selected)
+                assert max(e['absolutePosition'].get('y',0) for e in selected)-min(e['absolutePosition'].get('y',0) for e in selected)<.1
+                shot('selected-equalized-range')
+                label_click(texts['ui.undo']);wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+                set_value(curve_to(texts['curve.range_from'],'TextInput'),'951');set_value(curve_to(texts['curve.range_to'],'TextInput'),'959')
+                label_click(texts['curve.select_range'])
+                wait_for(lambda: any(e.get('accessibleLabel')==texts['curve.err.empty_selection'] for e in tree()))
+                assert not find(texts['curve.flatten_right'],'Button').get('accessibleEnabled',False)
+                assert by_id('AppWindow::point-y')['accessibleValue']=='1915'
+                dismiss_notice()
+                canvas=by_id('CurveCanvas::canvas-input')
+                client.tool('drag_element',{'elementHandle':canvas['handle'],'target':{'x':canvas['absolutePosition']['x']+canvas['size']['width']*.8,'y':canvas['absolutePosition']['y']+canvas['size']['height']*.3}})
+                assert len([e for e in nodes() if e['size']['width']==8])>5
+                shot('pointer-selected-voltage-band')
+                label_click(texts['preset.cancel_edit']);dismiss_notice()
+                resize(1600,1000)
+                overview=by_id('AppWindow::preset-list');cx=overview['absolutePosition'].get('x',0)+overview['size']['width']/2
+                assert abs(cx-(160+(1600-160)/2))<16,(cx,overview)
+                scroll(10000)
+                wait_for(lambda: any(e.get('accessibleLabel')=='GPU · '+texts['ui.test_data'] for e in tree()))
+                shot('centered-wide-overview')
+                navigate('ui.lighting','lighting')
+                preview=wait_for(lambda: by_id('AppWindow::keyboard-preview'))
+                assert preview['size']['width']>1000,preview
+                for label,expected in [('lighting.zone_left','#AA8C64'),('lighting.zone_middle','#A578AF'),('lighting.numpad_right','#73A0C8'),('lighting.wasd','#6EAF96')]:
+                    label_click(texts[label]);assert lighting_to('lighting-color')['accessibleValue']==expected
+                label_click(texts['lighting.zone_left']);set_value(lighting_to('lighting-color'),'#FF0000')
+                label_click(texts['lighting.zone_middle']);assert lighting_to('lighting-color')['accessibleValue']=='#A578AF'
+                label_click(texts['lighting.zone_left']);assert lighting_to('lighting-color')['accessibleValue']=='#FF0000'
+                shot('large-four-zone-keyboard')
+                navigate('settings.title','settings')
+                action=pane_to('settings',texts['ui.hp_restore'])
+                assert action['size']['width']==276,action
+                subtree=unpack(client.tool('get_element_tree',{'elementHandle':action['handle'],'maxElements':40}))['elements']
+                label=next(e for e in subtree if any(i.get('id')=='ActionButton::label' for i in e['typeNamesAndIds']))
+                assert label['size']['width']<=action['size']['width']-15
+                assert label['absolutePosition'].get('x',0)>=action['absolutePosition'].get('x',0)
+                shot('centered-settings-hp-action')
+                resize(820,500);pane_to('settings',texts['ui.hp_restore'])
+                assert find(texts['ui.about'],'Button')['size']['width']==276
+                shot('compact-hp-action')
+                (output/'result.json').write_text(json.dumps({'passed':True,'language':args.language,'backend':args.backend,
+                    'binarySha256':hashlib.sha256(args.exe.read_bytes()).hexdigest(),
+                    'rangeDragNumericEqualizeUndoAndEmptyGuard':True,'cancelRestoresCurrentPresetAndFanLink':True,
+                    'centeredColumnsAndBoundedHpLabel':True,'largeIndependentFourZoneKeyboard':True,
+                    'scope':'Isolated UI fixture; no real tuning or service action'},indent=2),encoding='utf-8')
+                print(output)
+                return
             if args.new_profile_curve_only:
                 # Startup remains on Overview. The fake driver carries a live
                 # +60 MHz offset; its factory target at 950 mV is 1900 MHz.
@@ -360,8 +500,8 @@ def run(args):
 
                 def factory_open(capture):
                     wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
-                    assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
-                    assert not find(texts['ui.redo'],'Button').get('accessibleEnabled',False)
+                    assert not curve_to(texts['ui.undo']).get('accessibleEnabled',False)
+                    assert not curve_to(texts['ui.redo']).get('accessibleEnabled',False)
                     shot(capture)
                     key('\uf700')  # New editor receives keyboard focus immediately.
                     wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1901')
@@ -527,8 +667,18 @@ def run(args):
             shot('frameless-maximized')
             click(by_id('AppWindow::window-maximize'))
             wait_for(lambda: not user.IsZoomed(hwnd))
+            def caption_layout_ready():
+                client_rect=wt.RECT();assert user.GetClientRect(hwnd,c.byref(client_rect))
+                return abs(by_id('AppWindow::titlebar-move')['size']['width']+150-client_rect.right/properties['scaleFactor'])<1
+            wait_for(caption_layout_ready)
+            # Separate gestures by the system click interval. MCP computes each
+            # press/release at the element's current center; a resize mid-chain
+            # otherwise mixes the preceding click series with new coordinates.
+            time.sleep(max(.5,user.GetDoubleClickTime()/1000)+.05)
             client.tool('click_element',{'elementHandle':by_id('AppWindow::titlebar-move')['handle'],'action':'DoubleClick'})
             wait_for(lambda: user.IsZoomed(hwnd))
+            wait_for(caption_layout_ready)
+            time.sleep(max(.5,user.GetDoubleClickTime()/1000)+.05)
             client.tool('click_element',{'elementHandle':by_id('AppWindow::titlebar-move')['handle'],'action':'DoubleClick'})
             wait_for(lambda: not user.IsZoomed(hwnd))
             click(scroll_to(texts['preset.new']))
@@ -555,6 +705,10 @@ def run(args):
                 assert name_field()['accessibleValue'] == name + 'x'
                 if width == 820:
                     shot('compact-overview')
+            # Keep the owned 200% fixture on screen before reading desktop DC
+            # pixels. Restoring its default offset can leave the final sample
+            # rows beyond the monitor, where GetPixel returns CLR_INVALID.
+            assert user.SetWindowPos(hwnd,None,0,0,0,0,0x1|0x4|0x10)
             samples = presented_reference()
             assert_presented(samples, 'baseline')
             click(by_id('AppWindow::window-minimize'))
@@ -623,8 +777,8 @@ def run(args):
             set_value(lighting_to('lighting-brightness'), '101')
             assert not by_id('AppWindow::lighting-apply').get('accessibleEnabled', False)
             set_value(lighting_to('lighting-brightness'), '50')
-            label_click(texts['lighting.rest'])
-            assert lighting_to('lighting-color').get('accessibleValue', '') == ''  # differing original left/middle
+            label_click(texts['lighting.zone_left'])
+            assert lighting_to('lighting-color').get('accessibleValue', '') == '#AA8C64'
             set_value(lighting_to('lighting-color'), '#0000FF')
             label_click(texts['lighting.numpad_right'])
             assert lighting_to('lighting-color')['accessibleValue'] == '#73A0C8'  # right slot 0, not WASD
@@ -746,12 +900,12 @@ def run(args):
             click(by_id('AppWindow::save-preset'))
             wait_for(lambda: any(e.get('accessibleLabel', '').startswith(texts['ui.test_saved']) for e in tree()))
             navigate('ui.cooling', 'cooling')
-            click(by_id('AppWindow::edit-fan'))
+            click(pane_to('cooling',texts['ui.edit_curve']))
             wait_for(lambda: by_id('AppWindow::curve-editor'))
             assert not any(e.get('accessibleLabel') == texts['control.working'] for e in tree())
             assert_curve_pixels('fan-curve-connected')
             assert user.SetWindowPos(hwnd,None,0,0,round(820*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
-            curve_to(texts['ui.save_curve'])
+            curve_to(texts['ui.use_curve'])
             chart=by_id('AppWindow::chart')
             assert chart['absolutePosition'].get('x',0)+chart['size']['width']<=820+.5
             shot('fan-curve-minimum')
@@ -957,4 +1111,5 @@ if __name__ == '__main__':
     parser.add_argument('--pending-switch-only',action='store_true')
     parser.add_argument('--gpu-curve-enable-only',action='store_true')
     parser.add_argument('--new-profile-curve-only',action='store_true')
+    parser.add_argument('--editor-extensions-only',action='store_true')
     run(parser.parse_args())

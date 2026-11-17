@@ -88,7 +88,11 @@ impl Handle {
                 };
                 crate::ui::record_manual(&selection);
             },
-            || ProfileStore::user_data().and_then(|s| s.pending()).ok(),
+            || {
+                ProfileStore::user_data()
+                    .and_then(|s| Ok(s.pending()? || s.fan_policy_pending()?))
+                    .ok()
+            },
             move || unsafe {
                 PostMessageW(hwnd as HWND, DONE, 0, 0);
             },

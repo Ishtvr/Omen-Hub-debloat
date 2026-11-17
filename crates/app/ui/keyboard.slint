@@ -8,9 +8,8 @@ export component KeyboardPreview inherits Rectangle {
     in property <int> selected;
     in property <bool> enabled: true;
     callback selected-group(int);
-    height: min(300px, self.width * 0.33);
-    max-width: 640px;
-    horizontal-stretch: 0;
+    height: min(480px, self.width * 0.33);
+    horizontal-stretch: 1;
     background: Theme.surface;
     border-radius: 8px;
     for cap in root.keys: key-cap := Rectangle {
@@ -44,7 +43,7 @@ export component KeyboardPreview inherits Rectangle {
 
         Text {
             text: cap.label;
-            font-size: 10px;
+            font-size: clamp(root.width / 64, 10px, 16px);
             color: Theme.ink;
             horizontal-alignment: center;
             vertical-alignment: center;

@@ -25,6 +25,10 @@ export component ActionButton inherits Rectangle {
     border-width: 1px;
     border-color: root.enabled && (area.pressed || focus.has-focus) ? root.primary ? Theme.on-accent : Theme.accent : transparent;
     label := Text {
+        x: 8px;
+        y: 0px;
+        width: max(0px,parent.width - 16px);
+        height: parent.height;
         text: root.text;
         color: !root.enabled ? Theme.quiet : root.primary ? Theme.on-accent : Theme.ink;
         font-size: 13px;

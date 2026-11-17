@@ -184,8 +184,9 @@ hardware checks and careful editing. Discord-inspired Slate neutrals, a restrain
 indigo accent and Antigravity-style appearance choices replace the initial palette.
 The user's pinned direction is recorded in [the appearance brief](docs/plans/APPEARANCE_REFINEMENT.md),
 extended by [color selection and scrolling](docs/plans/COLOR_SELECTION_AND_SCROLL.md)
-and [window lifecycle, notifications and manual Apply](docs/plans/WINDOW_AND_APPLY_REFINEMENT.md).
-This record describes the implementation refined on 16 November 2026 for 0.10.0-beta.2.
+and [window lifecycle, notifications and manual Apply](docs/plans/WINDOW_AND_APPLY_REFINEMENT.md),
+then [preset/cooling/lighting refinement](docs/plans/PRESET_AND_LIGHTING_REFINEMENT.md).
+This record describes the implementation refined on 17 November 2026 for 0.10.0-beta.7.
 
 Measured GPU watts and temperature lead, with verified CPU telemetry beside them.
 Editable presets follow in the same work area. Information density supports scanning;
@@ -298,6 +299,13 @@ and settings, including preset selector/name, use one fixed 276 px value column.
 Ordinary text actions share 128 px; compact actions use 36 px. Per-core fields, chart controls and keyboard keys retain their
 purpose-specific widths.
 
+Bounded content is centered beside the sidebar, up to 1280 logical px wide.
+Cooling, Lighting and Settings use natural content height within their scroll
+areas, preventing stretched gaps. Field rows are 44 px with vertically centered
+36 px controls; section-body top/bottom padding keeps fields off the header edge.
+The long HP restore action and About use the 276 px field width with inset wrapped labels.
+Preset footer actions split into two rows below 720 px available width.
+
 **The One Work Area Rule.** Keep Overview's instruments and preset editor in one
 mounted scroll area. Selection, drafts and Undo survive scrolling and navigation.
 Save, Apply/Recovery, Delete and sign-in approval remain explicit below that area.
@@ -402,6 +410,10 @@ and restores its selection. A separate pending-recovery warning must not erase a
 successful Save-and-switch intent. Discard switches without saving; Cancel keeps
 the current draft. Saved metadata still has no hardware-Apply meaning.
 
+The separate Cancel editing action restores the loaded preset's saved baseline,
+including name, per-core values, GPU curve and fan snapshot. It changes no stored
+file, hardware or sign-in grant. Reset remains a return to defaults.
+
 ### Manual Apply and recovery
 
 The latest manual mode/preset request replaces a waiting target. One executor
@@ -418,8 +430,13 @@ commands gain no new recovery permission from this workflow.
 
 ### Curves and cooling
 
-BIOS/Curve/Max cooling remains separate from custom presets. GPU curves belong to
-preset drafts. Both editors use connected Path geometry, draft/reference legends
+BIOS/Curve/Max remains available under Cooling. Named fan-library drafts are saved
+separately, and a shared curve snapshot can be linked to a manual performance
+preset. Library edits/deletion never change a saved profile's points. Requests use
+the installed helper, with exact preference originals and interrupted-request
+recovery. Direct verified values and requested cooling are reported separately;
+the helper has no exact policy-digest acknowledgement. Linked curves cannot gain
+sign-in approval. GPU curves belong to preset drafts. Both editors use connected Path geometry, draft/reference legends
 and readable axes. Plot clipping, point markers and input use the same viewport.
 Explicit New (+ or the New preset selector entry) loads a fresh driver snapshot
 and opens its factory GPU curve, with no inherited offset, cached edit or history.
@@ -430,12 +447,20 @@ The MSI Afterburner reference remains scoped to curve interaction/composition.
 Curve numeric, history and viewport controls use bounded rows; the chart and primary
 action stay inside the compact horizontal viewport.
 
+GPU range mode makes plain dragging select rather than edit points. Inclusive
+numeric voltage bounds, All/To end/Clear and a visible band/count provide the
+alternative routes. Equalize changes selected frequencies to the entered MHz in
+one undoable action, retaining driver anchors and range/order checks. An empty
+range cannot fall through to flatten-to-end. Plot/tool rows scroll at minimum size.
+
 ### Keyboard lighting
 
-An original schematic QWERTZ/QWERTY keyboard previews four hardware zones through
-three selectable groups: WASD selects wire zone 3; Rest links zones 1 and 2; NUM pad
-and right selects zone 0, including adjacent keys. Clicking a key selects its group;
-the three group buttons provide the keyboard route. The diagram does not claim
+An original schematic QWERTZ/QWERTY keyboard previews four independent hardware
+groups: WASD selects wire zone 3, left selects 2, middle selects 1, and NUM pad/right
+selects 0 including adjacent keys. Clicking a key selects its group;
+four group buttons provide the keyboard route. The keyboard fills its work-area
+width, with height min(480 px, width × 0.33) and 10–16 px adaptive key labels.
+The diagram does not claim
 per-key RGB or measured physical LED boundaries.
 
 The shared color field opens the same in-app HSV/HEX dialog used by appearance.
@@ -445,8 +470,10 @@ Tab skips disabled controls and reveals its target in the clipped body, includin
 at minimum height. Escape/Cancel restore the invoking field's focus without edits.
 Color acceptance, On/Off and the compound brightness field edit a draft. Brightness adjusts
 RGB color value from the retained full-color base, never an unqualified firmware
-master-brightness byte. A mixed Rest group can keep its separate hues during a
-brightness edit. Canceling the picker changes nothing.
+master-brightness byte. Zone selection and edits leave other zones independent.
+Canceling the picker changes nothing. A compact Preview badge identifies an edited
+draft; the removed body explanations remain in the guide and accessible readback
+description rather than occupying the middle of the work area.
 
 Apply uses the existing guarded transaction and complete readback. Reset restores
 the last read draft; refresh cannot silently discard edits. Outside changes are

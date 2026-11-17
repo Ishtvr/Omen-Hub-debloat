@@ -58,7 +58,15 @@ const FIELD_HEIGHT: i32 = 36;
 const INFO_OFFSET: usize = FIELD_STRIDE - 1;
 const INFO_SIZE: i32 = 26;
 pub const CLASS: &str = "OmenHubPPPresetEditor";
+fn disable_selected_startup(store: &ProfileStore, id: &str) -> Result<(), String> {
+    let _lease = omen_platform::ControlLease::acquire_foreground()?;
+    if store.startup()?.profile_id.as_deref() == Some(id) {
+        store.disable_startup()?;
+    }
+    Ok(())
+}
 const PANE_CLASS: &str = "OmenHubPPPresetFields";
+#[derive(Clone)]
 pub(crate) struct View {
     pub(crate) profiles: Vec<PerformanceProfile>,
     pub(crate) selected: Option<PerformanceProfile>,
@@ -117,9 +125,16 @@ fn load(id: Option<&str>) -> Result<View, String> {
             .filter(|s| preset_fields::retired(s.feature))
             .count()
     });
-    let plan = selected
+    let parts = selected
         .as_ref()
-        .map(|p| transaction::plan(p, &mut controller, false));
+        .map(omen_core::fan_profile::split)
+        .transpose();
+    let plan = parts
+        .as_ref()
+        .ok()
+        .and_then(|p| p.as_ref())
+        .map(|p| transaction::plan(&p.direct, &mut controller, false));
+    let fan_error = parts.err();
     let selection = store.startup()?;
     let startup_enabled = selection.enabled
         && selected
@@ -137,11 +152,14 @@ fn load(id: Option<&str>) -> Result<View, String> {
         defaults,
         curve,
         removed_options,
-        pending: store.pending()?,
-        applicable: plan.as_ref().is_some_and(|p| p.applicable),
-        blockers: plan.map_or_else(Vec::new, |p| {
-            p.blockers.into_iter().map(|b| b.reason).collect()
-        }),
+        pending: store.pending()? || store.fan_policy_pending()?,
+        applicable: fan_error.is_none() && plan.as_ref().is_some_and(|p| p.applicable),
+        blockers: fan_error
+            .into_iter()
+            .chain(plan.map_or_else(Vec::new, |p| {
+                p.blockers.into_iter().map(|b| b.reason).collect()
+            }))
+            .collect(),
         startup_enabled,
         startup_valid,
     })
@@ -190,7 +208,11 @@ pub(crate) fn worker(
         if matches!(request, Request::List) {
             let result = (|| {
                 let store = ProfileStore::user_data()?;
-                Ok((store.list()?, store.ac_selection(), store.pending()?))
+                Ok((
+                    store.list()?,
+                    store.ac_selection(),
+                    store.pending()? || store.fan_policy_pending()?,
+                ))
             })();
             if updates.send(Update::List(result)).is_err() {
                 break;
@@ -239,6 +261,12 @@ pub(crate) fn worker(
                         profile.binding.nvidia_vbios = data.binding.nvidia_vbios.clone();
                     }
                     profile.binding = profile.binding.for_settings(&profile.settings);
+                    let current_startup = store.startup()?;
+                    let enable = data.startup.unwrap_or(
+                        current_startup.enabled
+                            && current_startup.profile_id.as_deref() == Some(profile.id.as_str()),
+                    );
+                    omen_core::fan_profile::startup_allowed(&profile, enable)?;
                     store.save(&profile)?;
                     // A changed sign-in preset is applied and approved again
                     // instead of failing at the next sign-in (user rule, 30
@@ -264,7 +292,7 @@ pub(crate) fn worker(
                             t("preset.saved_startup")
                         }
                         Some(false) => {
-                            store.disable_startup()?;
+                            disable_selected_startup(&store, &profile.id)?;
                             t("preset.saved")
                         }
                         None => t("preset.saved"),
@@ -282,10 +310,10 @@ pub(crate) fn worker(
                     ))
                 }
                 Request::Recover => {
-                    elevation::run(None, Action::Restore, || false)?;
+                    let record = elevation::run(None, Action::Restore, || false)?;
                     Ok(Update::View(
                         Box::new(load(None)?),
-                        t("preset.restored").into(),
+                        elevation::restored_status(&record),
                     ))
                 }
                 Request::Delete(id) => {
@@ -299,6 +327,7 @@ pub(crate) fn worker(
                     if enabled {
                         // Not applied in this exact revision yet: apply it first.
                         let store = ProfileStore::user_data()?;
+                        omen_core::fan_profile::startup_allowed(&store.load(&id)?, true)?;
                         if store.startup_eligibility(&id).is_err() {
                             let mut controller = Controller::new(true, None)?;
                             if !transaction::plan(&store.load(&id)?, &mut controller, true)
@@ -310,7 +339,7 @@ pub(crate) fn worker(
                         }
                         elevation::run(Some(&id), Action::Startup, || false)?;
                     } else {
-                        ProfileStore::user_data()?.disable_startup()?;
+                        disable_selected_startup(&ProfileStore::user_data()?, &id)?;
                     }
                     Ok(Update::View(
                         Box::new(load(Some(&id))?),

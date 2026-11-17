@@ -632,6 +632,22 @@ pub fn recovery_record() -> Result<Option<ownership::Record>, String> {
     .load()
 }
 
+/// Request-level fan changes may not disturb the exact forced-maximum images
+/// and helper identity held by a protected controller/cooling recovery duty.
+pub fn fan_policy_change_allowed() -> Result<(), String> {
+    use ownership::Journal;
+    let root = super::startup::installation_root()?;
+    let owner = crate::ownership_store::OwnershipJournal::at(root.clone())?.load()?;
+    let cooling = crate::cooling_store::CoolingJournal::at(root)?.load()?;
+    if owner.is_some_and(|r| !r.phase.complete()) || cooling.is_some_and(|r| !r.phase.complete()) {
+        return Err(omen_core::message::msg(
+            "fan_profile.err.protected_recovery",
+            &[],
+        ));
+    }
+    Ok(())
+}
+
 pub fn run_guardian_process() -> Result<(), String> {
     guard::run()
 }
@@ -652,7 +668,12 @@ fn hardware_lease(budget: Duration) -> Result<super::ControlLease, String> {
     }
 }
 fn require_hardware_recovery_complete() -> Result<(), String> {
-    hardware_recovery_gate(crate::profile_store::ProfileStore::user_data()?.pending())
+    let store = crate::profile_store::ProfileStore::user_data()?;
+    hardware_recovery_gate(
+        store
+            .pending()
+            .and_then(|core| Ok(core || store.fan_policy_pending()?)),
+    )
 }
 fn hardware_recovery_gate(pending: Result<bool, String>) -> Result<(), String> {
     match pending {

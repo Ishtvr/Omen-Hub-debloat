@@ -194,7 +194,7 @@ fn prepare_apply(
     // Recovery and preflight precede even the mode/TPP prelude.
     if replace_pending {
         recover_pending(store)?;
-    } else if store.pending()? {
+    } else if store.pending()? || store.fan_policy_pending()? {
         return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
     }
     let mut controller = Controller::for_profile(profile)?;
@@ -213,12 +213,13 @@ fn prepare_apply(
 /// The recorded original is restored/verified before any replacement prelude.
 /// Recovery failure retains the pending journal and dispatches no new target.
 fn recover_pending(store: &mut ProfileStore) -> Result<(), String> {
-    if store.pending()? {
+    if store.pending()? || store.fan_pending_direct_applied()? {
         let saved = store.last_transaction::<RestoreState>()?;
         let mut controller = Controller::for_recovery(&saved)?;
         transaction::recover(&saved, &mut controller, store)
             .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
     }
+    crate::profile_fan::recover_pending(store)?;
     Ok(())
 }
 
@@ -366,7 +367,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let mut user_store = ProfileStore::user_data()?;
             if args[0] == "mode-ui-replace" {
                 recover_pending(&mut user_store)?;
-            } else if user_store.pending()? {
+            } else if user_store.pending()? || user_store.fan_policy_pending()? {
                 return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
             }
             let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
@@ -576,8 +577,15 @@ fn run_inner(args: &[String]) -> Result<(), String> {
         }
         Some("profile-plan") if args.len() == 2 => {
             let profile = store.load(&args[1])?;
-            let mut controller = Controller::for_profile(&profile)?;
-            print(&transaction::plan(&profile, &mut controller, false))
+            let parts = omen_core::fan_profile::split(&profile)?;
+            let mut controller = Controller::for_profile(&parts.direct)?;
+            let mut plan =
+                serde_json::to_value(transaction::plan(&parts.direct, &mut controller, false))
+                    .map_err(|e| e.to_string())?;
+            if let Some(shared) = parts.shared {
+                plan = serde_json::json!({"direct_applicable":plan["applicable"],"direct_plan":plan,"cooling_request":shared,"cooling_request_readiness":"checked_on_apply","cooling_hardware_verified":false});
+            }
+            print(&plan)
         }
         Some("profile-verify-current") if args.len() == 2 => {
             let _lease = ControlLease::acquire_foreground()?;
@@ -585,11 +593,24 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             // The journal must describe a completed application of this exact
             // revision. Verification only GETs current targets; it never applies
             // a profile, repairs a mismatch, or grants a startup approval.
-            store.startup_eligibility(&profile.id)?;
-            let mut controller = Controller::for_profile(&profile)?;
+            let parts = omen_core::fan_profile::split(&profile)?;
+            if store.pending()? || store.fan_policy_pending()? {
+                return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
+            }
+            let Some((id, digest, requested)) = store.applied_settings()? else {
+                return Err(omen_core::message::msg("profile.err.other_profile", &[]));
+            };
+            if id != profile.id
+                || digest != profile_digest(&profile)?
+                || requested != parts.direct.effective().settings
+            {
+                return Err(omen_core::message::msg("profile.err.other_profile", &[]));
+            }
+            let mut controller = Controller::for_profile(&parts.direct)?;
             controller.verify_applied(&store.last_transaction::<RestoreState>()?)?;
+            crate::profile_fan::verify_request(&store, &profile)?;
             print(
-                &serde_json::json!({"schema":1,"profile_id":profile.id,"profile_digest":profile_digest(&profile)?,"verified":true,"hardware_applied":false}),
+                &serde_json::json!({"schema":1,"profile_id":profile.id,"profile_digest":profile_digest(&profile)?,"verified":parts.shared.is_none(),"direct_verified":true,"cooling_request_matches":parts.shared.is_some(),"cooling_hardware_verified":false,"hardware_applied":false}),
             )
         }
         Some(
@@ -607,18 +628,32 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
             let digest = profile_digest(&profile)?;
+            let parts = omen_core::fan_profile::split(&profile)?;
             if profile
                 .settings
                 .iter()
                 .any(|s| s.feature == Feature::CpuCcdAffinity)
+                && parts.shared.is_none()
             {
                 // The background service pins programs; install or update it
                 // first so the saved selection takes effect.
                 crate::startup_setup::ensure_fan_service()?;
             }
-            let mut controller =
-                prepare_apply(&profile, &mut store, false, args[0] == "profile-ui-replace")?;
-            apply_hp_prelude(&profile, controller.inventory())?;
+            let mut controller = prepare_apply(
+                &parts.direct,
+                &mut store,
+                false,
+                args[0] == "profile-ui-replace",
+            )?;
+            let cooling_request =
+                crate::profile_fan::prepare(&profile, &store, controller.inventory())?;
+            if let Err(error) = apply_hp_prelude(&profile, controller.inventory()) {
+                return Err(crate::profile_fan::prelude_failed(
+                    &store,
+                    cooling_request.as_ref(),
+                    error,
+                ));
+            }
             let tracing = args[0] == "profile-apply-trace";
             if tracing {
                 controller.trace_cpu_readbacks();
@@ -629,7 +664,15 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                     .err()
                     .into_iter()
                     .collect();
-            let result = transaction::apply(&profile, &digest, &mut controller, &mut store, false);
+            let result =
+                transaction::apply(&parts.direct, &digest, &mut controller, &mut store, false);
+            let (result, cooling) = crate::profile_fan::finish(
+                &mut store,
+                &mut controller,
+                &profile,
+                cooling_request.as_ref(),
+                result,
+            );
             // TPP has a SET contract but no exact GET. Do not include it in
             // the verified transaction or imply a fully confirmed firmware state.
             let unconfirmed: Vec<_> = profile
@@ -637,7 +680,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 .iter()
                 .filter(|s| s.feature == Feature::HpSharedPowerMw)
                 .collect();
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"result":result}))?;
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"cooling":cooling,"result":result}))?;
             if tracing {
                 print(
                     &serde_json::json!({"result":result,"cpu_readbacks":controller.cpu_readback_observations()}),
@@ -661,6 +704,19 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             }
             .map(String::as_str);
             validate_nonce(nonce)?;
+            if !store.pending()?
+                && store.fan_policy_pending()?
+                && !store.fan_pending_direct_applied()?
+            {
+                if args.len()==3 && !store.fan_policy_request()?.is_some_and(|r|matches!(&r.owner,omen_platform::profile_store::FanPolicyOwner::Profile{id,..} if id==&args[1])) {
+                    return Err(omen_core::message::msg("profile.err.other_profile",&[]));
+                }
+                crate::profile_fan::recover_pending(&store)?;
+                store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":{"Ok":null},"cooling_preferences_restored":true,"direct_restored":false}))?;
+                return print(
+                    &serde_json::json!({"cooling_preferences_restored":true,"hardware_handover_confirmed":false}),
+                );
+            }
             let saved = store.last_transaction::<RestoreState>()?;
             if args.len() == 3 && saved.profile_id != args[1] {
                 return Err(omen_core::message::msg("profile.err.other_profile", &[]));
@@ -668,8 +724,23 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             // Disable further automatic application before explicit recovery.
             store.disable_startup()?;
             let mut controller = Controller::for_recovery(&saved)?;
-            let result = transaction::recover(&saved, &mut controller, &mut store);
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result}))?;
+            let mut direct_restored = false;
+            let mut cooling_restored = false;
+            let result = transaction::recover(&saved, &mut controller, &mut store).and_then(|()| {
+                direct_restored = true;
+                crate::profile_fan::restore_for(&store, &saved.profile_id, &saved.profile_digest)
+                    .map(|value| {
+                        cooling_restored = value;
+                    })
+                    .map_err(|error| transaction::ApplyFailure {
+                        error: omen_core::message::msg(
+                            "fan_profile.err.restore_after_direct",
+                            &[&error],
+                        ),
+                        rollback_errors: vec![],
+                    })
+            });
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result,"direct_restored":direct_restored,"cooling_preferences_restored":cooling_restored,"cooling_hardware_verified":false}))?;
             result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
             print(
                 &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":if saved.requested.iter().any(|s|s.feature.needs_nvidia()){Some(controller.gpu_report()?)}else{None}}),
@@ -682,6 +753,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let nonce = args.get(2).map(String::as_str);
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
+            omen_core::fan_profile::startup_allowed(&profile, true)?;
             let mut controller = Controller::for_profile(&profile)?;
             let plan = transaction::plan(&profile, &mut controller, true);
             if !plan.applicable {
@@ -711,6 +783,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 let Some(profile) = store.startup_profile()? else {
                     return Ok(None);
                 };
+                omen_core::fan_profile::startup_allowed(&profile, true)?;
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
                 let mut controller = prepare_apply(&profile, &mut store, true, false)?;

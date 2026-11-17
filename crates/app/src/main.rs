@@ -35,6 +35,8 @@ mod preset_ui;
 #[cfg(windows)]
 mod profile_commands;
 #[cfg(windows)]
+mod profile_fan;
+#[cfg(windows)]
 mod read_process;
 #[cfg(windows)]
 mod runtime_priority;

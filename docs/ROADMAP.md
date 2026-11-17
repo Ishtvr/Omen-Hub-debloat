@@ -23,7 +23,10 @@ Acceptance: model/file/process tests cover interrupted operations and foreign ch
 - [ ] Obtain reliable performance/fan-ownership readback and a safe BIOS handover contract.
 - [ ] Prove sustained own cooling and CPU-profile persistence without original HP writers.
 - [ ] Integrate durable ownership into normal app/sign-in control only after its recovery path is qualified.
-- [ ] Integrate fan curves into complete profile transactions with coupled CPU/GPU/IR protection and preserved originals.
+- [ ] Qualify physical fan-curve uptake and lifecycle integration using exact helper
+  policy acknowledgements. Manual named snapshots now have request-level preference
+  journaling and preserved originals; full physical transaction/sign-in acceptance
+  remains pending.
 
 Acceptance: native controller/cooling recovery, helper loss and aborted ownership retain a safe accountable state. The temporary OEM return used by migration trials is not a target runtime dependency. [Replacement plan](REPLACEMENT_PLAN.md), [HP control](HP_CONTROL.md), [fan handover](FAN_HANDOVER.md).
 

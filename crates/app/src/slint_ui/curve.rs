@@ -36,6 +36,8 @@ pub(super) struct Editor {
     pub curve: Curve,
     view: Viewport,
     gesture: Option<(Vec<Point>, Point, Modifiers)>,
+    selection_mode: bool,
+    range_gesture: Option<Point>,
 }
 impl Host {
     pub(super) fn gpu_curve_dirty(&self) -> bool {
@@ -56,15 +58,7 @@ impl Host {
                 .is_some_and(|e| e.curve.kind == Kind::Gpu && changed(&e.curve))
     }
     pub(super) fn curves_dirty(&self) -> bool {
-        let baseline = self.fan_baseline.borrow();
-        let changed = |curve: &Curve| curve.value().ok() != *baseline;
-        self.gpu_curve_dirty()
-            || self.fan_draft.borrow().as_ref().is_some_and(changed)
-            || self
-                .curve
-                .borrow()
-                .as_ref()
-                .is_some_and(|e| e.curve.kind != Kind::Gpu && changed(&e.curve))
+        self.gpu_curve_dirty() || self.fan_library_dirty()
     }
     pub(super) fn open_new_gpu_curve(&self) {
         // New profile means a fresh driver snapshot's factory curve, even if
@@ -82,6 +76,10 @@ impl Host {
         }
     }
     pub(super) fn open_curve(&self, gpu: bool) {
+        if !gpu {
+            self.open_fan_library_curve();
+            return;
+        }
         let cached = if gpu {
             self.gpu_draft.borrow().clone()
         } else {
@@ -102,11 +100,8 @@ impl Host {
             view.curve
                 .clone()
                 .and_then(|state| gpu_editor(state, value.as_ref()))
-        } else if self.test {
-            Curve::fan(Kind::CpuFan, None)
         } else {
-            self.send_aux(Aux::ReadFan);
-            return;
+            unreachable!("Fan editor is handled by its library")
         };
         match result {
             Ok(curve) => self.open_loaded_curve(curve),
@@ -115,19 +110,27 @@ impl Host {
     }
     pub(super) fn open_loaded_curve(&self, curve: Curve) {
         let gpu = curve.kind == Kind::Gpu;
-        if !gpu && self.fan_baseline.borrow().is_none() {
-            *self.fan_baseline.borrow_mut() = curve.value().ok();
-        }
         let view = Viewport::initial(&curve);
         *self.curve.borrow_mut() = Some(Editor {
             curve,
             view,
             gesture: None,
+            selection_mode: false,
+            range_gesture: None,
         });
         if let Some(w) = self.window.upgrade() {
             let data = w.global::<Workbench>();
             data.set_curve_open(true);
             data.set_curve_gpu(gpu);
+            if let Some(editor) = self.curve.borrow().as_ref() {
+                data.set_range_from(
+                    editor.curve.points[editor.curve.selected]
+                        .x
+                        .to_string()
+                        .into(),
+                );
+                data.set_range_to(editor.curve.points.last().unwrap().x.to_string().into());
+            }
             data.set_curve_title(
                 t(if gpu {
                     "ui.gpu_curve"
@@ -164,8 +167,30 @@ impl Host {
         let v = editor.view;
         d.set_curve_path(path(&curve.points, v).into());
         d.set_reference_path(path(curve.reference(), v).into());
+        d.set_curve_selection_mode(editor.selection_mode);
+        let selection = curve.selection();
+        d.set_has_selection(selection.is_some());
+        d.set_selection_label(
+            selection
+                .map_or_else(
+                    || t("curve.no_selection").to_owned(),
+                    |(a, b)| {
+                        tf(
+                            "curve.selection_count",
+                            &[&(b - a + 1), &curve.points[a].x, &curve.points[b].x],
+                        )
+                    },
+                )
+                .into(),
+        );
         let sx = (v.hi.x - v.lo.x).max(1) as f32;
         let sy = (v.hi.y - v.lo.y).max(1) as f32;
+        d.set_selection_low(
+            selection.map_or(0.0, |(a, _)| (curve.points[a].x - v.lo.x) as f32 / sx),
+        );
+        d.set_selection_high(
+            selection.map_or(0.0, |(_, b)| (curve.points[b].x - v.lo.x) as f32 / sx),
+        );
         let nodes = curve
             .points
             .iter()
@@ -229,6 +254,9 @@ impl Host {
                 }
             }
             d.set_curve_open(false);
+            if !d.get_curve_gpu() {
+                self.sync_fan_library();
+            }
             return;
         }
         if action == "save" {
@@ -250,11 +278,7 @@ impl Host {
                     self.status(t("ui.curve_in_draft"), false);
                 }
                 Some(Ok(Value::FanCurve(points))) => {
-                    if self.test {
-                        self.status(t("ui.test_no_write"), true);
-                    } else {
-                        self.send_aux(Aux::SaveFan(points));
-                    }
+                    self.accept_fan_library_curve(points);
                     self.curve_action("close");
                 }
                 Some(Err(e)) => self.status(&crate::i18n::error_message(&e), true),
@@ -278,7 +302,49 @@ impl Host {
                     e.curve.reset()?;
                 }
                 "flatten" => {
-                    e.curve.flatten_selection()?;
+                    let mhz = d
+                        .get_point_y()
+                        .parse()
+                        .map_err(|_| t("preset.co_steps_invalid"))?;
+                    if e.curve.selection().is_some() {
+                        e.curve.flatten_selection_to(mhz)?;
+                    } else if e.selection_mode {
+                        return Err(omen_core::message::msg("curve.err.selection_required", &[]));
+                    } else {
+                        e.curve.plateau(mhz)?;
+                    }
+                }
+                "selection-mode" => {
+                    e.selection_mode = !e.selection_mode;
+                    e.range_gesture = None;
+                }
+                "select-all" => {
+                    e.curve.select_all();
+                }
+                "clear-selection" => {
+                    e.curve.clear_selection();
+                    e.range_gesture = None;
+                }
+                "select-right" => {
+                    let from = e.curve.points[e.curve.selected].x;
+                    let to = e.curve.points.last().unwrap().x;
+                    e.curve.select_voltage_range(from, to);
+                    d.set_range_from(from.to_string().into());
+                    d.set_range_to(to.to_string().into());
+                }
+                "select-range" => {
+                    let from = d
+                        .get_range_from()
+                        .parse()
+                        .map_err(|_| t("curve.invalid_range"))?;
+                    let to = d
+                        .get_range_to()
+                        .parse()
+                        .map_err(|_| t("curve.invalid_range"))?;
+                    e.selection_mode = true;
+                    if !e.curve.select_voltage_range(from, to) {
+                        return Err(omen_core::message::msg("curve.err.empty_selection", &[]));
+                    }
                 }
                 "insert" => e.curve.insert()?,
                 "remove" => e.curve.remove()?,
@@ -328,22 +394,36 @@ impl Host {
                     .round() as i32,
             };
             if kind == 0 {
-                let index = e
-                    .curve
-                    .points
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, p)| (p.x - point.x).abs())
-                    .map_or(0, |(i, _)| i);
-                e.curve.select(index, ctrl);
-                e.curve.begin_gesture();
-                e.gesture = Some((
-                    e.curve.points.clone(),
-                    point,
-                    Modifiers { shift, ctrl, alt },
-                ));
+                if e.curve.kind == Kind::Gpu && e.selection_mode {
+                    e.range_gesture = Some(point);
+                    e.curve.select_voltage_range(point.x, point.x);
+                } else {
+                    let index = e
+                        .curve
+                        .points
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, p)| (p.x - point.x).abs())
+                        .map_or(0, |(i, _)| i);
+                    e.curve.select(index, ctrl);
+                    e.curve.begin_gesture();
+                    e.gesture = Some((
+                        e.curve.points.clone(),
+                        point,
+                        Modifiers { shift, ctrl, alt },
+                    ));
+                }
             } else if kind == 1 || kind == 2 {
-                if let Some((original, start, m)) = &e.gesture {
+                if let Some(start) = e.range_gesture {
+                    e.curve.select_voltage_range(start.x, point.x);
+                    if kind == 2
+                        && let Some(w) = self.window.upgrade()
+                    {
+                        let d = w.global::<Workbench>();
+                        d.set_range_from(start.x.min(point.x).to_string().into());
+                        d.set_range_to(start.x.max(point.x).to_string().into());
+                    }
+                } else if let Some((original, start, m)) = &e.gesture {
                     if e.curve.kind == Kind::Gpu && (m.shift || m.alt || m.ctrl) {
                         let mode = if m.ctrl {
                             DragMode::Tilt
@@ -373,10 +453,12 @@ impl Host {
                 if kind == 2 {
                     e.curve.end_gesture();
                     e.gesture = None;
+                    e.range_gesture = None;
                 }
             } else if kind == 3 {
                 e.curve.cancel_gesture();
                 e.gesture = None;
+                e.range_gesture = None;
             }
             Ok(())
         })();
@@ -401,11 +483,21 @@ impl Host {
             _ => None,
         };
         if let Some(key) = key {
-            if let Some(e) = self.curve.borrow_mut().as_mut()
-                && let Err(err) =
+            if let Some(e) = self.curve.borrow_mut().as_mut() {
+                if matches!(key, Key::Escape) {
+                    e.range_gesture = None;
+                }
+                let result = if matches!(key, Key::Flatten)
+                    && e.selection_mode
+                    && e.curve.selection().is_none()
+                {
+                    Err(omen_core::message::msg("curve.err.selection_required", &[]))
+                } else {
                     curve_input::edit(&mut e.curve, key, Modifiers { shift, ctrl, alt })
-            {
-                self.status(&crate::i18n::error_message(&err), true);
+                };
+                if let Err(err) = result {
+                    self.status(&crate::i18n::error_message(&err), true);
+                }
             }
             self.draw_curve();
             true

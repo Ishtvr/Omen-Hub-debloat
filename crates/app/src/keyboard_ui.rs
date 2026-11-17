@@ -36,10 +36,10 @@ const STATUS: i32 = 624;
 pub const CLASS: &str = "OmenHubPPKeyboardEditor";
 /// Language keys of the four keyboard zones, left to right.
 const LABELS: [&str; 4] = [
-    "lighting.zone_left",
+    "lighting.numpad_right",
     "lighting.zone_middle",
-    "lighting.zone_right",
-    "lighting.zone_numpad",
+    "lighting.zone_left",
+    "lighting.wasd",
 ];
 enum Request {
     Read,

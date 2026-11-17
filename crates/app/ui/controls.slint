@@ -103,9 +103,11 @@ export component LineEdit inherits Rectangle {
     min-width: 60px;
     preferred-width: Theme.field-width;
     max-width: Theme.field-width;
-    height: Theme.control-height;
+    preferred-height: Theme.control-height;
     vertical-stretch: 0;
     horizontal-stretch: 1;
+    min-height: Theme.control-height;
+    max-height: Theme.control-height;
     background: root.enabled ? Theme.control : Theme.surface;
     border-radius: 6px;
     border-width: 1px;
@@ -271,7 +273,9 @@ export component ComboBox inherits Rectangle {
     max-width: Theme.field-width;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    height: Theme.control-height;
+    preferred-height: Theme.control-height;
+    min-height: Theme.control-height;
+    max-height: Theme.control-height;
     background: !root.enabled ? Theme.surface : touch.has-hover ? Theme.hover : Theme.control;
     border-radius: 6px;
     border-width: 1px;

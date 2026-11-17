@@ -1,19 +1,21 @@
-//! Three user groups over the investigated four-zone RGB contract. Brightness
+//! Four independently selectable zones over the investigated RGB contract. Brightness
 //! is a color-value adjustment, never a guessed firmware brightness/mode byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
     Wasd,
-    Rest,
+    Left,
+    Middle,
     NumpadRight,
 }
 impl Group {
-    pub const ALL: [Self; 3] = [Self::Wasd, Self::Rest, Self::NumpadRight];
+    pub const ALL: [Self; 4] = [Self::Wasd, Self::Left, Self::Middle, Self::NumpadRight];
     pub fn zones(self) -> &'static [usize] {
         // FourZoneModule 1101.2609.3.0: 0=KBRight, 1=KBMid,
         // 2=KBLeft, 3=KBWasd. Capability [1,0,0,0] includes the numpad.
         match self {
             Self::Wasd => &[3],
-            Self::Rest => &[1, 2],
+            Self::Left => &[2],
+            Self::Middle => &[1],
             Self::NumpadRight => &[0],
         }
     }
@@ -21,7 +23,8 @@ impl Group {
         match zone {
             3 => Self::Wasd,
             0 => Self::NumpadRight,
-            _ => Self::Rest,
+            1 => Self::Middle,
+            _ => Self::Left,
         }
     }
 }
@@ -109,10 +112,16 @@ mod tests {
         let mut d = Draft::new(colors, true);
         d.set_color([255, 0, 0]);
         assert_eq!(d.colors, [[1, 2, 3], [4, 5, 6], [7, 8, 9], [255, 0, 0]]);
-        d.group = Group::Rest;
-        assert_eq!(d.color(), None);
+        d.group = Group::Left;
+        assert_eq!(d.color(), Some([7, 8, 9]));
         d.set_color([0, 255, 0]);
-        assert_eq!(d.colors, [[1, 2, 3], [0, 255, 0], [0, 255, 0], [255, 0, 0]]);
+        assert_eq!(d.colors, [[1, 2, 3], [4, 5, 6], [0, 255, 0], [255, 0, 0]]);
+        d.group = Group::Middle;
+        d.set_color([40, 50, 60]);
+        assert_eq!(
+            d.colors,
+            [[1, 2, 3], [40, 50, 60], [0, 255, 0], [255, 0, 0]]
+        );
         d.group = Group::NumpadRight;
         d.set_color([0, 0, 255]);
         assert_eq!(d.colors[0], [0, 0, 255]);
@@ -138,14 +147,14 @@ mod tests {
         assert_eq!(d.colors, colors);
     }
     #[test]
-    fn mixed_rest_brightness_preserves_each_hue_and_unselected_groups() {
+    fn middle_brightness_preserves_left_and_other_zones() {
         let colors = [[1, 2, 3], [0, 255, 0], [0, 0, 255], [4, 5, 6]];
         let mut d = Draft::new(colors, true);
-        d.group = Group::Rest;
-        assert!(d.color().is_none());
+        d.group = Group::Middle;
+        assert_eq!(d.color(), Some([0, 255, 0]));
         d.set_brightness(40).unwrap();
-        assert_eq!(d.colors, [[1, 2, 3], [0, 102, 0], [0, 0, 102], [4, 5, 6]]);
+        assert_eq!(d.colors, [[1, 2, 3], [0, 102, 0], [0, 0, 255], [4, 5, 6]]);
         assert_eq!(d.brightness(), Some(40));
-        assert!(d.color().is_none());
+        assert_eq!(d.color(), Some([0, 102, 0]));
     }
 }

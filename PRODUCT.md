@@ -1,6 +1,6 @@
 # Omen Hub++
 
-Confirmed product requirements, reviewed **15 November 2026**. Product name: **Omen Hub++**; Cargo package/binary names: `omen-hub-plus-plus` / `omen-hub-pp`.
+Confirmed product requirements, reviewed **17 November 2026**. Product name: **Omen Hub++**; Cargo package/binary names: `omen-hub-plus-plus` / `omen-hub-pp`.
 
 Current implementation and support belong in the [hardware matrix](docs/HARDWARE_MATRIX.md), measurements in [Validation](docs/VALIDATION.md), and pending work in the [Roadmap](docs/ROADMAP.md). This file records durable requirements, not a build-by-build changelog.
 
@@ -25,10 +25,10 @@ The target user wants to inspect GPU power and temperature first, see CPU perfor
 | Surface | Intended workflow |
 | --- | --- |
 | Overview | GPU watts/temperature and CPU measurements first; separate mode/preset selection and Apply; graphics request and historical Apply status |
-| Presets | Select/create/name a custom preset; grouped GPU, CPU and Windows fields, inline GPU curve; Save / Apply / Delete / Recovery and explicit sign-in authorization |
+| Presets | Select/create/name a custom preset; grouped GPU, CPU and Windows fields, inline GPU curve and optional shared fan snapshot; Save / Apply / Cancel editing / Delete / Recovery and separate sign-in authorization |
 | GPU curve | Interactive full V/F chart within performance profiles, with Shift/Alt/Ctrl editing, history, zoom and numeric alternatives |
-| Fan curve | Native CPU/GPU curve editor for the separate cooling helper; confirmed execution state must remain distinct from saved intent |
-| Lighting | Four clickable zones including numpad, native color picker, On/Off and a short state line; immediate verified application |
+| Fan curve | Named shared CPU/GPU curve library for the separate cooling helper, with snapshot links to performance presets; confirmed execution state stays distinct from saved/requested intent |
+| Lighting | Large schematic keyboard with four independently selectable zones including numpad/right, shared color picker, brightness and On/Off; draft preview and explicit Apply with readback |
 | Tray | Reliable own icon after minimize/close/Explorer restart, open/exit actions and optional unelevated Windows start |
 | Settings | System/German/English language, app startup and tray/close behavior; persistent and distinct from preset sign-in approval |
 

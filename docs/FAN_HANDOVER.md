@@ -28,6 +28,12 @@ The normal app does not expose the experimental direct FAMC=1 switch. After own 
 
 An identified original controller preempts own writes. Restarting own regulation rechecks layout and establishes a fresh heartbeat. Failure to send the conservative release remains a failure, not a successful handover.
 
+The 17 November named fan presets and manual performance-profile links add durable
+**preference** request/recovery coordination. Returning the captured file images,
+including `bios` or an absent preference, does not qualify BIOS ownership. The
+installed helper remains unchanged and supplies no exact curve-digest ACK. No live
+request or new handover trial was performed for this software change.
+
 ## Needed before completion
 
 Obtain reliable current performance/FAMC ownership state and a thermally qualified direct handover preserving own power settings. Verify real AC/DC, standby/resume, reboot and failure cases without HP user-mode controllers. Integrate this with durable own-controller recovery and total-profile transactions. [Fan control](FAN_CONTROL.md), [replacement plan](REPLACEMENT_PLAN.md), [validation history](history/VALIDATION_THROUGH_2026-10-26.md).

@@ -181,7 +181,9 @@ pub fn applied_status(record: &serde_json::Value) -> String {
             }
         })
         .collect();
-    let mut status = if skipped.is_empty() {
+    let mut status = if record["cooling"]["state"] == "requested" && skipped.is_empty() {
+        t("fan_profile.controls_and_request").into()
+    } else if skipped.is_empty() {
         t("preset.applied").into()
     } else {
         tf("preset.applied_except", &[&skipped.join("; ")])
@@ -194,6 +196,19 @@ pub fn applied_status(record: &serde_json::Value) -> String {
         status.push_str(t("preset.applied_unconfirmed"));
     }
     status
+}
+pub fn restored_status(record: &serde_json::Value) -> String {
+    if record["cooling_preferences_restored"] == true {
+        let mut text = if record["direct_restored"] == true {
+            t("fan_profile.direct_restored").to_owned() + " "
+        } else {
+            String::new()
+        };
+        text.push_str(t("fan_profile.policy_restored"));
+        text
+    } else {
+        t("preset.restored").to_owned()
+    }
 }
 
 /// A mode SET is not a thermal-mode GET. Keep verified CPU PL1 separate from

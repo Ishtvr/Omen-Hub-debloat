@@ -14,6 +14,12 @@ Unticked fields show this device's own values. Volatile firmware and driver valu
 
 Declining to discard unsaved edits keeps the previous selection, draft and save target. Saves merge against fresh stored data and report conflicts instead of silently overwriting another editor.
 
+**Cancel editing** is available beside Reset and in the GPU editor. It restores
+the currently loaded preset's last saved baseline, including name, per-core values,
+curve, sign-in checkbox draft and fan snapshot. It does not reset defaults, apply
+hardware, save files or alter the existing sign-in grant. Reset continues to mean
+defaults. An unnamed new preset returns to its initial loaded draft.
+
 ## Groups
 
 | Section | Current fields |
@@ -36,7 +42,20 @@ APU/iGPU menus, direct GPU/VRAM voltage, FPS limiting and fixed CPU clock/voltag
 
 Overlapping instructions do not block a preset (user decision, 29 October 2026). Apply uses a fixed precedence: a full V/F curve wins over a global core offset, per-core Curve Optimizer over all-core, and a non-Balanced power plan over the Windows power mode. A power mode without a plan selects Balanced, whose original is captured and restored like any other setting. The saved preset keeps every value; only the applied set skips the overridden ones. Numeric limits are the driver's or adapter's reported ranges, for example NVML core −1000…+1000 MHz and VRAM −2000…+6000 MHz on the reference RTX 5070 Laptop. Memory/Graphics coupling is handled during Apply, not by destroying the saved curve. [Curve controls](CURVE_EDITOR.md), [GPU contracts](GPU_PROFILES.md).
 
-The separate **Fan curve** editor saves `active-fan-curve.json` for the cooling helper. Full fan-curve instructions remain unsupported in performance-profile transactions. A Max-Fan boolean is a different, supported override.
+Under **Cooling**, save a named fan preset, then choose it in the performance
+editor's **Fan preset** field. Saving the performance profile copies the points
+into its existing CPU/GPU fan-curve fields. Later library edits or deletion do not
+change that snapshot. **Unchanged** leaves the current global cooling choice alone.
+An existing unmatched snapshot remains selectable as a saved curve.
+
+Linked profiles use a separate request-level coordinator: capture exact cooling
+preference originals before the HP prelude, verify the complete direct subset,
+then request the shared curve from the installed helper. Failure retains/recovers
+originals and reports the direct and cooling outcomes separately. No exact helper
+curve-digest acknowledgement exists, so this is not a fully verified physical
+fan-curve transaction. For linked profiles, enabling sign-in is rejected
+before saving or changing permissions. Fan-only curves are requested in Cooling.
+The separate Max action remains available there. [Fan control](FAN_CONTROL.md).
 
 ## Authorization, recovery and validation
 

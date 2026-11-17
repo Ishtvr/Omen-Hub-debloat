@@ -11,6 +11,7 @@ pub mod curve_editor;
 pub mod curve_input;
 pub mod curve_view;
 pub mod fan;
+pub mod fan_profile;
 pub mod features;
 pub mod gpu_power;
 pub mod guardian;
