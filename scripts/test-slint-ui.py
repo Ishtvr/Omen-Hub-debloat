@@ -203,7 +203,6 @@ def run(args):
 
             def new_profile_back():
                 wait_for(lambda: by_id('AppWindow::curve-editor'))
-                assert not curve_to(texts['ui.undo']).get('accessibleEnabled',False)
                 label_click(texts['ui.back'])
                 wait_for(lambda: name_field().get('accessibleValue','')=='')
 
@@ -212,6 +211,15 @@ def run(args):
                     if e.get('accessibleLabel')==texts['notice.dismiss'] and e.get('accessibleRole')=='Button':
                         click(e)
                         break
+
+            def set_point(value):
+                field=by_id('AppWindow::point-y');click(field);set_value(field,value);key('\n')
+                wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==value)
+
+            def curve_keys(*keys,modifier=None):
+                if modifier:key(modifier,'Press')
+                for text in keys:key(text)
+                if modifier:key(modifier,'Release')
 
             def curve_to(label,role='Button'):
                 view=by_id('AppWindow::curve-editor')
@@ -405,7 +413,7 @@ def run(args):
                 wait_for(lambda: find(texts['fan_profile.link'],'Combobox').get('accessibleValue')=='Fan one')
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y'))
-                set_value(by_id('AppWindow::point-y'),'1915');label_click(texts['ui.set_point']);label_click(texts['ui.use_curve'])
+                set_point('1915');label_click(texts['ui.use_curve'])
                 click(by_id('AppWindow::save-preset'))
                 wait_for(lambda: scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Saved baseline')
                 dismiss_notice()
@@ -419,8 +427,8 @@ def run(args):
                 click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf729');key('\n')
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
-                set_value(by_id('AppWindow::point-y'),'1930');label_click(texts['ui.set_point'])
-                label_click(texts['preset.cancel_edit'])
+                set_point('1930')
+                label_click(texts['ui.back']);label_click(texts['preset.cancel_edit'])
                 wait_for(lambda: name_field().get('accessibleValue')=='Saved baseline')
                 assert field(temp)['accessibleValue']=='85'
                 assert field('CCD0 · 0')['accessibleValue']=='-10'
@@ -430,28 +438,20 @@ def run(args):
                 dismiss_notice()
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
-                assert not find(texts['ui.undo'],'Button').get('accessibleEnabled',False)
-                set_value(curve_to(texts['curve.range_from'],'TextInput'),'950')
-                set_value(curve_to(texts['curve.range_to'],'TextInput'),'1000')
-                label_click(texts['curve.select_range'])
-                set_value(by_id('AppWindow::point-y'),'1900');label_click(texts['curve.equalize'])
+                # No buttons below the chart: Shift+Right selects 950-1000 mV, Enter in the
+                # value field sets the whole selection.
+                curve_keys('','','','','',modifier='\x10')
+                set_point('1900')
                 def nodes():return [e for e in tree() if any(i.get('id')=='CurveCanvas::draft-node' for i in e['typeNamesAndIds'])]
                 selected=[e for e in nodes() if e['size']['width']==8]
                 assert len(selected)==6,len(selected)
                 assert max(e['absolutePosition'].get('y',0) for e in selected)-min(e['absolutePosition'].get('y',0) for e in selected)<.1
                 shot('selected-equalized-range')
-                label_click(texts['ui.undo']);wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
-                set_value(curve_to(texts['curve.range_from'],'TextInput'),'951');set_value(curve_to(texts['curve.range_to'],'TextInput'),'959')
-                label_click(texts['curve.select_range'])
-                wait_for(lambda: any(e.get('accessibleLabel')==texts['curve.err.empty_selection'] for e in tree()))
-                assert not find(texts['curve.flatten_right'],'Button').get('accessibleEnabled',False)
-                assert by_id('AppWindow::point-y')['accessibleValue']=='1915'
-                dismiss_notice()
-                canvas=by_id('CurveCanvas::canvas-input')
-                client.tool('drag_element',{'elementHandle':canvas['handle'],'target':{'x':canvas['absolutePosition']['x']+canvas['size']['width']*.8,'y':canvas['absolutePosition']['y']+canvas['size']['height']*.3}})
+                curve_keys('z',modifier='\x11');wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+                curve_keys('a',modifier='\x11')
                 assert len([e for e in nodes() if e['size']['width']==8])>5
                 shot('pointer-selected-voltage-band')
-                label_click(texts['preset.cancel_edit']);dismiss_notice()
+                label_click(texts['ui.back']);label_click(texts['preset.cancel_edit']);dismiss_notice()
                 resize(1600,1000)
                 overview=by_id('AppWindow::preset-list');cx=overview['absolutePosition'].get('x',0)+overview['size']['width']/2
                 assert abs(cx-(160+(1600-160)/2))<16,(cx,overview)
@@ -492,7 +492,7 @@ def run(args):
                 set_value(name_field(),'Saved curve')
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
-                set_value(by_id('AppWindow::point-y'),'1915');label_click(texts['ui.set_point'])
+                set_point('1915')
                 label_click(texts['ui.use_curve'])
                 click(by_id('AppWindow::save-preset'))
                 wait_for(lambda: scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Saved curve')
@@ -500,8 +500,6 @@ def run(args):
 
                 def factory_open(capture):
                     wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1900')
-                    assert not curve_to(texts['ui.undo']).get('accessibleEnabled',False)
-                    assert not curve_to(texts['ui.redo']).get('accessibleEnabled',False)
                     shot(capture)
                     key('\uf700')  # New editor receives keyboard focus immediately.
                     wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1901')
@@ -517,7 +515,7 @@ def run(args):
                 factory_open('new-button-factory')
                 label_click(texts['ui.back'])
                 saved_curve()  # Saved target is retained, unlike the live offset.
-                set_value(by_id('AppWindow::point-y'),'1930');label_click(texts['ui.set_point'])
+                set_point('1930')
                 label_click(texts['ui.back'])
                 click(scroll_to(texts['preset.new']))
                 wait_for(lambda: by_id('ConfirmPrompt::save-button'));key('\x1b')
@@ -559,14 +557,13 @@ def run(args):
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::curve-editor'))
                 original=by_id('AppWindow::point-y')['accessibleValue']
-                set_value(by_id('AppWindow::point-y'),str(int(original)+15))
-                label_click(texts['ui.set_point'])
+                set_point(str(int(original)+15))
                 label_click(texts['ui.back'])
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==str(int(original)+15))
-                label_click(texts['ui.undo'])
+                curve_keys('z',modifier='\x11')
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==original)
-                label_click(texts['ui.redo'])
+                curve_keys('y',modifier='\x11')
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==str(int(original)+15))
                 shot('gpu-curve-enabled-before-opening')
                 label_click(texts['ui.use_curve'])
@@ -856,12 +853,11 @@ def run(args):
             click(scroll_to(texts['ui.edit_curve']))
             wait_for(lambda: by_id('AppWindow::curve-editor'))
             original = by_id('AppWindow::point-y')['accessibleValue']
-            set_value(by_id('AppWindow::point-y'), str(int(original) + 15))
-            label_click(texts['ui.set_point'])
+            set_point(str(int(original) + 15))
             wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == str(int(original) + 15))
-            label_click(texts['ui.undo'])
+            curve_keys('z',modifier='\x11')
             wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == original)
-            label_click(texts['ui.redo'])
+            curve_keys('y',modifier='\x11')
             wait_for(lambda: by_id('AppWindow::point-y')['accessibleValue'] == str(int(original) + 15))
             def anchors():
                 return [e['absolutePosition'].get('x', 0) + e['size']['width'] / 2 for e in tree() if any(p.get('id') == 'CurveCanvas::draft-node' for p in e['typeNamesAndIds'])]

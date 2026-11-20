@@ -12,22 +12,15 @@ The normal Rust/Slint editor and the legacy native GDI entry points share GPU V/
   through the existing helper coordinator. `fan-ui` opens the same work area;
   legacy standalone editors keep their original active-curve behavior.
 
-The Slint work area provides Back/Use curve, numeric editing, Undo/Redo and viewport tools. The graph takes keyboard focus when it opens. Legacy standalone views retain their own Cancel/Accept action rows.
+The Slint work area has Back/Use curve and an **i** button in the header (shortcut list for mouse and keyboard, also F1). Below the chart there are no action buttons since 20 November 2026: only the legend, the selected point and its exact numeric value (fans: temperature and value). Enter in the value field sets the point; with a GPU selection it sets every selected anchor to that frequency (Equalize). Undo/Redo, zoom, fit, selection, flatten and reset are on the chart through mouse and hotkeys. The graph takes keyboard focus when it opens. Legacy standalone views retain their own Cancel/Accept action rows.
 
-The GPU toolbar also provides **Select range**, All, To end and Clear. In range
-mode, plain dragging selects anchors without moving their frequencies. Numeric
-From/To mV bounds include their end anchors, and a count/band identifies the range.
-Enter the target MHz and choose **Equalize selection** to set only those points.
-One action is one Undo step. Non-monotone/out-of-driver-range targets fail atomically;
-an empty range is an error and disables tail flattening. Clear the range/mode to
-use the separate **Flatten to end** action. **Cancel editing** restores the whole
-currently loaded preset baseline; it differs from Back, Use curve and Reset.
+GPU ranges are selected with Shift + drag on free chart space, Shift + Left/Right/Home/End or Ctrl + A; the count/band appears beside the legend. One action is one Undo step. Non-monotone/out-of-driver-range targets fail atomically. **Cancel editing** (restore the whole loaded preset baseline) is on the preset page; on the chart, Ctrl + D restores the curve loaded when the editor opened.
 
-Square nodes are the draft. On GPU curves the thin line is the **NVIDIA driver default curve** (the driver curve with every programmed delta removed); the readout and the offset line above the chart compare the draft with it, never with the current preset or applied offsets. Fan curves have no driver default; their thin line is the curve loaded at the start of this editing session. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
+Square nodes are the draft. On GPU curves the thin line is the **NVIDIA driver default curve** (the driver curve with every programmed delta removed); the readout and the offset summary above the chart compare the draft with it, never with the current preset or applied offsets. Fan curves have no driver default; their thin line is the curve loaded at the start of this editing session. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
 
 Grid lines and axis labels sit at round values (for example every 25 mV and 100 MHz). The step follows the visible range and the actual plot size, and lines, labels, points and the curve share one coordinate mapping.
 
-Layout: chart with legend and view tools, one editing panel (selected point; GPU range selection below a divider), then Cancel editing, Undo, Redo and Reset.
+Layout: header (title, i, Back, Use curve), draft note, chart with offset summary, then one row with legend, selection count, selected point and its value field.
 
 ## GPU rules and gestures
 
@@ -58,12 +51,13 @@ Commands apply with chart focus unless noted. Native numeric fields provide an a
 | Shift or Alt + Up/Down, GPU | Same reference/current-curve offset as the corresponding drag; Ctrl uses 10-MHz steps |
 | Shift + Left/Right/Home/End | Extend contiguous GPU selection |
 | Ctrl + A | Select all GPU anchors |
-| Enter | Open numeric/profile view and focus the selected Y value |
+| Enter | Focus the value field of the selected point; Enter there sets the point (GPU selection: all selected anchors) |
 | Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z | Undo / redo |
 | Escape | Cancel drag, otherwise clear range |
-| Ctrl + D | Restore the curve loaded at the start of this editing session, with undo support (Reset returns the GPU curve to the driver factory curve) |
-| Ctrl + S | Save in the saved-profile editor; the in-memory preset chart returns through Accept |
-| F1 | Show shortcut help |
+| Ctrl + D | Restore the curve loaded at the start of this editing session, with undo support |
+| Ctrl + R | Reset: GPU to the NVIDIA driver default curve, fans to the curve loaded at opening; one undo step |
+| Ctrl + S | Save in the saved-profile editor; the in-memory preset chart applies Use curve |
+| F1 or the i button | Show mouse and keyboard help |
 | Wheel or +/− | Zoom X around the pointer (wheel) or the selected point (keys) |
 | Ctrl + wheel or Ctrl with +/− | Zoom Y |
 | Shift + wheel, sideways touchpad swipe | Pan horizontally |

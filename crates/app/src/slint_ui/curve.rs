@@ -261,6 +261,10 @@ impl Host {
             }
             return;
         }
+        if action == "help" {
+            self.curve_help();
+            return;
+        }
         if action == "save" {
             let value = self.curve.borrow().as_ref().map(|e| e.curve.value());
             match value {
@@ -570,9 +574,9 @@ impl Host {
         d.set_notice_title(t("curve.help_title").into());
         d.set_notice_text(
             t(if gpu {
-                "curve.help_draft"
+                "curve.help_gpu"
             } else {
-                "curve.help"
+                "curve.help_fan"
             })
             .replace("\r\n", "\n")
             .into(),
@@ -826,6 +830,7 @@ fn decode_key(text: &str, shift: bool, ctrl: bool) -> Option<Command> {
         "y" | "Y" if ctrl => Command::Edit(Key::Redo),
         "a" | "A" if ctrl => Command::Edit(Key::All),
         "d" | "D" if ctrl => Command::Revert,
+        "r" | "R" if ctrl => Command::Edit(Key::Reset),
         "s" | "S" if ctrl => Command::Save,
         "0" if ctrl => Command::Fit,
         "+" | "=" => Command::Zoom { inward: true },
@@ -1000,6 +1005,11 @@ mod tests {
         );
         assert_eq!(decode_key("\n", false, false), Some(Command::EditValue));
         assert_eq!(decode_key("d", false, true), Some(Command::Revert));
+        assert_eq!(
+            decode_key("r", false, true),
+            Some(Command::Edit(Key::Reset))
+        );
+        assert_eq!(decode_key("r", false, false), None);
         assert_eq!(decode_key("s", false, true), Some(Command::Save));
         assert_eq!(decode_key("0", false, true), Some(Command::Fit));
         assert_eq!(
