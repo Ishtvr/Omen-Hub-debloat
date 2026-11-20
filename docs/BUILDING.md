@@ -75,7 +75,7 @@ This reads the ZIP without launching or installing it. Verify the exact source r
 | `crates/app/` | Native UI, tray, helpers and CLI |
 | `scripts/` | Build/install tools and explicitly scoped checks |
 | `docs/` | Current guides, model evidence, research plans and dated history |
-| `.impeccable/` | Versioned design configuration and intent briefs; no runtime web UI |
+| `.impeccable/` | Local design-skill configuration and briefs; ignored by Git, no runtime web UI |
 
 `target/`, `dist/`, `.local/`, `.tools/` and local skills under `.agents/` are ignored. Preserve current research evidence, pinned modules, corresponding sources/licenses and needed proof programs. Compiler caches are reproducible; those inputs and records are not interchangeable with disposable caches. Never publish proprietary DLLs, drivers, decompiled sources, personal dumps or secrets.
 

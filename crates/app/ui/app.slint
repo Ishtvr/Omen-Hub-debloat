@@ -1821,9 +1821,19 @@ export component AppWindow inherits Window {
                         padding: 20px;
                         spacing: 10px;
                         HorizontalLayout {
+                            spacing: 8px;
                             SectionTitle {
                                 text: Workbench.curve-title;
                                 horizontal-stretch: 1;
+                            }
+
+                            // Mouse and keyboard reference for the chart (also F1).
+                            curve-help := ActionButton {
+                                enabled: Workbench.confirm-kind == 0;
+                                text: "i";
+                                border-radius: self.height / 2;
+                                accessible-label: Workbench.tr("curve.shortcuts");
+                                clicked => { Workbench.curve-action("help"); }
                             }
 
                             ActionButton {
@@ -1848,10 +1858,11 @@ export component AppWindow inherits Window {
                         }
 
                         chart := CurveCanvas {
-                            preferred-height: max(220px, curve-editor.visible-height - (Workbench.curve-gpu ? 386px : 290px));
+                            preferred-height: max(240px, curve-editor.visible-height - 186px);
                         }
 
-                        // Legend and view tools belong to the chart.
+                        // Legend, then the selected point with its exact value.
+                        // Every other action is on the chart: mouse and hotkeys (i).
                         HorizontalLayout {
                             spacing: 8px;
                             VerticalLayout {
@@ -1886,217 +1897,57 @@ export component AppWindow inherits Window {
                                 vertical-alignment: center;
                             }
 
-                            Rectangle {
+                            Text {
+                                text: Workbench.has-selection ? Workbench.selection-label : "";
+                                color: Theme.muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
                                 horizontal-stretch: 1;
+                                overflow: elide;
                             }
 
-                            ActionButton {
+                            Text {
+                                text: Workbench.point-labels[Workbench.point-index];
+                                color: Theme.ink;
+                                font-family: "Consolas";
+                                vertical-alignment: center;
+                            }
+
+                            if !Workbench.curve-gpu: LineEdit {
+                                accessible-label: Workbench.curve-x-label;
+                                text <=> Workbench.point-x;
                                 enabled: Workbench.confirm-kind == 0;
-                                text: "−";
-                                clicked => { Workbench.curve-action("zoom-out"); }
-                            }
-
-                            ActionButton {
-                                enabled: Workbench.confirm-kind == 0;
-                                text: "+";
-                                clicked => { Workbench.curve-action("zoom-in"); }
-                            }
-
-                            ActionButton {
-                                enabled: Workbench.confirm-kind == 0;
-                                text: Workbench.tr("ui.fit");
-                                clicked => { Workbench.curve-action("fit"); }
-                            }
-                        }
-
-                        // Editing: the selected point, then the GPU voltage range.
-                        Rectangle {
-                            background: Theme.surface;
-                            border-radius: 6px;
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 8px;
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    point-selector := ComboBox {
-                                        width: 160px;
-                                        model: Workbench.point-labels;
-                                        current-index <=> Workbench.point-index;
-                                        selected(value) => { Workbench.select-point(self.current-index); }
-                                    }
-
-                                    if !Workbench.curve-gpu: LineEdit {
-                                        accessible-label: Workbench.curve-x-label;
-                                        text <=> Workbench.point-x;
-                                        enabled: Workbench.confirm-kind == 0;
-                                        width: 80px;
-                                    }
-
-                                    point-y := LineEdit {
-                                        accessible-label: Workbench.curve-y-label;
-                                        text <=> Workbench.point-y;
-                                        width: 80px;
-                                        accepted => {
-                                            Workbench.curve-action("set");
-                                            chart.focus();
-                                        }
-                                    }
-
-                                    Text {
-                                        text: Workbench.curve-y-label;
-                                        color: Theme.muted;
-                                        vertical-alignment: center;
-                                    }
-
-                                    ActionButton {
-                                        enabled: Workbench.confirm-kind == 0;
-                                        text: Workbench.tr("ui.set_point");
-                                        clicked => { Workbench.curve-action("set"); }
-                                    }
-
-                                    if Workbench.curve-gpu: ActionButton {
-                                        control-width: 160px;
-                                        text: Workbench.tr(Workbench.has-selection ? "curve.equalize" : "curve.flatten_right");
-                                        enabled: (Workbench.has-selection || !Workbench.curve-selection-mode) && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("flatten"); }
-                                    }
-
-                                    if !Workbench.curve-gpu: ActionButton {
-                                        text: "+";
-                                        enabled: Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("insert"); }
-                                    }
-
-                                    if !Workbench.curve-gpu: ActionButton {
-                                        text: "−";
-                                        enabled: Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("remove"); }
-                                    }
-
-                                    Rectangle {
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-
-                                if Workbench.curve-gpu: Hairline { }
-
-                                if Workbench.curve-gpu: HorizontalLayout {
-                                    spacing: 6px;
-                                    select-range-mode := ActionButton {
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        text: Workbench.tr("curve.mark_range");
-                                        accessible-checkable: true;
-                                        accessible-checked: Workbench.curve-selection-mode;
-                                        background: Workbench.curve-selection-mode ? Theme.hover : Theme.control;
-                                        border-width: Workbench.curve-selection-mode ? 1px : 0px;
-                                        border-color: Theme.accent;
-                                        clicked => { Workbench.curve-action("selection-mode"); }
-                                    }
-
-                                    ActionButton {
-                                        text: Workbench.tr("curve.select_all");
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("select-all"); }
-                                    }
-
-                                    ActionButton {
-                                        text: Workbench.tr("curve.select_right");
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("select-right"); }
-                                    }
-
-                                    ActionButton {
-                                        text: Workbench.tr("curve.clear_selection");
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("clear-selection"); }
-                                    }
-
-                                    Rectangle {
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-
-                                if Workbench.curve-gpu: HorizontalLayout {
-                                    spacing: 6px;
-                                    Text {
-                                        text: Workbench.tr("curve.from");
-                                        color: Theme.muted;
-                                        vertical-alignment: center;
-                                    }
-
-                                    range-from := LineEdit {
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        width: 80px;
-                                        accessible-label: Workbench.tr("curve.range_from");
-                                        text <=> Workbench.range-from;
-                                    }
-
-                                    Text {
-                                        text: Workbench.tr("curve.to");
-                                        color: Theme.muted;
-                                        vertical-alignment: center;
-                                    }
-
-                                    range-to := LineEdit {
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        width: 80px;
-                                        accessible-label: Workbench.tr("curve.range_to");
-                                        text <=> Workbench.range-to;
-                                    }
-
-                                    Text {
-                                        text: Workbench.curve-x-label;
-                                        color: Theme.muted;
-                                        vertical-alignment: center;
-                                    }
-
-                                    ActionButton {
-                                        text: Workbench.tr("curve.select_range");
-                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.curve-action("select-range"); }
-                                    }
-
-                                    Text {
-                                        text: Workbench.selection-label;
-                                        color: Theme.muted;
-                                        wrap: word-wrap;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
+                                width: 72px;
+                                accepted => {
+                                    Workbench.curve-action("set");
+                                    chart.focus();
                                 }
                             }
-                        }
 
-                        // History and leaving the session.
-                        HorizontalLayout {
-                            spacing: 6px;
-                            if Workbench.curve-gpu: ActionButton {
-                                control-width: 160px;
-                                text: Workbench.tr("preset.cancel_edit");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.cancel-preset(); }
+                            if !Workbench.curve-gpu: Text {
+                                text: Workbench.curve-x-label;
+                                color: Theme.muted;
+                                vertical-alignment: center;
                             }
 
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("ui.undo");
-                                enabled: (Workbench.can-undo) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("undo"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("ui.redo");
-                                enabled: (Workbench.can-redo) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("redo"); }
-                            }
-
-                            ActionButton {
+                            // Enter sets the point; with a GPU selection it sets the
+                            // whole selection to this frequency.
+                            point-y := LineEdit {
+                                accessible-label: Workbench.curve-y-label;
+                                text <=> Workbench.point-y;
                                 enabled: Workbench.confirm-kind == 0;
-                                text: Workbench.tr("ui.reset_draft");
-                                clicked => { Workbench.curve-action("reset"); }
+                                width: 80px;
+                                accepted => {
+                                    Workbench.curve-action(Workbench.curve-gpu && Workbench.has-selection ? "flatten" : "set");
+                                    chart.focus();
+                                }
+                            }
+
+                            Text {
+                                text: Workbench.curve-y-label;
+                                color: Theme.muted;
+                                vertical-alignment: center;
                             }
                         }
                     }

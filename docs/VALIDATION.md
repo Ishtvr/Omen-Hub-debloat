@@ -4,6 +4,19 @@ Current software summary updated **20 November 2026**, version **0.10.0-beta.11*
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
+## Curve editor without bottom buttons, shortcut help — 20 November 2026
+
+On top of the curve editor change below; software validation only, no hardware write.
+
+- Format check, **353 unit tests** (170 core / 83 app / 100 platform), all-target
+  Clippy with `-D warnings` and a locked release build passed; the release binary
+  started in `--ui-test` and stayed up. New key regression: Ctrl + R decodes to Reset.
+- `test-slint-ui.py` now drives the chart by value field and hotkeys instead of the
+  removed buttons; the GPU-curve and new-profile modes passed. The full German run
+  still stops at the preset-page PPT field (line 810), before its curve section.
+- Screenshots checked the GPU and fan editors and the i help dialog.
+- `.impeccable/` is no longer tracked (whole folder in `.gitignore`); local files stay.
+
 ## Curve editor layout, grid and hover — 20 November 2026
 
 Software validation only, on top of beta.11; no hardware write.
