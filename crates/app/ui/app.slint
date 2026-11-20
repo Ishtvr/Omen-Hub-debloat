@@ -32,6 +32,9 @@ export struct FieldData {
     choices: [string],
     selected: int,
     info: string,
+    // kind 5: slider bounds in the row's unit (whole watts).
+    slider-min: float,
+    slider-max: float,
 }
 export struct GroupData { title: string, expanded: bool, rows: [FieldData] }
 export struct CurveNode { x: float, y: float, reference-y: float, selected: bool }
@@ -188,6 +191,8 @@ export global Workbench {
     // Wheel delta x/y in px, pointer x/y in 0..1, Shift, Ctrl.
     callback chart-wheel(float, float, float, float, bool, bool);
     callback chart-key(string, bool, bool, bool) -> bool;
+    // A slider row moved to a whole-watt value.
+    callback slider-field(int, float);
     callback lighting-power();
     callback select-lighting-group(int);
     callback keyboard-layout(bool);
@@ -271,6 +276,25 @@ component FieldRow inherits Rectangle {
             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
             clicked => { Workbench.open-curve(true); }
         }
+        if root.item.kind == 5: HorizontalLayout {
+            width: Theme.field-width * 2;
+            horizontal-stretch: 0;
+            spacing: 8px;
+            BrightnessSlider {
+                value: root.item.value.to-float();
+                minimum: root.item.slider-min;
+                maximum: root.item.slider-max;
+                enabled: (root.item.included && !Workbench.busy) && Workbench.confirm-kind == 0;
+                edited(v) => { Workbench.slider-field(root.item.index, v); }
+            }
+            Text {
+                text: root.item.value;
+                width: 40px;
+                color: root.item.included ? Theme.ink : Theme.muted;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
         if root.item.kind == 4: Text {
             text: Workbench.tr("ui.per_core_below");
             color: Theme.muted;
@@ -324,7 +348,7 @@ component PresetGroup inherits Rectangle {
                 for row in root.group.rows: FieldRow {
                     item <=> row;
                 }
-                if root.index == 4: GridLayout {
+                if root.index == 5: GridLayout {
                     spacing: 8px;
                     for item[index] in Workbench.cores: HorizontalLayout {
                         row: floor(index / 4);

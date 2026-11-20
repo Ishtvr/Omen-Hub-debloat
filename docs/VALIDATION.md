@@ -1,9 +1,18 @@
 # Validation
 
-Current software summary updated **20 November 2026**, version **0.10.0-beta.9**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **20 November 2026**, version **0.10.0-beta.10**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
+## Dynamic Boost group and Hub power sliders — 20 November 2026
+
+Version **0.10.0-beta.10**. [Release notes](releases/0.10.0-beta.10.md). UI
+regrouping only; write paths unchanged. Slider bounds come from the decompiled
+OMEN Hub panel for 8E35 ([evidence](models/8e35-hub-modes.md)). Format check,
+workspace tests (350 unit tests, 14 Guardian scenarios), Clippy with `-D warnings`
+and a locked release build passed; a new regression pins the group membership,
+the Hub bounds and in-range seeds. The slider was not operated by mouse in this
+change.
 ## Battery state machine and battery preset — 20 November 2026
 
 Version **0.10.0-beta.9**. [Release notes](releases/0.10.0-beta.9.md). Software

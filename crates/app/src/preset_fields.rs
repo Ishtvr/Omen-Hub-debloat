@@ -6,8 +6,9 @@ use omen_core::{
 };
 
 /// Language keys of the collapsible groups, in display order.
-pub const GROUPS: [&str; 7] = [
+pub const GROUPS: [&str; 8] = [
     "group.gpu",
+    "group.dynamic_boost",
     "group.limits",
     "group.pbo",
     "group.curve_optimizer",
@@ -18,8 +19,8 @@ pub const GROUPS: [&str; 7] = [
 /// First group of each section and the section's language key.
 pub const SECTIONS: &[(usize, &str)] = &[
     (0, "section.gpu"),
-    (1, "section.cpu"),
-    (5, "section.windows"),
+    (2, "section.cpu"),
+    (6, "section.windows"),
 ];
 pub struct Field {
     pub feature: F,
@@ -99,6 +100,21 @@ pub const DEVICE_DEFAULTS: &[F] = &[
     F::GpuCoreOffsetMhz,
     F::GpuMemoryOffsetMhz,
 ];
+/// Slider bounds in whole watts, taken from the OMEN Hub's own panel for this
+/// model (1101.2611.2.0, PowerControl.JSON.Khalilah_DRG_N22X4X6, 8E35/F.13):
+/// TPP TppMinValue-TppMaxValue 55-72 W; CPU PL1 in Unleashed
+/// UnleashedModeMinPL1-UnleashedModeMaxPL1 45-80 W in 1-W steps, written
+/// as SetPowerLimit = 0x29 [PL1, PL1, FF, FF]. Without Dynamic Boost the
+/// CPU slider spans the qualified Slow range instead. Validation and Apply
+/// keep their own checks; the slider only guides the value.
+pub fn slider_watts(feature: F, dynamic_boost: bool) -> Option<(i64, i64)> {
+    match feature {
+        F::HpSharedPowerMw => Some((55, 72)),
+        F::CpuSlowPptLimitMw if dynamic_boost => Some((45, 80)),
+        F::CpuSlowPptLimitMw => Some((15, 160)),
+        _ => None,
+    }
+}
 pub fn retired(feature: F) -> bool {
     feature.retired()
         || REMOVED_GPU_OPTIONS.contains(&feature)
@@ -126,30 +142,33 @@ pub fn fields() -> Vec<Field> {
         (F::GpuCoreOffsetMhz, 0, 0),
         (F::GpuMemoryOffsetMhz, 0, 0),
         (F::GpuVfCurve, 0, 0),
-        (F::GpuUnleashed, 0, 0),
+        // Dynamic Boost group, as in the Hub's Unleashed panel: the mode
+        // switch, cTGP, the shared CPU+GPU budget (TPP) and the CPU watt
+        // slider (firmware PL1 = Slow PPT, written through HP 0x29).
+        (F::GpuUnleashed, 1, 0),
         // cTGP is on unless the user turns it off (user decision, 30 October 2026).
-        (F::GpuCustomTgp, 0, 1),
-        // Firmware default TPP of 8E35/F.13 (SystemDesignData byte 8).
-        (F::HpSharedPowerMw, 0, 45000),
-        (F::CpuTemperatureLimitC, 1, 85),
+        (F::GpuCustomTgp, 1, 1),
+        // The Hub's Unleashed default budget (TppMaxValue of this model).
+        (F::HpSharedPowerMw, 1, 72000),
         (F::CpuSlowPptLimitMw, 1, 55000),
-        (F::CpuPptLimitMw, 1, 80000),
-        (F::CpuTdcMa, 1, 108000),
-        (F::CpuEdcMa, 1, 160000),
-        (F::CpuPboScalar, 2, 1),
-        (F::CpuCurveOptimizerAllCore, 3, 0),
-        (F::CpuCurveOptimizerPerCore, 4, 0),
-        (F::WindowsBoostMode, 5, 0),
-        (F::WindowsMinimumProcessorPercent, 5, 5),
-        (F::WindowsMaximumProcessorPercent, 5, 100),
-        (F::WindowsProcessorEppPercent, 5, 50),
-        (F::WindowsCoreParkingMinPercent, 5, 0),
-        (F::WindowsCoreParkingMaxPercent, 5, 100),
-        (F::CpuCcdAffinity, 5, 3),
-        (F::WindowsEnergyMode, 6, 0),
-        (F::WindowsPowerPlan, 6, 0),
-        (F::DisplayRefreshRateHz, 6, 60),
-        (F::GraphicsMode, 6, 0),
+        (F::CpuTemperatureLimitC, 2, 85),
+        (F::CpuPptLimitMw, 2, 80000),
+        (F::CpuTdcMa, 2, 108000),
+        (F::CpuEdcMa, 2, 160000),
+        (F::CpuPboScalar, 3, 1),
+        (F::CpuCurveOptimizerAllCore, 4, 0),
+        (F::CpuCurveOptimizerPerCore, 5, 0),
+        (F::WindowsBoostMode, 6, 0),
+        (F::WindowsMinimumProcessorPercent, 6, 5),
+        (F::WindowsMaximumProcessorPercent, 6, 100),
+        (F::WindowsProcessorEppPercent, 6, 50),
+        (F::WindowsCoreParkingMinPercent, 6, 0),
+        (F::WindowsCoreParkingMaxPercent, 6, 100),
+        (F::CpuCcdAffinity, 6, 3),
+        (F::WindowsEnergyMode, 7, 0),
+        (F::WindowsPowerPlan, 7, 0),
+        (F::DisplayRefreshRateHz, 7, 60),
+        (F::GraphicsMode, 7, 0),
     ];
     rows.iter()
         .map(|(feature, group, seed)| Field {
@@ -319,6 +338,39 @@ mod tests {
         );
     }
     #[test]
+    fn dynamic_boost_group_holds_the_hub_style_watt_sliders() {
+        let group = |feature| {
+            fields()
+                .iter()
+                .find(|f| f.feature == feature)
+                .map(|f| f.group)
+        };
+        for feature in [
+            F::GpuUnleashed,
+            F::GpuCustomTgp,
+            F::HpSharedPowerMw,
+            F::CpuSlowPptLimitMw,
+        ] {
+            assert_eq!(group(feature), Some(1), "{feature:?}");
+        }
+        assert_eq!(GROUPS[1], "group.dynamic_boost");
+        // OMEN Hub 1101.2611.2.0 panel bounds for 8E35 (Khalilah_DRG_N22X4X6).
+        assert_eq!(slider_watts(F::HpSharedPowerMw, true), Some((55, 72)));
+        assert_eq!(slider_watts(F::CpuSlowPptLimitMw, true), Some((45, 80)));
+        assert_eq!(slider_watts(F::CpuSlowPptLimitMw, false), Some((15, 160)));
+        assert_eq!(slider_watts(F::CpuPptLimitMw, true), None);
+        // The seeds start inside their sliders.
+        for field in fields() {
+            if let Some((lo, hi)) = slider_watts(field.feature, true) {
+                assert!(
+                    (lo * 1000..=hi * 1000).contains(&field.seed),
+                    "{:?}",
+                    field.feature
+                );
+            }
+        }
+    }
+    #[test]
     fn current_fields_have_no_retired_controls_or_empty_groups() {
         let fields = fields();
         for field in &fields {
@@ -334,8 +386,8 @@ mod tests {
             SECTIONS,
             &[
                 (0, "section.gpu"),
-                (1, "section.cpu"),
-                (5, "section.windows")
+                (2, "section.cpu"),
+                (6, "section.windows")
             ]
         );
         let old = serde_json::from_str::<F>("\"intel_pl1_mw\"").unwrap();

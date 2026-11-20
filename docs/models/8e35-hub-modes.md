@@ -34,6 +34,10 @@ The source resource's default shared budget was 45; Unleashed uses the separatel
 
 Vendor Windows-power synchronization and AMD RPC tuning are separate optional paths. The HP AMD wrapper serializes requests to its service; it does not expose the actual native SMU messages. Omen Hub++ now has its own fixed qualified RSMU path rather than loading that RPC wrapper. CCD affinity is a Windows process policy, not a CPU firmware mode.
 
+## Hub power sliders (decompiled, 20 November 2026)
+
+OMEN Hub 1101.2611.2.0, read with ILSpy (the relevant modules are .NET; Ghidra is not needed for them), `HP.Omen.PerformanceControlModule` and the model table `PowerControl.JSON.Khalilah_DRG_N22X4X6` (version 20250523) for 8E35: the Unleashed panel's `PowerLimit1Slider` spans `UnleashedModeMinPL1`–`UnleashedModeMaxPL1` = **45–80 W**, tick 1 W, default `UnleashedModeDefaultPL1` = 80 W. On AMD the value is applied by `SetPL1` → `SetPowerLimit(pl1)` = command 0x20008 type 0x29 `[PL1, PL1, FF, FF]` (values above 254 W use the 128-byte 0x37 command, not relevant here). The `TppSlider` spans `TppMinValue`–`TppMaxValue` = **55–72 W**. Omen Hub++ shows the same ranges as sliders in the preset group *Dynamic Boost and CPU power* and writes PL1 through its existing qualified 0x29 path; the PM-table readback of Slow (cell 4) confirms it.
+
 ## Current implementation limits
 
 The four own modes were exercised with GPU flag and available Slow/PL1 readback, ending in the user-specified Unleashed baseline. A complete active thermal-mode original cannot be read back. The dashboard path takes the shared write lease but has no complete preset-style write-ahead transaction. On a failed non-Balanced mode it attempts Balanced; that is a fallback, not restoration of the unknown previous mode.

@@ -555,7 +555,14 @@ impl Host {
             .iter()
             .filter(|f| f.group == field.group)
             .count();
+        // Hub-style watt sliders; the CPU slider follows the Dynamic Boost row.
+        let dynamic_boost = catalog
+            .iter()
+            .zip(fields.iter())
+            .any(|(f, d)| f.feature == Feature::GpuUnleashed && d.included);
+        let slider = preset_fields::slider_watts(field.feature, dynamic_boost);
         let kind = match field.feature.descriptor().value_kind {
+            _ if slider.is_some() => 5,
             ValueKind::Choice => 1,
             ValueKind::Boolean => 2,
             ValueKind::VfCurve => 3,
@@ -581,6 +588,8 @@ impl Host {
                 .position(|c| draft.value == Value::Choice(*c))
                 .unwrap_or(0) as i32,
             info: field.info().into(),
+            slider_min: slider.map_or(0.0, |(lo, _)| lo as f32),
+            slider_max: slider.map_or(0.0, |(_, hi)| hi as f32),
         };
         if local < model.row_count() {
             model.set_row_data(local, data);
@@ -2264,6 +2273,21 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     callback!(on_include_field, |h, index, value| {
         if let Some(row) = h.fields.borrow_mut().get_mut(index as usize) {
             row.included = value;
+        }
+        h.dirty();
+        // Dynamic Boost changes the CPU watt slider's range.
+        if preset_fields::fields()
+            .get(index as usize)
+            .is_some_and(|f| f.feature == Feature::GpuUnleashed)
+        {
+            h.update_fields();
+        } else {
+            h.update_field(index as usize);
+        }
+    });
+    callback!(on_slider_field, |h, index, watts| {
+        if let Some(row) = h.fields.borrow_mut().get_mut(index as usize) {
+            row.text = format!("{}", watts.round() as i64);
         }
         h.dirty();
         h.update_field(index as usize);

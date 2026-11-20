@@ -24,8 +24,9 @@ defaults. An unnamed new preset returns to its initial loaded draft.
 
 | Section | Current fields |
 | --- | --- |
-| GPU | Core/VRAM offsets, full V/F curve, Dynamic Boost, cTGP, TPP |
-| CPU | Tctl limit, Slow/PPT, TDC/EDC, PBO, all-core or per-core Curve Optimizer |
+| GPU | Core/VRAM offsets, full V/F curve |
+| Dynamic Boost and CPU power | Dynamic Boost, cTGP, TPP slider (55–72 W), CPU power slider = Slow/PL1 (45–80 W with Dynamic Boost, otherwise 15–160 W) |
+| CPU | Tctl limit, PPT, TDC/EDC, PBO, all-core or per-core Curve Optimizer |
 | Windows | Processor boost, min/max, EPP, core parking, CCD preference, power plan/mode, refresh rate and graphics boot preference |
 
 Three independent GPU power fields (user decisions, 30 October 2026): **cTGP** (`0x22` byte 0, on by default for new and reset presets) and **Dynamic Boost (PPAB)** (`0x22` byte 1) are transactional HP firmware flags (WMI, no NVIDIA identity in the preset binding and no wake of the discrete GPU); each write keeps the other flag as read (read-modify-write, fixed D-state 1 and 87 °C byte), reads both back and restores both captured flags. **TPP** (`0x29` [FF, FF, FF, watts], shared CPU+GPU budget, factory 45 W, Unleashed 72 W, the firmware accepted up to 115 W) has no readback: it is written before the transaction, is never reported as confirmed and is not restored. Ticking Dynamic Boost in the editor proposes cTGP on and TPP 72 W.
