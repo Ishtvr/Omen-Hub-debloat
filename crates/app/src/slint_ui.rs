@@ -1703,7 +1703,7 @@ pub fn run(
     let (aux, auxq) = mpsc::channel();
     let (atx, arx) = mpsc::channel();
     let (apply, apply_tx) = apply::Handle::new();
-    let group_rows = (0..7)
+    let group_rows = (0..preset_fields::GROUPS.len())
         .map(|_| Rc::new(VecModel::default()))
         .collect::<Vec<_>>();
     let groups = Rc::new(VecModel::from(

@@ -1,8 +1,12 @@
 # Validation
 
-Current software summary updated **20 November 2026**, version **0.10.0-beta.10**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **20 November 2026**, version **0.10.0-beta.11**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Startup fix — 20 November 2026
+
+Version **0.10.0-beta.11**. beta.10 panicked at start (group list count 7 versus 8 groups); reproduced with the beta.10 binary in `--ui-test` and fixed. The beta.11 release binary was started in `--ui-test` and stayed up. Unit tests and Clippy did not cover the window construction; this start check is now part of the release routine for UI catalog changes.
 
 ## Dynamic Boost group and Hub power sliders — 20 November 2026
 
