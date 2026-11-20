@@ -1712,7 +1712,8 @@ pub fn run(
             .enumerate()
             .map(|(i, k)| GroupData {
                 title: t(k).into(),
-                expanded: i == 0 || i == 1,
+                // GPU, Dynamic Boost and the CPU limits open, as before the regrouping.
+                expanded: i <= 2,
                 rows: group_rows[i].clone().into(),
             })
             .collect::<Vec<_>>(),

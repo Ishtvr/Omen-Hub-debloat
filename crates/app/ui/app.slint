@@ -289,11 +289,14 @@ component FieldRow inherits Rectangle {
             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
             clicked => { Workbench.open-curve(true); }
         }
+        // Same footprint as the other editors plus the value, so labels keep
+        // their room in compact windows.
         if root.item.kind == 5: HorizontalLayout {
-            width: Theme.field-width * 2;
+            width: Theme.field-width + 48px;
             horizontal-stretch: 0;
             spacing: 8px;
             BrightnessSlider {
+                accessible-label: root.item.label;
                 value: root.item.value.to-float();
                 minimum: root.item.slider-min;
                 maximum: root.item.slider-max;

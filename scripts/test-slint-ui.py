@@ -723,13 +723,16 @@ def run(args):
             wait_for(lambda: by_id('ConfirmPrompt::save-button'))
             shot('save-switch-popup')
             click(by_id('ConfirmPrompt::save-button'))
+            # The saved notice is a transient toast (6 s): check it as soon as
+            # it appears, before the fresh-preset curve editor is closed.
+            wait_for(lambda: any(e.get('accessibleLabel')==texts['notice.saved'] for e in tree()))
+            shot('saved-popup')
             new_profile_back()
             wait_for(lambda: name_field().get('accessibleValue','')=='')
-            assert any(e.get('accessibleLabel')==texts['notice.saved'] for e in tree())
-            shot('saved-popup')
             click(scroll_to(texts['preset.selector_label'],'Combobox'));key('\uf701');key('\n')
             wait_for(lambda: name_field().get('accessibleValue')==name+'x')
-            label_click(texts['notice.dismiss'])
+            # The toast may already have timed out on slower renderers.
+            dismiss_notice()
             user.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, c.c_int]
             user.RegisterWindowMessageW.argtypes = [wt.LPCWSTR]
             user.RegisterWindowMessageW.restype = wt.UINT
@@ -805,9 +808,36 @@ def run(args):
             assert user.SetWindowPos(hwnd, None, 0, 0, round(860 * scale) + frame_w, round(540 * scale) + frame_h, 0x2 | 0x4 | 0x10)
             navigate('ui.overview', 'overview')
 
+            # Hub-style CPU power slider in the Dynamic Boost group (beta.10):
+            # 15-160 W without Dynamic Boost, 45-80 W with it, value beside it.
+            def set_checked(label, state):
+                for _ in range(3):
+                    box = scroll_to(label, 'Checkbox')
+                    if bool(box.get('accessibleChecked', False)) == state:
+                        return
+                    click(box)
+                    try:
+                        wait_for(lambda: bool(find(label, 'Checkbox').get('accessibleChecked', False)) == state)
+                        return
+                    except AssertionError:
+                        pass
+                raise AssertionError('Checkbox did not reach its state: ' + label)
+            cpu_power = texts['field.CpuSlowPptLimitMw']
+            boost_flag = texts['field.GpuUnleashed']
+            set_checked(boost_flag, False)
+            set_checked(cpu_power, True)
+            power_slider = find(cpu_power, 'Slider')
+            assert float(power_slider['accessibleValueMinimum']) == 15 and float(power_slider['accessibleValueMaximum']) == 160
+            set_value(power_slider, '60')
+            wait_for(lambda: float(find(cpu_power, 'Slider')['accessibleValue']) == 60)
+            set_checked(boost_flag, True)
+            wait_for(lambda: float(find(cpu_power, 'Slider')['accessibleValueMaximum']) == 80)
+            assert float(find(cpu_power, 'Slider')['accessibleValueMinimum']) == 45
+            set_checked(boost_flag, False)
+            set_checked(cpu_power, False)
             # Expand/collapse and exact decimal-unit input survive virtualization.
             click(scroll_to(texts['group.gpu']))
-            slow = texts['field.CpuSlowPptLimitMw']
+            slow = texts['field.CpuPptLimitMw']
             click(scroll_to(slow, 'Checkbox'))
             wait_for(lambda: find(slow, 'Checkbox').get('accessibleChecked'))
             set_value(find(slow, 'TextInput'), '55,125' if args.language == 'de' else '55.125')
@@ -840,7 +870,7 @@ def run(args):
             click(scroll_to(texts['preset.new']))
             new_profile_back()
             wait_for(lambda: name_field().get('accessibleValue', '') == '')
-            assert scroll_to(slow, 'TextInput')['accessibleValue'] == '55'
+            assert scroll_to(slow, 'TextInput')['accessibleValue'] == '80'
             assert not find(slow, 'Checkbox').get('accessibleChecked', False)
             name_field()
             click(scroll_to(texts['preset.selector_label'],'Combobox'))
