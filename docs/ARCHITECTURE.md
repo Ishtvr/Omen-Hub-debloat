@@ -47,7 +47,7 @@ The global own-process control lease serializes writing sessions. It does not ex
 - `preset_fields.rs` declares groups/units and stable control slots; `preset_ui.rs` handles draft state, merge, Save/Apply/Delete and sign-in requests.
 - `curve_editor`, `curve_input` and `curve_view` separate immutable anchors, editing policy, history and viewport. The Win32 canvas renders on events. Accepting an in-memory chart draft does not write a file or hardware.
 - `keyboard_ui.rs` owns one elevated direct-lighting worker. `DirectLighting` uses a separate transaction store, full state checks and the shared lease. A confirmed color applies immediately; Cancel does not write.
-- `theme.rs` supplies the shared dark native appearance. `.impeccable/` is design documentation, not app-loaded HTML/CSS. See [Design](../DESIGN.md).
+- `theme.rs` supplies the shared dark native appearance. The local `.impeccable/` design-skill folder is ignored by Git and never loaded by the app. See [Design](../DESIGN.md).
 
 `i18n.rs` owns the immutable per-process German/English choice, with explicit `--lang` propagation to separate UI/UAC processes, display-number formatting and language-neutral error rendering. Known JSON preflight/rollback messages are decoded before display; opaque provider details remain labeled diagnostics. Persistent values and fixed task/IPC identifiers are not translated. [Localization](LOCALIZATION.md).
 

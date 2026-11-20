@@ -4,13 +4,8 @@
 /.tools/
 /.local/
 /.agents/
-/.impeccable/*
-!/.impeccable/config.json
-!/.impeccable/design.json
-!/.impeccable/surface-briefs/
-!/.impeccable/surface-briefs/**
-!/.impeccable/surfaces/
-!/.impeccable/surfaces/**
+/.impeccable/
+
 # Compiled artifacts, installers and diagnostic dumps are release/local files.
 *.exe
 *.dll
