@@ -81,6 +81,7 @@ pub fn handles(command: &str) -> bool {
             | "fan-service-install"
             | "cpu-smu-calibrate-limits"
             | "profile-ui-restore"
+            | "profile-ui-restore-keep"
             | "profile-ui-startup-enable"
             | "profile-startup-enable"
             | "profile-startup-disable"
@@ -179,6 +180,9 @@ fn apply_hp_prelude(
         if let Err(error) = omen_platform::apply_hp_mode(inventory, mode) {
             failed.push(error);
         }
+        // Let the firmware settle its mode tables before Windows and SMU
+        // values follow (300–500 ms, battery-switch order).
+        std::thread::sleep(std::time::Duration::from_millis(400));
         // The firmware keeps the mode's PL1; make it the preset's Slow PPT.
         if let Some(watts) = HpMode::cpu_pl1_of_profile(profile)
             && let Err(error) = omen_platform::write_hp_cpu_pl1(inventory, watts)
@@ -251,7 +255,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("mux-ui-apply") if args.len() == 3 => Some(("mux", args[2].as_str())),
             Some("hp-service-ui") if args.len() == 3 => Some(("hp_service", args[2].as_str())),
             Some("profile-ui-restore") if args.len() == 2 => Some(("restore", args[1].as_str())),
-            Some("profile-ui-restore") if args.len() == 3 => Some(("restore", args[2].as_str())),
+            Some("profile-ui-restore" | "profile-ui-restore-keep") if args.len() == 3 => {
+                Some(("restore", args[2].as_str()))
+            }
             Some("profile-ui-startup-enable") if args.len() == 3 => {
                 Some(("startup", args[2].as_str()))
             }
@@ -720,9 +726,10 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 .map(|_| ())
                 .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
         }
-        Some("profile-restore" | "profile-ui-restore")
+        Some("profile-restore" | "profile-ui-restore" | "profile-ui-restore-keep")
             if args.len() == 1
-                || (args[0] == "profile-ui-restore" && (args.len() == 2 || args.len() == 3)) =>
+                || (args[0] == "profile-ui-restore" && (args.len() == 2 || args.len() == 3))
+                || (args[0] == "profile-ui-restore-keep" && args.len() == 3) =>
         {
             let _lease = ControlLease::acquire_foreground()?;
             let nonce = if args.len() == 3 {
@@ -750,7 +757,11 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 return Err(omen_core::message::msg("profile.err.other_profile", &[]));
             }
             // Disable further automatic application before explicit recovery.
-            store.disable_startup()?;
+            // The automatic battery return only undoes its own battery preset
+            // and keeps the user's sign-in approval.
+            if args[0] != "profile-ui-restore-keep" {
+                store.disable_startup()?;
+            }
             let mut controller = Controller::for_recovery(&saved)?;
             let mut direct_restored = false;
             let mut cooling_restored = false;

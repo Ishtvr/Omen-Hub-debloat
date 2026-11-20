@@ -1,9 +1,28 @@
 # Validation
 
-Current software summary updated **20 November 2026**, version **0.10.0-beta.8**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **20 November 2026**, version **0.10.0-beta.9**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
+## Battery state machine and battery preset — 20 November 2026
+
+Version **0.10.0-beta.9**. [Release notes](releases/0.10.0-beta.9.md). Software
+validation only; no hardware write and no battery run were made.
+
+- Format check, **349 unit tests** (170 core / 79 app / 100 platform), **14 Guardian
+  process scenarios**, all-target Clippy with `-D warnings` and a locked release
+  build passed.
+- New regressions: AC→DC and DC→AC switching, idempotent repeats, startup and
+  wake sync on the current level, manual override until the charger returns,
+  unknown source never switching, persisted state across a store reopen, the
+  automatic queue submitter never replacing manual work, and the battery template
+  (valid, no NVIDIA binding, Balanced mode, PL1 18 W, efficiency mode kept).
+- Device facts read on 20 November 2026 (on AC): Windows battery WMI reports
+  `PowerOnline`, charge/discharge rate and voltage, but no adapter wattage or type,
+  so full charger and weak USB-C PD are not distinguishable; the logic stays AC/DC.
+  No AMD PMF device and no DPTF service are present. Whether the 80 W PPT reset
+  occurs on battery is unmeasured (it was only seen in Unleashed, which a battery
+  preset never selects).
 ## Apply reliability, Unleashed PPT and curve editor — 20 November 2026
 
 Version **0.10.0-beta.8**. [Release notes](releases/0.10.0-beta.8.md). Software

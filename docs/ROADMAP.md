@@ -15,7 +15,8 @@ The normal workspaces have moved to Rust/Slint on the 0.10.0-beta.1 branch. Soft
 - [ ] Separate CPU protocol ranges, model evidence and stability-tested settings; document the source of each bound. Current PPT/Slow 160 W, CO −50…+30 and PBO 10× exceed the measured trial envelope.
 - [ ] Confirm fan-mode execution using fresh, matching helper status; distinguish selected, waiting, failed, active and handover-pending.
 - [ ] Capture Slow/STAPM/PPT and the GPU flags **before** the HP mode prelude, so Restore returns to the state before Apply (today the originals are read after the prelude; found 20 November 2026).
-- [ ] Route the AC/battery automatic preset switch through the latest-intent queue (`Replace`, serial wait) instead of separate non-replace commands.
+- [ ] Measure the battery preset on battery: package/battery discharge at idle and browsing, whether the PPT/Slow targets hold (PPT reset was only seen in Unleashed), dGPU D-state with the window open/closed, internal 60 Hz switch with an external monitor attached.
+- [ ] Optional battery controls not yet in the preset catalog: PCIe link-state power management and USB selective suspend (DC index), keyboard backlight off on battery.
 - [ ] Persist nonce, digest, verified/skipped/requested lists and boot time in the journal completion instead of the shared `last-control-result.json`.
 - [ ] Decide the TPP bound: presets can store up to 254 W, the measured acceptance is ≤115 W.
 - [ ] Identify the trigger of the Unleashed PPT reset with read-only sampling (PM cells 0–5 at 250 ms, GPU power, WMI-Activity ETW), then a user-approved single 75 W write with Dynamic Boost off/Balanced/fan helper paused. Only a qualified path may write PPT in Unleashed again.

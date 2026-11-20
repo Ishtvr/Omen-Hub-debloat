@@ -190,54 +190,100 @@ fn apply_selection(selection: &Selection) -> Result<serde_json::Value, String> {
     }
 }
 /// Remembers a mode or preset applied by hand: on AC it is the one to return
-/// to after battery use; either way an automatic battery switch is over.
+/// to after battery use; on battery it overrides the automatic battery preset
+/// until the charger is connected again.
 pub(crate) fn record_manual(selection: &Selection) {
     if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
-        if omen_platform::power_status().ac_connected != Some(false) {
-            let _ = store.save_ac_selection(selection);
-        }
-        let _ = store.save_battery_switched(false);
+        let mut state = store.battery_state();
+        state.manual(selection, omen_platform::power_status().ac_connected);
+        let _ = store.save_battery_state(&state);
     }
 }
-/// Reacts to a changed power source; returns the status line to show.
-fn battery_switch(previous: Option<bool>, current: Option<bool>) -> Option<String> {
+/// What the automatic battery switch should do now (startup, debounced
+/// power event, resume). Reads the source once more after the debounce.
+pub(crate) fn battery_decision() -> Option<Switch> {
     let store = omen_platform::profile_store::ProfileStore::user_data().ok()?;
-    let switch = omen_core::battery::on_source_change(
-        previous,
-        current,
+    omen_core::battery::decide(
+        omen_platform::power_status().ac_connected,
         store.battery_selection().as_ref(),
-        store.ac_selection().as_ref(),
-        store.battery_switched(),
-    )?;
-    // A loose plug can flicker: act only on a source that stays changed.
-    thread::sleep(Duration::from_secs(2));
-    if omen_platform::power_status().ac_connected != current {
-        return None;
+        &store.battery_state(),
+    )
+}
+/// Records a completed automatic switch.
+pub(crate) fn record_battery_switch(switch: &Switch) {
+    if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
+        let mut state = store.battery_state();
+        state.switched_to(matches!(switch, Switch::ToBattery(_)));
+        let _ = store.save_battery_state(&state);
     }
-    let (selection, to_battery) = match &switch {
+}
+/// Runs one automatic switch: on return, the battery preset's own journal is
+/// restored first (only when it is still the last completed Apply), so its
+/// Windows policies and refresh rate return exactly; then the AC selection.
+/// `serial` waits for the helper's real end (queue owner); otherwise the
+/// normal bounded wait applies.
+pub(crate) fn execute_battery_switch(switch: &Switch, serial: bool) -> Result<String, String> {
+    use crate::elevation::Action;
+    let run = |id: Option<&str>, action: Action| {
+        if serial {
+            crate::elevation::run_serial(id, action)
+        } else {
+            crate::elevation::run(id, action, || false)
+        }
+    };
+    let (selection, to_battery) = match switch {
         Switch::ToBattery(selection) => (selection, true),
-        Switch::BackToAc(selection) => (selection, false),
+        Switch::BackToAc { selection, restore } => {
+            if let Some(id) = restore
+                && omen_platform::profile_store::ProfileStore::user_data()
+                    .and_then(|store| store.applied_settings())
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(applied, _, _)| applied == *id)
+            {
+                run(Some(id), Action::RestoreKeepStartup)?;
+            }
+            (selection, false)
+        }
+    };
+    let record = match selection {
+        Selection::Mode(mode) => run(None, Action::ReplaceMode(*mode))?,
+        Selection::Preset(id) => run(Some(id), Action::Replace)?,
     };
     let name = selection_name(selection);
-    Some(match apply_selection(selection) {
-        Ok(_) => {
-            let _ = store.save_battery_switched(to_battery);
-            tf(
-                if to_battery {
-                    "battery.applied"
-                } else {
-                    "battery.returned"
-                },
-                &[&name],
-            )
+    let mut text = tf(
+        if to_battery {
+            "battery.applied"
+        } else {
+            "battery.returned"
+        },
+        &[&name],
+    );
+    if let Selection::Preset(_) = selection {
+        text.push(' ');
+        text.push_str(&crate::elevation::applied_status(&record));
+    }
+    Ok(text)
+}
+/// Legacy dashboard path (no apply queue): runs the switch directly.
+fn battery_switch() -> Option<String> {
+    let switch = battery_decision()?;
+    Some(match execute_battery_switch(&switch, false) {
+        Ok(text) => {
+            record_battery_switch(&switch);
+            text
         }
         Err(error) => tf(
             "battery.failed",
-            &[&name, &crate::i18n::error_message(&error)],
+            &[
+                &selection_name(match &switch {
+                    Switch::ToBattery(selection) | Switch::BackToAc { selection, .. } => selection,
+                }),
+                &crate::i18n::error_message(&error),
+            ],
         ),
     })
 }
-
 /// Manual controls have their own sleeping worker: a slow GPU/inventory/CPU
 /// reader cannot sit ahead of Apply. The UI still serializes its controls and
 /// the cross-process foreground lease serializes actual hardware transactions.
@@ -351,6 +397,9 @@ pub(crate) fn control_worker(
     }
 }
 
+// One long-lived thread owns telemetry and the battery switch; its inputs are
+// the shared channels the window procedures already hold.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn worker(
     hwnd: usize,
     rx: mpsc::Receiver<Request>,
@@ -359,6 +408,7 @@ pub(crate) fn worker(
     mode_result: Arc<Mutex<Option<String>>>,
     mut start_cpu_reader: bool,
     power: Arc<Mutex<Sampling>>,
+    automatic: Option<Box<dyn Fn(Switch) -> bool + Send>>,
 ) {
     let mut snapshot = Snapshot {
         inventory: crate::inventory::read(),
@@ -371,6 +421,8 @@ pub(crate) fn worker(
     let mut cpu = None;
     let mut hardware: Option<crate::cpu_sensor_bridge::CpuSensorBridge> = None;
     let mut reopen_at = Instant::now();
+    // Startup check of the battery switch (a crash or restart on battery).
+    let mut evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
     let publish = |snapshot: &Snapshot| {
         *shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         // SAFETY: PostMessage does not dereference hwnd; a closed window rejects the message.
@@ -422,7 +474,14 @@ pub(crate) fn worker(
             snapshot.cpu = None;
         }
         suspended = !power.lock().unwrap_or_else(|e| e.into_inner()).active();
-        if visible && !suspended && Instant::now() >= reopen_at {
+        // On battery NVML/NVAPI queries would wake a sleeping dGPU from D3cold
+        // (several watts); GPU telemetry pauses until the charger returns.
+        let on_battery = snapshot.power.ac_connected == Some(false);
+        if visible && !suspended && on_battery {
+            nvidia = None;
+            snapshot.gpu = None;
+            snapshot.warnings = vec![t("warning.gpu_paused_battery").into()];
+        } else if visible && !suspended && Instant::now() >= reopen_at {
             let nvidia = nvidia.get_or_insert_with(crate::telemetry_worker::GpuTelemetry::new);
             snapshot.gpu = nvidia.sample();
             snapshot.warnings = nvidia.warnings().to_vec();
@@ -454,11 +513,27 @@ pub(crate) fn worker(
         snapshot.cpu_reader_pid = hardware.as_ref().map(|r| r.process_id());
         publish(&snapshot);
         if snapshot.power.ac_connected != ac {
-            let previous = std::mem::replace(&mut ac, snapshot.power.ac_connected);
-            if let Some(message) = battery_switch(previous, ac) {
-                *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
-                unsafe {
-                    PostMessageW(hwnd as HWND, AUTO_RESULT, 0, 0);
+            ac = snapshot.power.ac_connected;
+            evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
+        }
+        if evaluate_at.is_some_and(|at| Instant::now() >= at) {
+            evaluate_at = None;
+            match &automatic {
+                // Through the apply queue: a manual choice always wins.
+                Some(submit) => {
+                    if let Some(switch) = battery_decision()
+                        && !submit(switch)
+                    {
+                        evaluate_at = Some(Instant::now() + Duration::from_secs(5));
+                    }
+                }
+                None => {
+                    if let Some(message) = battery_switch() {
+                        *mode_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+                        unsafe {
+                            PostMessageW(hwnd as HWND, AUTO_RESULT, 0, 0);
+                        }
+                    }
                 }
             }
         }
@@ -481,8 +556,14 @@ pub(crate) fn worker(
                 }
             }
         }
-        let request = if visible && !suspended {
-            match rx.recv_timeout(Duration::from_secs(3)) {
+        let wait = evaluate_at.map(|at| at.saturating_duration_since(Instant::now()));
+        let request = if (visible && !suspended) || wait.is_some() {
+            let limit = if visible && !suspended {
+                Duration::from_secs(3)
+            } else {
+                Duration::MAX
+            };
+            match rx.recv_timeout(wait.map_or(limit, |w| w.min(limit))) {
                 Ok(request) => Some(request),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -510,6 +591,9 @@ pub(crate) fn worker(
                 reopen_at = Instant::now();
             }
             Some(Request::Power) => {
+                // Resume or source change: debounced level check (Windows may
+                // not report a plug change made during sleep).
+                evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
                 cpu = None;
                 nvidia = None;
                 reopen_at = Instant::now();
@@ -1230,6 +1314,7 @@ fn run_window(
                 mode_result,
                 auto_cpu,
                 power,
+                None,
             )
         });
         if initially_visible && preview.is_none() {

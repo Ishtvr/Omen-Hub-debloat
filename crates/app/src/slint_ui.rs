@@ -79,6 +79,12 @@ fn battery_entries(profiles: &[PerformanceProfile], saved: Option<&str>) -> Vec<
         .map(|(_, m)| Selection::Mode(*m))
         .chain(profiles.iter().map(|p| Selection::Preset(p.id.clone())))
         .collect::<Vec<_>>();
+    // The battery-optimised template is offered until it exists; choosing it
+    // and saving the settings creates it.
+    let template = Selection::Preset(crate::battery_preset::ID.into());
+    if !entries.contains(&template) {
+        entries.push(template);
+    }
     if let Some(saved) = saved.and_then(Selection::parse)
         && !entries.contains(&saved)
     {
@@ -92,10 +98,16 @@ fn selection_label(selection: &Selection, profiles: &[PerformanceProfile]) -> St
             .iter()
             .find(|(_, m)| m == mode)
             .map_or_else(String::new, |(key, _)| tf("mode.default_entry", &[&t(key)])),
-        Selection::Preset(id) => profiles
-            .iter()
-            .find(|p| p.id == *id)
-            .map_or_else(|| tf("ui.missing_preset", &[&id]), |p| p.name.clone()),
+        Selection::Preset(id) => profiles.iter().find(|p| p.id == *id).map_or_else(
+            || {
+                if id == crate::battery_preset::ID {
+                    t("battery.optimized_new").to_owned()
+                } else {
+                    tf("ui.missing_preset", &[&id])
+                }
+            },
+            |p| p.name.clone(),
+        ),
     }
 }
 enum Aux {
@@ -173,7 +185,17 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     .map(|s| s.disabled),
             ),
             Aux::SaveSettings(base, options, appearance, startup) => {
-                AuxResult::SettingsSaved(settings::save(&base, &options, &appearance, startup))
+                // Choosing the battery-optimised template creates it first.
+                let template = Selection::Preset(crate::battery_preset::ID.into()).key();
+                let created = if options.battery_preset.as_deref() == Some(template.as_str()) {
+                    ProfileStore::user_data()
+                        .and_then(|store| crate::battery_preset::ensure(&store))
+                } else {
+                    Ok(())
+                };
+                AuxResult::SettingsSaved(
+                    created.and_then(|()| settings::save(&base, &options, &appearance, startup)),
+                )
             }
             Aux::Lighting(target) => {
                 let applied = target.is_some();
@@ -1907,8 +1929,23 @@ pub fn run(
         let automatic = host.automatic.clone();
         let power = host.power.clone();
         let visible = !start_in_tray || !host.tray.registered();
+        // Automatic AC/battery switches go through the apply queue; the UI
+        // test mode never writes hardware.
+        let queue = host.apply.automatic();
+        let test = host.test;
+        let submit: Box<dyn Fn(omen_core::battery::Switch) -> bool + Send> =
+            Box::new(move |switch| test || queue.submit(switch));
         workers.push(thread::spawn(move || {
-            ui::worker(raw, rx, shared, visible, automatic, true, power)
+            ui::worker(
+                raw,
+                rx,
+                shared,
+                visible,
+                automatic,
+                true,
+                power,
+                Some(submit),
+            )
         }));
         let raw = hwnd as usize;
         workers.push(thread::spawn(move || preset_ui::worker(raw, presets, ptx)));
@@ -2551,8 +2588,15 @@ mod tests {
             entries.last(),
             Some(&Selection::Preset("removed-preset".into()))
         );
-        assert_eq!(entries.len(), 5);
-        assert_eq!(battery_entries(&[], Some("mode:quiet")).len(), 4);
-        assert_eq!(battery_entries(&[], None).len(), 4);
+        // Four modes, the not yet created battery template, the missing preset.
+        assert_eq!(entries.len(), 6);
+        assert_eq!(battery_entries(&[], Some("mode:quiet")).len(), 5);
+        let fresh = battery_entries(&[], None);
+        assert_eq!(fresh.len(), 5);
+        assert!(fresh.contains(&Selection::Preset(crate::battery_preset::ID.into())));
+        assert_eq!(
+            selection_label(fresh.last().unwrap(), &[]),
+            t("battery.optimized_new")
+        );
     }
 }

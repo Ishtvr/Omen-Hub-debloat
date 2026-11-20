@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::ptr;
 use windows_sys::{
     Win32::{
+        Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED,
+            DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+        },
         Foundation::{ERROR_SUCCESS, LocalFree},
         Graphics::Gdi::{
             CDS_UPDATEREGISTRY, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
@@ -267,20 +274,71 @@ fn write_overlay(overlay: u128) -> Result<(), String> {
     check(unsafe { set(value) }, "Power mode write")
 }
 
+/// GDI device name (\\.\DISPLAYn, NUL-terminated) of the active internal
+/// panel. External monitors are never addressed by the refresh-rate control;
+/// with the panel inactive (lid closed, external only) there is no target.
+fn internal_display() -> Result<[u16; 32], String> {
+    // SAFETY: Sized buffers from GetDisplayConfigBufferSizes; every output
+    // pointer is valid for the call and the header names its exact size.
+    unsafe {
+        let (mut paths, mut modes) = (0u32, 0u32);
+        check(
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut paths, &mut modes),
+            "Display configuration size",
+        )?;
+        let mut path_info: Vec<DISPLAYCONFIG_PATH_INFO> = vec![std::mem::zeroed(); paths as usize];
+        let mut mode_info: Vec<DISPLAYCONFIG_MODE_INFO> = vec![std::mem::zeroed(); modes as usize];
+        check(
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut paths,
+                path_info.as_mut_ptr(),
+                &mut modes,
+                mode_info.as_mut_ptr(),
+                ptr::null_mut(),
+            ),
+            "Display configuration",
+        )?;
+        for path in path_info.iter().take(paths as usize) {
+            let technology = path.targetInfo.outputTechnology;
+            if ![
+                DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL,
+                DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED,
+                DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED,
+            ]
+            .contains(&technology)
+            {
+                continue;
+            }
+            let mut source: DISPLAYCONFIG_SOURCE_DEVICE_NAME = std::mem::zeroed();
+            source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+            source.header.adapterId = path.sourceInfo.adapterId;
+            source.header.id = path.sourceInfo.id;
+            if DisplayConfigGetDeviceInfo(&mut source.header) == 0 {
+                return Ok(source.viewGdiDeviceName);
+            }
+        }
+        Err(msg("display.err.no_internal", &[]))
+    }
+}
 fn current_mode() -> Result<DEVMODEW, String> {
-    // SAFETY: Zeroed DEVMODEW with dmSize set is the documented input.
+    let name = internal_display()?;
+    // SAFETY: Zeroed DEVMODEW with dmSize set is the documented input; the
+    // device name is NUL-terminated and outlives the call.
     unsafe {
         let mut mode: DEVMODEW = std::mem::zeroed();
         mode.dmSize = size_of::<DEVMODEW>() as u16;
-        if EnumDisplaySettingsW(ptr::null(), ENUM_CURRENT_SETTINGS, &mut mode) == 0 {
+        if EnumDisplaySettingsW(name.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) == 0 {
             return Err("Current display mode is unavailable".into());
         }
         Ok(mode)
     }
 }
-/// Refresh rates the primary display offers at its current resolution.
+/// Refresh rates the internal panel offers at its current resolution.
 pub fn refresh_rates() -> Result<Vec<u32>, String> {
     let current = current_mode()?;
+    let name = internal_display()?;
     let mut rates = vec![];
     // SAFETY: Same documented enumeration with an initialized structure.
     unsafe {
@@ -288,7 +346,7 @@ pub fn refresh_rates() -> Result<Vec<u32>, String> {
         loop {
             let mut mode: DEVMODEW = std::mem::zeroed();
             mode.dmSize = size_of::<DEVMODEW>() as u16;
-            if EnumDisplaySettingsW(ptr::null(), index, &mut mode) == 0 {
+            if EnumDisplaySettingsW(name.as_ptr(), index, &mut mode) == 0 {
                 break;
             }
             if mode.dmPelsWidth == current.dmPelsWidth
@@ -311,10 +369,12 @@ fn write_refresh(width: u32, height: u32, hz: u32) -> Result<(), String> {
     }
     mode.dmDisplayFrequency = hz;
     mode.dmFields = DM_DISPLAYFREQUENCY;
-    // SAFETY: Initialized current mode with only the frequency field selected.
+    let name = internal_display()?;
+    // SAFETY: Initialized current mode with only the frequency field selected;
+    // the NUL-terminated device name addresses only the internal panel.
     let result = unsafe {
         ChangeDisplaySettingsExW(
-            ptr::null(),
+            name.as_ptr(),
             &mode,
             ptr::null_mut(),
             CDS_UPDATEREGISTRY,

@@ -268,6 +268,12 @@ fn keep_mode(
     let id = &applied.id;
     let settings = &applied.settings;
     let ac = omen_platform::power_status().ac_connected == Some(true);
+    // On battery an NVML probe would wake a sleeping dGPU from D3cold; the
+    // mode watch pauses until the charger returns.
+    if !ac {
+        *release = Release::default();
+        return Ok(());
+    }
     let mode = match HpMode::of_settings(settings, ac) {
         Some(mode @ (HpMode::Unleashed | HpMode::Performance)) => mode,
         _ => {

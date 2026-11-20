@@ -3,14 +3,19 @@
 use super::*;
 use std::sync::Condvar;
 #[derive(Clone)]
-pub(super) enum Target {
+pub(crate) enum Target {
     Preset(String),
     Mode(HpMode),
+    /// Automatic AC/battery switch: a newer manual choice replaces it while
+    /// it waits, and a running one finishes before the next starts.
+    Battery(omen_core::battery::Switch),
 }
 struct State {
     queue: omen_core::latest_request::Latest<Target>,
     paused: bool,
     stopped: bool,
+    /// A target is executing (taken from the queue, not yet finished).
+    running: bool,
 }
 pub(super) struct ResultData {
     pub generation: u64,
@@ -32,6 +37,7 @@ impl Handle {
                         queue: Default::default(),
                         paused: false,
                         stopped: false,
+                        running: false,
                     }),
                     Condvar::new(),
                 )),
@@ -49,6 +55,12 @@ impl Handle {
             .submit(target);
         cv.notify_one();
         n
+    }
+    /// Submitter for the background power worker.
+    pub fn automatic(&self) -> Automatic {
+        Automatic {
+            state: self.state.clone(),
+        }
     }
     pub fn current(&self, n: u64) -> bool {
         self.state
@@ -80,11 +92,16 @@ impl Handle {
                     crate::elevation::run_serial(None, crate::elevation::Action::ReplaceMode(*m))
                         .map(|report| crate::elevation::mode_written_status(*m, &report))
                 }
+                Target::Battery(switch) => crate::ui::execute_battery_switch(switch, true),
             },
             |target| {
                 let selection = match target {
                     Target::Preset(id) => Selection::Preset(id.clone()),
                     Target::Mode(m) => Selection::Mode(*m),
+                    Target::Battery(switch) => {
+                        crate::ui::record_battery_switch(switch);
+                        return;
+                    }
                 };
                 crate::ui::record_manual(&selection);
             },
@@ -118,9 +135,11 @@ impl Handle {
                     if s.stopped {
                         break;
                     }
+                    s.running = true;
                     s.queue.take().expect("Pending latest intent")
                 };
                 let result = execute(&target);
+                shared.0.lock().unwrap_or_else(|e| e.into_inner()).running = false;
                 // A finished Apply or mode switch starts a close "keep preset" check.
                 crate::preset_hold::nudge();
                 if result.is_ok()
@@ -146,6 +165,26 @@ impl Handle {
                 notify();
             }
         })
+    }
+}
+/// Background submitter for automatic AC/battery switches. It never replaces
+/// a manual choice: while one waits or runs, the switch is deferred.
+#[derive(Clone)]
+pub(crate) struct Automatic {
+    state: Arc<(Mutex<State>, Condvar)>,
+}
+impl Automatic {
+    /// alse when manual work is waiting, running or the queue is paused
+    /// (Save/recovery); the caller checks again later.
+    pub fn submit(&self, switch: omen_core::battery::Switch) -> bool {
+        let (lock, cv) = &*self.state;
+        let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if s.stopped || s.paused || s.running || s.queue.pending() {
+            return false;
+        }
+        s.queue.submit(Target::Battery(switch));
+        cv.notify_one();
+        true
     }
 }
 impl Host {
@@ -241,6 +280,28 @@ mod tests {
             handle.stop();
             worker.join().unwrap();
         }
+    }
+
+    #[test]
+    fn an_automatic_battery_switch_never_replaces_manual_work() {
+        use omen_core::battery::{Selection, Switch};
+        let (handle, _results) = Handle::new();
+        let automatic = handle.automatic();
+        let switch = Switch::ToBattery(Selection::Mode(HpMode::Quiet));
+        // A waiting manual choice keeps its place.
+        handle.submit(Target::Preset("manual".into()));
+        assert!(!automatic.submit(switch.clone()));
+        // Save/recovery pauses the queue; the switch waits for a later check.
+        let (paused, _results) = Handle::new();
+        paused.pause(true);
+        assert!(!paused.automatic().submit(switch.clone()));
+        // An idle queue accepts it as the latest intent.
+        let (idle, _results) = Handle::new();
+        let n = {
+            assert!(idle.automatic().submit(switch));
+            idle.state.0.lock().unwrap().queue.pending()
+        };
+        assert!(n);
     }
 
     #[test]

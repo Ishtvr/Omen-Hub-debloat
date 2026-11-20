@@ -16,6 +16,9 @@ pub enum Action {
     Apply,
     Replace,
     Restore,
+    /// Battery return: restore the battery preset's journal without
+    /// revoking the sign-in approval (a normal Restore disables it).
+    RestoreKeepStartup,
     Startup,
     Mode(omen_core::hp_mode::HpMode),
     ReplaceMode(omen_core::hp_mode::HpMode),
@@ -28,7 +31,7 @@ impl Action {
     fn name(self) -> &'static str {
         match self {
             Self::Apply | Self::Replace => "apply",
-            Self::Restore => "restore",
+            Self::Restore | Self::RestoreKeepStartup => "restore",
             Self::Startup => "startup",
             Self::Mode(_) | Self::ReplaceMode(_) => "mode",
             Self::FanService => "fan",
@@ -66,6 +69,10 @@ fn run_inner(
         ),
         Action::Apply => format!(
             "profile-ui-apply {} {nonce}",
+            id.ok_or(t("elevation.save_first"))?
+        ),
+        Action::RestoreKeepStartup => format!(
+            "profile-ui-restore-keep {} {nonce}",
             id.ok_or(t("elevation.save_first"))?
         ),
         Action::Startup => format!(

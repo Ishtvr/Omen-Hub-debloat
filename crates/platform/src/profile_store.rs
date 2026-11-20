@@ -611,6 +611,30 @@ impl ProfileStore {
     pub fn save_battery_switched(&self, switched: bool) -> Result<(), String> {
         self.update_power_state("battery_switched", switched.into())
     }
+    /// The complete persisted state of the automatic battery switch.
+    pub fn battery_state(&self) -> omen_core::battery::State {
+        let state = self.power_state();
+        omen_core::battery::State {
+            ac_selection: state["ac_selection"].as_str().and_then(Selection::parse),
+            switched: state["battery_switched"].as_bool().unwrap_or(false),
+            manual_override: state["manual_override_on_battery"]
+                .as_bool()
+                .unwrap_or(false),
+        }
+    }
+    /// Writes the three fields in one atomic file replacement.
+    pub fn save_battery_state(&self, battery: &omen_core::battery::State) -> Result<(), String> {
+        let mut state = self.power_state();
+        match &battery.ac_selection {
+            Some(selection) => state["ac_selection"] = selection.key().into(),
+            None => {
+                state.as_object_mut().map(|o| o.remove("ac_selection"));
+            }
+        }
+        state["battery_switched"] = battery.switched.into();
+        state["manual_override_on_battery"] = battery.manual_override.into();
+        atomic_json(&self.root.join("power-switch.json"), &state)
+    }
     /// Start type HPOmenCap had before the "Disable HP OMEN Cap" setting.
     pub fn hp_service_start_type(&self) -> Option<u32> {
         self.power_state()["hp_service_start_type"]
@@ -1455,5 +1479,46 @@ mod tests {
             .unwrap();
         let status = store.fan_status().unwrap().unwrap();
         assert_eq!(status["state"], "curve");
+    }
+}
+
+#[cfg(test)]
+mod battery_state_tests {
+    use super::*;
+    use omen_core::{battery::State, hp_mode::HpMode};
+
+    #[test]
+    fn battery_switch_state_survives_a_restart_and_keeps_other_fields() {
+        let path = std::env::temp_dir().join(format!(
+            "omen-battery-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let store = ProfileStore::at(path.clone()).unwrap();
+        assert_eq!(store.battery_state(), State::default());
+        store.save_hp_service_start_type(Some(2)).unwrap();
+        let state = State {
+            ac_selection: Some(Selection::Preset("preset-gaming".into())),
+            switched: true,
+            manual_override: false,
+        };
+        store.save_battery_state(&state).unwrap();
+        let reopened = ProfileStore::at(path.clone()).unwrap();
+        assert_eq!(reopened.battery_state(), state);
+        assert_eq!(reopened.hp_service_start_type(), Some(2));
+        let cleared = State {
+            ac_selection: None,
+            switched: false,
+            manual_override: true,
+        };
+        reopened.save_battery_state(&cleared).unwrap();
+        assert_eq!(reopened.battery_state(), cleared);
+        assert_eq!(
+            Selection::parse(&Selection::Mode(HpMode::Quiet).key()),
+            Some(Selection::Mode(HpMode::Quiet))
+        );
+        let _ = std::fs::remove_dir_all(path);
     }
 }

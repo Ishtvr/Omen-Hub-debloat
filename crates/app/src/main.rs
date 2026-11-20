@@ -2,6 +2,7 @@
 
 #[cfg(windows)]
 mod autostart;
+mod battery_preset;
 #[cfg(windows)]
 mod cpu_sensor_bridge;
 #[cfg(windows)]

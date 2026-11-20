@@ -724,13 +724,19 @@ impl Backend for Controller {
         }
         // Measured 617.14 behavior: the NVML memory setter resets a custom
         // Graphics curve. Preserve it, then apply the final Graphics target.
+        // After the HP mode prelude: Windows plan and its policies, then the
+        // internal panel's refresh rate, then the SMU limits (battery-switch
+        // order of 20 November 2026).
         order.sort_by_key(|i| match settings[*i].feature {
             Feature::WindowsPowerPlan => 0,
-            Feature::GpuMemoryOffsetMhz => 1,
+            Feature::DisplayRefreshRateHz => 2,
+            Feature::CpuCcdAffinity => 3,
+            f if super::windows_settings::handles(f) => 1,
+            Feature::GpuMemoryOffsetMhz => 3,
             // Apply a sustained ceiling before the final short-term ceiling.
-            Feature::CpuSlowPptLimitMw => 2,
-            Feature::KeyboardEffect => 4,
-            _ => 3,
+            Feature::CpuSlowPptLimitMw => 4,
+            Feature::KeyboardEffect => 6,
+            _ => 5,
         });
         order
     }
