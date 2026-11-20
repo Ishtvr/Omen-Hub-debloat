@@ -441,13 +441,15 @@ def run(args):
                 # No buttons below the chart: Shift+Right selects 950-1000 mV, Enter in the
                 # value field sets the whole selection.
                 curve_keys('','','','','',modifier='\x10')
+                # Shift+Right moves the selected point to 1000 mV; undo returns its value.
+                before_selection_set=by_id('AppWindow::point-y')['accessibleValue']
                 set_point('1900')
                 def nodes():return [e for e in tree() if any(i.get('id')=='CurveCanvas::draft-node' for i in e['typeNamesAndIds'])]
                 selected=[e for e in nodes() if e['size']['width']==8]
                 assert len(selected)==6,len(selected)
                 assert max(e['absolutePosition'].get('y',0) for e in selected)-min(e['absolutePosition'].get('y',0) for e in selected)<.1
                 shot('selected-equalized-range')
-                curve_keys('z',modifier='\x11');wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
+                curve_keys('z',modifier='\x11');wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')==before_selection_set)
                 curve_keys('a',modifier='\x11')
                 assert len([e for e in nodes() if e['size']['width']==8])>5
                 shot('pointer-selected-voltage-band')
@@ -929,6 +931,9 @@ def run(args):
             click(pane_to('cooling',texts['ui.edit_curve']))
             wait_for(lambda: by_id('AppWindow::curve-editor'))
             assert not any(e.get('accessibleLabel') == texts['control.working'] for e in tree())
+            # The saved toast of the preceding Save can cover the chart's segments.
+            dismiss_notice()
+            time.sleep(.1)
             assert_curve_pixels('fan-curve-connected')
             assert user.SetWindowPos(hwnd,None,0,0,round(820*scale)+frame_w,round(500*scale)+frame_h,0x2|0x4|0x10)
             curve_to(texts['ui.use_curve'])

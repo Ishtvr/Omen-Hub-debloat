@@ -1,6 +1,6 @@
 # Validation
 
-Current software summary updated **20 November 2026**, version **0.10.0-beta.11**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **20 November 2026**, version **0.10.0-beta.12**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
@@ -33,13 +33,23 @@ Software validation only, on top of beta.11; no hardware write.
   exactly as without this change (regrouped fields), not in the curve editor.
   Screenshots checked the GPU and fan editors at 860×540, 820×500 and 1600×1000 logical px.
 
+## Merged curve-page work and UI regression run — 20 November 2026
+
+version **0.10.0-beta.12**. [Release notes](releases/0.10.0-beta.12.md). Format
+check, **353 unit tests** (170 core / 83 app / 100 platform), 14 Guardian
+scenarios, Clippy with `-D warnings` and a locked release build passed. The
+developer-MCP build passed `scripts/test-slint-ui.py` in these modes: full DE
+(software, 1.25) and full EN (FemtoVG, 2.0), editor extensions DE and EN,
+new-profile curve DE and EN, GPU-curve enable and pending switch. The EN 2.0 run
+exposed slider rows squeezing their labels in compact windows; fixed before the
+release build. The release binary was started in `--ui-test` and stayed up.
 ## Startup fix — 20 November 2026
 
-Version **0.10.0-beta.11**. beta.10 panicked at start (group list count 7 versus 8 groups); reproduced with the beta.10 binary in `--ui-test` and fixed. The beta.11 release binary was started in `--ui-test` and stayed up. Unit tests and Clippy did not cover the window construction; this start check is now part of the release routine for UI catalog changes.
+version **0.10.0-beta.12**. beta.10 panicked at start (group list count 7 versus 8 groups); reproduced with the beta.10 binary in `--ui-test` and fixed. The beta.11 release binary was started in `--ui-test` and stayed up. Unit tests and Clippy did not cover the window construction; this start check is now part of the release routine for UI catalog changes.
 
 ## Dynamic Boost group and Hub power sliders — 20 November 2026
 
-Version **0.10.0-beta.10**. [Release notes](releases/0.10.0-beta.10.md). UI
+version **0.10.0-beta.12**. [Release notes](releases/0.10.0-beta.10.md). UI
 regrouping only; write paths unchanged. Slider bounds come from the decompiled
 OMEN Hub panel for 8E35 ([evidence](models/8e35-hub-modes.md)). Format check,
 workspace tests (350 unit tests, 14 Guardian scenarios), Clippy with `-D warnings`
@@ -48,7 +58,7 @@ the Hub bounds and in-range seeds. The slider was not operated by mouse in this
 change.
 ## Battery state machine and battery preset — 20 November 2026
 
-Version **0.10.0-beta.9**. [Release notes](releases/0.10.0-beta.9.md). Software
+version **0.10.0-beta.12**. [Release notes](releases/0.10.0-beta.9.md). Software
 validation only; no hardware write and no battery run were made.
 
 - Format check, **349 unit tests** (170 core / 79 app / 100 platform), **14 Guardian
@@ -67,7 +77,7 @@ validation only; no hardware write and no battery run were made.
   preset never selects).
 ## Apply reliability, Unleashed PPT and curve editor — 20 November 2026
 
-Version **0.10.0-beta.8**. [Release notes](releases/0.10.0-beta.8.md). Software
+version **0.10.0-beta.12**. [Release notes](releases/0.10.0-beta.8.md). Software
 validation only; no hardware write was made while preparing this change.
 
 - Format check, **344 unit tests** (168 core / 77 app / 99 platform), **14 Guardian
