@@ -366,6 +366,14 @@ impl Curve {
     pub fn reference(&self) -> &[Point] {
         &self.original
     }
+    /// Ctrl+D: the curve loaded at the start of this editing session (saved
+    /// preset or fresh driver curve), as one undoable step. Reset instead
+    /// returns a GPU curve to the driver's factory curve.
+    pub fn revert(&mut self) -> Result<bool, String> {
+        let changed = self.replace(self.original.clone())?;
+        self.select(self.selected.min(self.points.len() - 1), false);
+        Ok(changed)
+    }
     pub fn select(&mut self, index: usize, extend: bool) {
         let index = index.min(self.points.len() - 1);
         self.selection = if extend {

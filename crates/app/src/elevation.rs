@@ -160,7 +160,66 @@ fn run_inner(
 /// Status line for a successful preset Apply: values that were left at their
 /// original are named, translated; raw technical reasons stay in the journal.
 pub fn applied_status(record: &serde_json::Value) -> String {
-    let skipped: Vec<String> = record["result"]["Ok"]["skipped"]
+    let skipped = skipped_names(record);
+    let fan_requested = record["cooling"]["state"] == "requested";
+    // Confirmed, partially applied, then what was only requested or replaced.
+    let mut status = if fan_requested && skipped.is_empty() {
+        t("fan_profile.controls_and_request").into()
+    } else if skipped.is_empty() {
+        t("preset.applied").into()
+    } else {
+        tf("preset.applied_except", &[&skipped.join("; ")])
+    };
+    let mut add = |text: String| {
+        status.push(' ');
+        status.push_str(&text);
+    };
+    if fan_requested && !skipped.is_empty() {
+        add(t("fan_profile.requested").into());
+    }
+    let prelude: Vec<String> = record["prelude_failed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str())
+        .map(crate::i18n::error_message)
+        .collect();
+    if !prelude.is_empty() {
+        add(tf("preset.prelude_failed", &[&prelude.join("; ")]));
+    }
+    if let Some(mode) = record["mode_requested"].as_str() {
+        add(tf("preset.mode_requested", &[&t(&format!("mode.{mode}"))]));
+    }
+    if record["unconfirmed"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        add(t("preset.applied_unconfirmed").into());
+    }
+    let overridden: Vec<String> = record["overridden"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str())
+        .filter_map(|key| serde_json::from_value(key.into()).ok())
+        .map(|feature: omen_core::features::Feature| t(&format!("field.{feature:?}")).to_owned())
+        .collect();
+    if !overridden.is_empty() {
+        add(tf("preset.overridden", &[&overridden.join(", ")]));
+    }
+    status
+}
+/// Status after Save or sign-in approval that first applied the preset: the
+/// values left at their original stay named instead of a plain success.
+pub fn startup_status(applied: &serde_json::Value, done: &str) -> String {
+    if skipped_names(applied).is_empty() {
+        done.to_owned()
+    } else {
+        format!("{} {done}", applied_status(applied))
+    }
+}
+fn skipped_names(record: &serde_json::Value) -> Vec<String> {
+    record["result"]["Ok"]["skipped"]
         .as_array()
         .into_iter()
         .flatten()
@@ -180,22 +239,7 @@ pub fn applied_status(record: &serde_json::Value) -> String {
                     )
             }
         })
-        .collect();
-    let mut status = if record["cooling"]["state"] == "requested" && skipped.is_empty() {
-        t("fan_profile.controls_and_request").into()
-    } else if skipped.is_empty() {
-        t("preset.applied").into()
-    } else {
-        tf("preset.applied_except", &[&skipped.join("; ")])
-    };
-    if record["unconfirmed"]
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        status.push(' ');
-        status.push_str(t("preset.applied_unconfirmed"));
-    }
-    status
+        .collect()
 }
 pub fn restored_status(record: &serde_json::Value) -> String {
     if record["cooling_preferences_restored"] == true {

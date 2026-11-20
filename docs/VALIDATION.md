@@ -1,9 +1,35 @@
 # Validation
 
-Current software summary updated **17 November 2026**, version **0.10.0-beta.7**, Windows x64 / Rust 1.99.0. Source: preserved beta.6 work plus preset/range/cooling/lighting refinement, identified by the release tag and build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **20 November 2026**, version **0.10.0-beta.8**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
+## Apply reliability, Unleashed PPT and curve editor — 20 November 2026
+
+Version **0.10.0-beta.8**. [Release notes](releases/0.10.0-beta.8.md). Software
+validation only; no hardware write was made while preparing this change.
+
+- Format check, **344 unit tests** (168 core / 77 app / 99 platform), **14 Guardian
+  process scenarios**, all-target Clippy with `-D warnings` and a locked release
+  build passed. One manual timing test remains ignored.
+- Root cause of the reported "Fast-Limit (PPT) … Firmware hält 80 W" dialog: the
+  Apply of "Mein preset" completed, then sign-in approval re-verified every
+  requested value and failed on PPT, which the firmware had taken back to 80 W.
+  Approval now accepts a value that reads back as its captured original.
+- New regressions: late firmware revert skips only that value; Keep preset gives
+  up after three rewrites until a new Apply and ignores an Apply from an earlier
+  boot; event pacing (5 s for 60 s after a trigger, otherwise 30 s); curve point
+  picking, group drag as one undo step, Shift band selection, Escape without
+  history and the key table.
+- Evidence for the Unleashed PPT reset and its scope: [8E35](models/8e35.md).
+  CPU Tctl: the 11:43 Apply captured an 85 °C original from PM cell 10 (no write
+  needed); no drift was logged afterwards; observed changes to 100 °C match cold
+  boots (stock limit). No measured Tctl reached the limit, so enforcement under
+  load remains unproven.
+- Not performed: mouse run of the Slint curve editor (screen access declined;
+  Python/Pillow for `test-slint-ui.py` absent) and the hardware acceptance runs
+  (successful Apply with readback, real failure, two consecutive Applies, Restore).
+  They need the installed build and UAC approvals on the device.
 ## Preset editing, cooling requests and lighting — 17 November 2026
 
 Normal executable: **15,934,976 bytes**, SHA-256

@@ -642,9 +642,17 @@ pub fn apply_hp_mode(
                 &[&after.custom_tgp_enabled, &after.ppab_enabled],
             ));
         }
-        let (limits, cpu_limits_read_error) = match super::cpu_tuning::hp_limits_w(inventory) {
-            Ok(limits) => (Some(limits), None),
-            Err(error) => (None, Some(error)),
+        // The firmware hands PL1 to the SMU with a delay (measured 30 October
+        // 2026, see write_hp_cpu_pl1): poll instead of judging one early read.
+        let start = std::time::Instant::now();
+        let (limits, cpu_limits_read_error) = loop {
+            match super::cpu_tuning::hp_limits_w(inventory) {
+                Ok((_, slow))
+                    if slow != i64::from(plan.pl1_w())
+                        && start.elapsed() < std::time::Duration::from_secs(6) => {}
+                Ok(limits) => break (Some(limits), None),
+                Err(error) => break (None, Some(error)),
+            }
         };
         if let Some((_, slow)) = limits {
             let pl1 = i64::from(plan.pl1_w());

@@ -284,23 +284,43 @@ pub(crate) fn worker(
                     let message = match startup {
                         Some(true) => {
                             let mut controller = Controller::new(true, None)?;
+                            // The preset is already saved: any later failure is
+                            // reported with the reloaded view, never as a lost save.
                             if !transaction::plan(&profile, &mut controller, true).applicable {
-                                return Err(t("preset.startup_blocked").into());
+                                format!("{} {}", t("preset.saved"), t("preset.startup_blocked"))
+                            } else {
+                                match elevation::run_serial(Some(&profile.id), Action::Replace) {
+                                    Err(error) => tf(
+                                        "preset.saved_not_applied",
+                                        &[&crate::i18n::error_message(&error)],
+                                    ),
+                                    Ok(record) => match elevation::run_serial(
+                                        Some(&profile.id),
+                                        Action::Startup,
+                                    ) {
+                                        Ok(_) => elevation::startup_status(
+                                            &record,
+                                            t("preset.saved_startup"),
+                                        ),
+                                        Err(error) => format!(
+                                            "{} {}",
+                                            elevation::applied_status(&record),
+                                            tf(
+                                                "preset.startup_not_enabled",
+                                                &[&crate::i18n::error_message(&error)]
+                                            )
+                                        ),
+                                    },
+                                }
                             }
-                            elevation::run_serial(Some(&profile.id), Action::Replace)?;
-                            elevation::run(Some(&profile.id), Action::Startup, || false)?;
-                            t("preset.saved_startup")
                         }
                         Some(false) => {
                             disable_selected_startup(&store, &profile.id)?;
-                            t("preset.saved")
+                            t("preset.saved").into()
                         }
-                        None => t("preset.saved"),
+                        None => t("preset.saved").into(),
                     };
-                    Ok(Update::View(
-                        Box::new(load(Some(&profile.id))?),
-                        message.into(),
-                    ))
+                    Ok(Update::View(Box::new(load(Some(&profile.id))?), message))
                 }
                 Request::Apply(id) => {
                     let record = elevation::run(Some(&id), Action::Apply, || false)?;
@@ -324,32 +344,35 @@ pub(crate) fn worker(
                     ))
                 }
                 Request::Startup(id, enabled) => {
-                    if enabled {
+                    let message = if enabled {
                         // Not applied in this exact revision yet: apply it first.
                         let store = ProfileStore::user_data()?;
                         omen_core::fan_profile::startup_allowed(&store.load(&id)?, true)?;
-                        if store.startup_eligibility(&id).is_err() {
+                        let record = if store.startup_eligibility(&id).is_err() {
                             let mut controller = Controller::new(true, None)?;
                             if !transaction::plan(&store.load(&id)?, &mut controller, true)
                                 .applicable
                             {
                                 return Err(t("preset.startup_blocked").into());
                             }
-                            elevation::run_serial(Some(&id), Action::Replace)?;
+                            Some(elevation::run_serial(Some(&id), Action::Replace)?)
+                        } else {
+                            None
+                        };
+                        // The installer step can exceed the 45-second bound;
+                        // wait for the helper's real end instead.
+                        elevation::run_serial(Some(&id), Action::Startup)?;
+                        match record {
+                            Some(record) => {
+                                elevation::startup_status(&record, t("preset.startup_on"))
+                            }
+                            None => t("preset.startup_on").into(),
                         }
-                        elevation::run(Some(&id), Action::Startup, || false)?;
                     } else {
                         disable_selected_startup(&ProfileStore::user_data()?, &id)?;
-                    }
-                    Ok(Update::View(
-                        Box::new(load(Some(&id))?),
-                        if enabled {
-                            t("preset.startup_on")
-                        } else {
-                            t("preset.startup_off")
-                        }
-                        .into(),
-                    ))
+                        t("preset.startup_off").into()
+                    };
+                    Ok(Update::View(Box::new(load(Some(&id))?), message))
                 }
                 Request::Stop | Request::List => unreachable!(),
             }

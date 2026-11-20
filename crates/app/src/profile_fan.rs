@@ -98,7 +98,13 @@ pub fn finish(
     };
     let expected = omen_core::fan_profile::split(profile).map(|p| p.direct.effective().settings);
     let checked = expected.and_then(|targets| {
-        if !result.skipped.is_empty() || result.verified != targets {
+        // A skipped value no longer withdraws the whole preset or its fan
+        // request (user rule); every target must still be accounted for.
+        let accounted = |target: &omen_core::profiles::Setting| {
+            result.verified.contains(target)
+                || result.skipped.iter().any(|s| s.feature == target.feature)
+        };
+        if !targets.iter().all(accounted) {
             return Err(msg("fan_profile.err.direct_partial", &[]));
         }
         store.commit_fan_policy(request)

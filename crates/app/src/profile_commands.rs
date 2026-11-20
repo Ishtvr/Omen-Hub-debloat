@@ -167,22 +167,31 @@ fn gpu_qualification(store: &mut ProfileStore, command: &str) -> Result<(), Stri
 fn apply_hp_prelude(
     profile: &omen_core::profiles::PerformanceProfile,
     inventory: &omen_core::Inventory,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     use omen_core::hp_mode::HpMode;
     // Validate even the unconfirmed shared-budget request before any mode SET.
+    // An invalid value still refuses the preset; a firmware step that does not
+    // confirm is named and the remaining values are applied (user rule).
     let shared_budget = HpMode::shared_budget_of_profile(profile)?;
     let ac = omen_platform::power_status().ac_connected == Some(true);
+    let mut failed = vec![];
     if let Some(mode) = HpMode::of_preset(profile, ac) {
-        omen_platform::apply_hp_mode(inventory, mode)?;
+        if let Err(error) = omen_platform::apply_hp_mode(inventory, mode) {
+            failed.push(error);
+        }
         // The firmware keeps the mode's PL1; make it the preset's Slow PPT.
-        if let Some(watts) = HpMode::cpu_pl1_of_profile(profile) {
-            omen_platform::write_hp_cpu_pl1(inventory, watts)?;
+        if let Some(watts) = HpMode::cpu_pl1_of_profile(profile)
+            && let Err(error) = omen_platform::write_hp_cpu_pl1(inventory, watts)
+        {
+            failed.push(error);
         }
     }
-    if let Some(watts) = shared_budget {
-        omen_platform::write_hp_shared_budget(inventory, watts)?;
+    if let Some(watts) = shared_budget
+        && let Err(error) = omen_platform::write_hp_shared_budget(inventory, watts)
+    {
+        failed.push(error);
     }
-    Ok(())
+    Ok(failed)
 }
 
 fn prepare_apply(
@@ -647,13 +656,16 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             )?;
             let cooling_request =
                 crate::profile_fan::prepare(&profile, &store, controller.inventory())?;
-            if let Err(error) = apply_hp_prelude(&profile, controller.inventory()) {
-                return Err(crate::profile_fan::prelude_failed(
-                    &store,
-                    cooling_request.as_ref(),
-                    error,
-                ));
-            }
+            let prelude_failed = match apply_hp_prelude(&profile, controller.inventory()) {
+                Ok(failed) => failed,
+                Err(error) => {
+                    return Err(crate::profile_fan::prelude_failed(
+                        &store,
+                        cooling_request.as_ref(),
+                        error,
+                    ));
+                }
+            };
             let tracing = args[0] == "profile-apply-trace";
             if tracing {
                 controller.trace_cpu_readbacks();
@@ -680,7 +692,23 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 .iter()
                 .filter(|s| s.feature == Feature::HpSharedPowerMw)
                 .collect();
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"cooling":cooling,"result":result}))?;
+            // The HP thermal mode (0x1A) has no GET either: requested only.
+            let mode = omen_core::hp_mode::HpMode::of_settings(
+                &profile.settings,
+                omen_platform::power_status().ac_connected == Some(true),
+            )
+            .map(|mode| mode.name());
+            // Settings a documented precedence rule replaced (never written).
+            let effective = profile.effective().settings;
+            let overridden: Vec<_> = profile
+                .settings
+                .iter()
+                .filter(|s| !effective.iter().any(|e| e.feature == s.feature))
+                .map(|s| s.feature)
+                .collect();
+            // Keep preset holds only an Apply made since the current boot.
+            let boot = omen_platform::boot_unix_s();
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"mode_requested":mode,"overridden":overridden,"prelude_failed":prelude_failed,"boot_unix_s":boot,"cooling":cooling,"result":result}))?;
             if tracing {
                 print(
                     &serde_json::json!({"result":result,"cpu_readbacks":controller.cpu_readback_observations()}),
@@ -779,6 +807,9 @@ fn run_inner(args: &[String]) -> Result<(), String> {
         Some("profile-startup-apply") if args.len() == 1 => {
             let _lease = ControlLease::acquire_foreground()?;
             let selection_at_start = store.startup()?;
+            // Approval ends for a changed preset, device or binding; a firmware
+            // step or value that fails after those checks does not revoke it.
+            let mut device_checked = false;
             let result = (|| {
                 let Some(profile) = store.startup_profile()? else {
                     return Ok(None);
@@ -787,12 +818,13 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
                 let mut controller = prepare_apply(&profile, &mut store, true, false)?;
+                device_checked = true;
                 apply_hp_prelude(&profile, controller.inventory())?;
                 transaction::apply(&profile, &digest, &mut controller, &mut store, true)
                     .map(Some)
                     .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
             })();
-            if result.is_err() {
+            if result.is_err() && !device_checked {
                 store.disable_startup()?;
             }
             store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"result":result}))?;

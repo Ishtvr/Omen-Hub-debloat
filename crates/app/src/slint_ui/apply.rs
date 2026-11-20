@@ -121,6 +121,8 @@ impl Handle {
                     s.queue.take().expect("Pending latest intent")
                 };
                 let result = execute(&target);
+                // A finished Apply or mode switch starts a close "keep preset" check.
+                crate::preset_hold::nudge();
                 if result.is_ok()
                     && shared
                         .0

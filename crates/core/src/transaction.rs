@@ -678,18 +678,50 @@ fn apply_inner<B: Backend>(
     // Correcting a later target (or restoring a skipped one) can invalidate
     // an earlier observation. This final pass is read-only and bounded: no
     // mutually coupled setters can produce a false successful Apply.
-    let verified: Vec<_> = profile
+    let mut verified: Vec<_> = profile
         .settings
         .iter()
         .filter(|setting| !skipped.iter().any(|s| s.feature == setting.feature))
         .cloned()
         .collect();
-    let observed = match backend.verify_targets(&verified) {
-        Ok(observed) => observed,
-        Err(error) => return Err(rollback(backend, journal, &original, &attempted, error)),
+    let observed = if lenient {
+        // Firmware can take a value back after it was confirmed (measured:
+        // PPT in Unleashed). That value alone is skipped and returned to its
+        // original as far as possible; every other value stays applied.
+        let mut observed = vec![];
+        for setting in &verified {
+            match backend.verify_target(setting) {
+                Ok(value) => observed.push(Setting {
+                    feature: setting.feature,
+                    value,
+                }),
+                Err(reason) => {
+                    if let Some(index) = profile
+                        .settings
+                        .iter()
+                        .position(|s| s.feature == setting.feature)
+                    {
+                        let _ = restore_one(backend, &original[index]);
+                    }
+                    skipped.push(Skipped {
+                        feature: setting.feature,
+                        reason,
+                    });
+                }
+            }
+        }
+        verified.retain(|setting| !skipped.iter().any(|s| s.feature == setting.feature));
+        observed
+    } else {
+        match backend.verify_targets(&verified) {
+            Ok(observed) => observed,
+            Err(error) => return Err(rollback(backend, journal, &original, &attempted, error)),
+        }
     };
+    // A skipped value stays at its original in a validation trial. A normal
+    // Apply only reports it: the journal keeps the original for Restore.
     for saved in &original {
-        if skipped.iter().any(|s| s.feature == saved.feature) {
+        if !lenient && skipped.iter().any(|s| s.feature == saved.feature) {
             if let Err(error) = backend.verify_captured(saved) {
                 return Err(rollback(backend, journal, &original, &attempted, error));
             }
@@ -1183,8 +1215,19 @@ mod tests {
     fn corrective_writes_cannot_commit_stale_earlier_readbacks() {
         let (profile, mut backend, mut journal) = fixture();
         backend.couple_both = true;
-        assert!(apply(&profile, "coupled", &mut backend, &mut journal, false).is_err());
-        assert_ne!(journal.completed, Some(Completion::Applied));
+        // A value that cannot stay is skipped (user rule): the Apply commits
+        // only values whose final readback still matches.
+        let applied = apply(&profile, "coupled", &mut backend, &mut journal, false).unwrap();
+        assert!(!applied.skipped.is_empty());
+        for setting in &applied.verified {
+            assert_eq!(backend.values.get(&setting.feature), Some(&setting.value));
+        }
+        assert!(
+            applied
+                .verified
+                .iter()
+                .all(|v| !applied.skipped.iter().any(|s| s.feature == v.feature))
+        );
         // This is a bounded correction, never an endless fight with firmware.
         assert!(backend.writes.len() <= 8);
     }

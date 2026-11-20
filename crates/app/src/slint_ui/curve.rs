@@ -35,9 +35,10 @@ fn gpu_editor(state: omen_core::vf::VfState, value: Option<&Value>) -> Result<Cu
 pub(super) struct Editor {
     pub curve: Curve,
     view: Viewport,
-    gesture: Option<(Vec<Point>, Point, Modifiers)>,
+    gesture: Option<Gesture>,
     selection_mode: bool,
-    range_gesture: Option<Point>,
+    /// Unused wheel delta below one zoom/pan step.
+    wheel: f32,
 }
 impl Host {
     pub(super) fn gpu_curve_dirty(&self) -> bool {
@@ -116,7 +117,7 @@ impl Host {
             view,
             gesture: None,
             selection_mode: false,
-            range_gesture: None,
+            wheel: 0.0,
         });
         if let Some(w) = self.window.upgrade() {
             let data = w.global::<Workbench>();
@@ -219,6 +220,7 @@ impl Host {
             ))
             .into(),
         );
+        d.set_curve_readout(readout(editor).into());
         d.set_can_undo(curve.can_undo());
         d.set_can_redo(curve.can_redo());
         let (xunit, yunit) = curve.kind.units();
@@ -291,6 +293,8 @@ impl Host {
             let Some(e) = current.as_mut() else {
                 return Ok(());
             };
+            // A button during a drag completes the drag first (old UI).
+            e.finish_gesture(false);
             match action {
                 "undo" => {
                     e.curve.undo();
@@ -316,14 +320,12 @@ impl Host {
                 }
                 "selection-mode" => {
                     e.selection_mode = !e.selection_mode;
-                    e.range_gesture = None;
                 }
                 "select-all" => {
                     e.curve.select_all();
                 }
                 "clear-selection" => {
                     e.curve.clear_selection();
-                    e.range_gesture = None;
                 }
                 "select-right" => {
                     let from = e.curve.points[e.curve.selected].x;
@@ -378,135 +380,336 @@ impl Host {
         kind: i32,
         x: f32,
         y: f32,
-        shift: bool,
-        ctrl: bool,
-        alt: bool,
+        plot: (f32, f32),
+        modifiers: Modifiers,
     ) {
+        let mut range = None;
         let result = (|| -> Result<(), String> {
             let mut current = self.curve.borrow_mut();
             let Some(e) = current.as_mut() else {
                 return Ok(());
             };
-            let point = Point {
-                x: (e.view.lo.x as f32 + x.clamp(0., 1.) * (e.view.hi.x - e.view.lo.x) as f32)
-                    .round() as i32,
-                y: (e.view.hi.y as f32 - y.clamp(0., 1.) * (e.view.hi.y - e.view.lo.y) as f32)
-                    .round() as i32,
-            };
-            if kind == 0 {
-                if e.curve.kind == Kind::Gpu && e.selection_mode {
-                    e.range_gesture = Some(point);
-                    e.curve.select_voltage_range(point.x, point.x);
-                } else {
-                    let index = e
-                        .curve
-                        .points
-                        .iter()
-                        .enumerate()
-                        .min_by_key(|(_, p)| (p.x - point.x).abs())
-                        .map_or(0, |(i, _)| i);
-                    e.curve.select(index, ctrl);
-                    e.curve.begin_gesture();
-                    e.gesture = Some((
-                        e.curve.points.clone(),
-                        point,
-                        Modifiers { shift, ctrl, alt },
-                    ));
+            let point = e.view.data(x, y);
+            match kind {
+                0 => {
+                    e.finish_gesture(true);
+                    e.gesture = press(e, x, y, plot, modifiers);
                 }
-            } else if kind == 1 || kind == 2 {
-                if let Some(start) = e.range_gesture {
-                    e.curve.select_voltage_range(start.x, point.x);
-                    if kind == 2
-                        && let Some(w) = self.window.upgrade()
-                    {
-                        let d = w.global::<Workbench>();
-                        d.set_range_from(start.x.min(point.x).to_string().into());
-                        d.set_range_to(start.x.max(point.x).to_string().into());
-                    }
-                } else if let Some((original, start, m)) = &e.gesture {
-                    if e.curve.kind == Kind::Gpu && (m.shift || m.alt || m.ctrl) {
-                        let mode = if m.ctrl {
-                            DragMode::Tilt
-                        } else if m.shift {
-                            DragMode::ReferenceOffset
-                        } else {
-                            DragMode::CurrentOffset
-                        };
-                        e.curve.drag_gpu(original, mode, point.y - start.y)?;
-                    } else {
-                        let selected = e.curve.selected;
-                        let original = original[selected];
-                        e.curve.set(
-                            selected,
-                            Point {
-                                x: if e.curve.kind == Kind::Gpu {
-                                    original.x
+                1 | 2 => {
+                    if let Some(gesture) = &e.gesture {
+                        match gesture {
+                            Gesture::Band { x: start } => {
+                                e.curve.select_voltage_range(*start, point.x);
+                                if kind == 2 {
+                                    range = Some((*start.min(&point.x), *start.max(&point.x)));
+                                }
+                            }
+                            Gesture::Point { start, down, mode } => {
+                                if e.curve.kind == Kind::Gpu {
+                                    e.curve.drag_gpu(start, *mode, point.y - down.y)?;
                                 } else {
-                                    original.x + point.x - start.x
-                                },
-                                y: original.y + point.y - start.y,
-                            },
-                            true,
-                        )?;
+                                    let selected = e.curve.selected;
+                                    let from = start[selected];
+                                    e.curve.set(
+                                        selected,
+                                        Point {
+                                            x: from.x + point.x - down.x,
+                                            y: from.y + point.y - down.y,
+                                        },
+                                        true,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    if kind == 2 {
+                        e.finish_gesture(false);
                     }
                 }
-                if kind == 2 {
-                    e.curve.end_gesture();
-                    e.gesture = None;
-                    e.range_gesture = None;
+                3 => e.finish_gesture(true),
+                5 => {
+                    // Afterburner/old UI: double-click clears the range; on a
+                    // fan curve, free chart space gains a point there.
+                    e.finish_gesture(true);
+                    if e.curve.kind != Kind::Gpu && hit(e, x, y, plot).is_none() {
+                        e.curve.insert_at(point)?;
+                    } else {
+                        e.curve.clear_selection();
+                    }
                 }
-            } else if kind == 3 {
-                e.curve.cancel_gesture();
-                e.gesture = None;
-                e.range_gesture = None;
+                _ => {}
             }
             Ok(())
         })();
         if let Err(e) = result {
             self.status(&crate::i18n::error_message(&e), true);
         }
+        if let (Some((from, to)), Some(w)) = (range, self.window.upgrade()) {
+            let d = w.global::<Workbench>();
+            d.set_range_from(from.to_string().into());
+            d.set_range_to(to.to_string().into());
+        }
+        self.draw_curve();
+    }
+    /// Wheel: zoom X around the pointer, Ctrl zooms Y, Shift (or a sideways
+    /// touchpad swipe) pans. One step per notch, not per wheel message.
+    pub(super) fn chart_wheel(&self, dx: f32, dy: f32, x: f32, y: f32, shift: bool, ctrl: bool) {
+        {
+            let mut current = self.curve.borrow_mut();
+            let Some(e) = current.as_mut() else {
+                return;
+            };
+            if e.gesture.is_some() {
+                return;
+            }
+            let sideways = dx.abs() > dy.abs();
+            e.wheel += if sideways { dx } else { dy };
+            let steps = (e.wheel / WHEEL_STEP).trunc();
+            e.wheel -= steps * WHEEL_STEP;
+            let at = e.view.data(x, y);
+            for _ in 0..steps.abs() as u32 {
+                let inward = steps > 0.0;
+                if shift || sideways {
+                    e.view.pan(&e.curve, if inward { -1 } else { 1 });
+                } else {
+                    e.view.zoom(&e.curve, at, ctrl, inward);
+                }
+            }
+            if steps == 0.0 {
+                return;
+            }
+        }
         self.draw_curve();
     }
     pub(super) fn chart_key(&self, text: &str, shift: bool, ctrl: bool, alt: bool) -> bool {
-        let key = match text {
-            "\u{f702}" => Some(Key::Left),
-            "\u{f703}" => Some(Key::Right),
-            "\u{f700}" => Some(Key::Up),
-            "\u{f701}" => Some(Key::Down),
-            "\u{f729}" => Some(Key::Home),
-            "\u{f72b}" => Some(Key::End),
-            "\u{1b}" => Some(Key::Escape),
-            "z" | "Z" if ctrl => Some(if shift { Key::Redo } else { Key::Undo }),
-            "y" | "Y" if ctrl => Some(Key::Redo),
-            "a" | "A" if ctrl => Some(Key::All),
-            "l" | "L" => Some(Key::Flatten),
-            _ => None,
+        let Some(command) = decode_key(text, shift, ctrl) else {
+            return false;
         };
-        if let Some(key) = key {
-            if let Some(e) = self.curve.borrow_mut().as_mut() {
-                if matches!(key, Key::Escape) {
-                    e.range_gesture = None;
+        let modifiers = Modifiers { shift, ctrl, alt };
+        let mut follow = None;
+        let mut error = None;
+        if let Some(e) = self.curve.borrow_mut().as_mut() {
+            // During a drag only Escape counts: it cancels the drag.
+            if e.gesture.is_some() {
+                if matches!(command, Command::Edit(Key::Escape)) {
+                    e.finish_gesture(true);
                 }
-                let result = if matches!(key, Key::Flatten)
-                    && e.selection_mode
-                    && e.curve.selection().is_none()
+            } else if let Err(err) = match command {
+                Command::Edit(Key::Flatten)
+                    if e.selection_mode && e.curve.selection().is_none() =>
                 {
                     Err(omen_core::message::msg("curve.err.selection_required", &[]))
-                } else {
-                    curve_input::edit(&mut e.curve, key, Modifiers { shift, ctrl, alt })
-                };
-                if let Err(err) = result {
-                    self.status(&crate::i18n::error_message(&err), true);
+                }
+                Command::Edit(key) => curve_input::edit(&mut e.curve, key, modifiers).map(|_| ()),
+                Command::Revert => e.curve.revert().map(|_| ()),
+                Command::Zoom { inward } => {
+                    let at = e.curve.points[e.curve.selected];
+                    e.view.zoom(&e.curve, at, ctrl, inward);
+                    Ok(())
+                }
+                Command::Fit => {
+                    e.view = Viewport::fit(&e.curve);
+                    Ok(())
+                }
+                Command::EditValue | Command::Save | Command::Help => {
+                    follow = Some(command);
+                    Ok(())
+                }
+            } {
+                error = Some(err);
+            }
+        }
+        if let Some(err) = error {
+            self.status(&crate::i18n::error_message(&err), true);
+        }
+        match follow {
+            Some(Command::EditValue) => {
+                if let Some(w) = self.window.upgrade() {
+                    w.invoke_edit_curve_value();
                 }
             }
-            self.draw_curve();
-            true
-        } else {
-            false
+            Some(Command::Save) => self.curve_action("save"),
+            Some(Command::Help) => self.curve_help(),
+            _ => self.draw_curve(),
         }
+        true
+    }
+    fn curve_help(&self) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let gpu = self
+            .curve
+            .borrow()
+            .as_ref()
+            .is_some_and(|e| e.curve.kind == Kind::Gpu);
+        let d = w.global::<Workbench>();
+        self.notice_timer.stop();
+        d.set_notice_visible(false);
+        d.set_notice_failed(false);
+        d.set_notice_title(t("curve.help_title").into());
+        d.set_notice_text(
+            t(if gpu {
+                "curve.help_draft"
+            } else {
+                "curve.help"
+            })
+            .replace("\r\n", "\n")
+            .into(),
+        );
+        d.set_confirm_kind(5);
     }
 }
 
+/// While a point is dragged: its anchor, value and change from the drag start.
+fn readout(e: &Editor) -> String {
+    let Some(Gesture::Point { start, .. }) = &e.gesture else {
+        return String::new();
+    };
+    let i = e.curve.selected;
+    let (Some(p), Some(from)) = (e.curve.points.get(i), start.get(i)) else {
+        return String::new();
+    };
+    let (xunit, yunit) = e.curve.kind.units();
+    format!("{} {xunit} · {} {yunit} ({:+})", p.x, p.y, p.y - from.y)
+}
+/// Slint reports a classic wheel notch as 120 logical pixels on Windows;
+/// touchpads deliver smaller deltas that accumulate to the same step.
+const WHEEL_STEP: f32 = 120.0;
+/// Pick radius around a visible point, in logical pixels (old native UI).
+const HIT_RADIUS: f32 = 15.0;
+
+pub(super) enum Gesture {
+    /// Dragging a point; a selected band moves with it as one group.
+    Point {
+        start: Vec<Point>,
+        down: Point,
+        mode: DragMode,
+    },
+    /// Shift + drag on free GPU chart space (or range mode) selects anchors.
+    Band { x: i32 },
+}
+impl Editor {
+    /// Ends a drag: one undo step, or none when cancelled.
+    fn finish_gesture(&mut self, cancel: bool) {
+        if self.gesture.take().is_some() {
+            if cancel {
+                self.curve.cancel_gesture();
+            } else {
+                self.curve.end_gesture();
+            }
+        }
+    }
+}
+trait ViewData {
+    fn data(&self, x: f32, y: f32) -> Point;
+}
+impl ViewData for Viewport {
+    fn data(&self, x: f32, y: f32) -> Point {
+        Point {
+            x: (self.lo.x as f32 + x.clamp(0., 1.) * (self.hi.x - self.lo.x) as f32).round() as i32,
+            y: (self.hi.y as f32 - y.clamp(0., 1.) * (self.hi.y - self.lo.y) as f32).round() as i32,
+        }
+    }
+}
+/// The visible point within the pick radius of the pointer (x/y in 0..1).
+fn hit(e: &Editor, x: f32, y: f32, (w, h): (f32, f32)) -> Option<usize> {
+    let v = e.view;
+    let sx = (v.hi.x - v.lo.x).max(1) as f32;
+    let sy = (v.hi.y - v.lo.y).max(1) as f32;
+    e.curve
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| (v.lo.x..=v.hi.x).contains(&p.x) && (v.lo.y..=v.hi.y).contains(&p.y))
+        .map(|(i, p)| {
+            let px = (p.x - v.lo.x) as f32 / sx * w;
+            let py = (1.0 - (p.y - v.lo.y) as f32 / sy) * h;
+            (i, (px - x * w).powi(2) + (py - y * h).powi(2))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, d)| *d <= HIT_RADIUS * HIT_RADIUS)
+        .map(|(i, _)| i)
+}
+/// Mouse down, as in the old native editor: a point starts a drag (Ctrl tilt,
+/// Shift reference offset, Alt current offset); a point inside the selected
+/// band keeps the band so it moves as a group; Shift on free GPU space or
+/// range mode starts a band; a plain click on free space clears the band.
+fn press(e: &mut Editor, x: f32, y: f32, plot: (f32, f32), m: Modifiers) -> Option<Gesture> {
+    let gpu = e.curve.kind == Kind::Gpu;
+    let point = e.view.data(x, y);
+    if gpu && e.selection_mode {
+        e.curve.select_voltage_range(point.x, point.x);
+        return Some(Gesture::Band { x: point.x });
+    }
+    if let Some(index) = hit(e, x, y, plot) {
+        if e.curve
+            .selection()
+            .is_some_and(|(a, b)| (a..=b).contains(&index))
+        {
+            e.curve.selected = index;
+        } else {
+            e.curve.select(index, false);
+        }
+        e.curve.begin_gesture();
+        return Some(Gesture::Point {
+            start: e.curve.points.clone(),
+            down: point,
+            mode: if m.ctrl {
+                DragMode::Tilt
+            } else if m.shift {
+                DragMode::ReferenceOffset
+            } else if m.alt {
+                DragMode::CurrentOffset
+            } else {
+                DragMode::Point
+            },
+        });
+    }
+    if gpu && m.shift {
+        e.curve.select_voltage_range(point.x, point.x);
+        return Some(Gesture::Band { x: point.x });
+    }
+    e.curve.clear_selection();
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Command {
+    Edit(Key),
+    Revert,
+    Zoom { inward: bool },
+    Fit,
+    EditValue,
+    Save,
+    Help,
+}
+/// Slint key text to editor commands (docs/CURVE_EDITOR.md).
+fn decode_key(text: &str, shift: bool, ctrl: bool) -> Option<Command> {
+    Some(match text {
+        "\u{f702}" => Command::Edit(Key::Left),
+        "\u{f703}" => Command::Edit(Key::Right),
+        "\u{f700}" => Command::Edit(Key::Up),
+        "\u{f701}" => Command::Edit(Key::Down),
+        "\u{f729}" => Command::Edit(Key::Home),
+        "\u{f72b}" => Command::Edit(Key::End),
+        "\u{1b}" => Command::Edit(Key::Escape),
+        "\u{f727}" => Command::Edit(Key::Insert),
+        "\u{7f}" => Command::Edit(Key::Delete),
+        "\u{f704}" => Command::Help,
+        "\n" | "\r" if shift => Command::Edit(Key::Flatten),
+        "\n" | "\r" => Command::EditValue,
+        "z" | "Z" if ctrl => Command::Edit(if shift { Key::Redo } else { Key::Undo }),
+        "y" | "Y" if ctrl => Command::Edit(Key::Redo),
+        "a" | "A" if ctrl => Command::Edit(Key::All),
+        "d" | "D" if ctrl => Command::Revert,
+        "s" | "S" if ctrl => Command::Save,
+        "0" if ctrl => Command::Fit,
+        "+" | "=" => Command::Zoom { inward: true },
+        "-" => Command::Zoom { inward: false },
+        _ => return None,
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,6 +761,145 @@ mod tests {
         }]);
         assert!(gpu_editor(state, Some(&partial)).is_err());
     }
+    fn editor() -> Editor {
+        let state = omen_core::vf::VfState {
+            nodes: (0..6)
+                .map(|i| omen_core::vf::VfNode {
+                    index: i,
+                    voltage_uv: 800_000 + u32::from(i) * 50_000,
+                    frequency_khz: (1000 + u32::from(i) * 100) * 1000,
+                    delta_khz: 0,
+                })
+                .collect(),
+            minimum_delta_khz: -500_000,
+            maximum_delta_khz: 500_000,
+            first_index: 0,
+            last_index: 5,
+        };
+        let curve = gpu_editor(state, None).unwrap();
+        let view = Viewport::fit(&curve);
+        Editor {
+            curve,
+            view,
+            gesture: None,
+            selection_mode: false,
+            wheel: 0.0,
+        }
+    }
+    /// Normalized position of point `i` in the editor's viewport.
+    fn at(e: &Editor, i: usize) -> (f32, f32) {
+        let v = e.view;
+        let p = e.curve.points[i];
+        (
+            (p.x - v.lo.x) as f32 / (v.hi.x - v.lo.x) as f32,
+            1.0 - (p.y - v.lo.y) as f32 / (v.hi.y - v.lo.y) as f32,
+        )
+    }
+    const PLOT: (f32, f32) = (600.0, 300.0);
+    fn drag(e: &mut Editor, from: (f32, f32), to: (f32, f32), m: Modifiers) {
+        e.gesture = press(e, from.0, from.1, PLOT, m);
+        let point = e.view.data(to.0, to.1);
+        match &e.gesture {
+            Some(Gesture::Point { start, down, mode }) => {
+                let (start, down, mode) = (start.clone(), *down, *mode);
+                let _ = e.curve.drag_gpu(&start, mode, point.y - down.y);
+            }
+            Some(Gesture::Band { x }) => {
+                let x = *x;
+                e.curve.select_voltage_range(x, point.x);
+            }
+            None => {}
+        }
+        e.finish_gesture(false);
+    }
+
+    #[test]
+    fn points_are_picked_within_the_radius_only() {
+        let e = editor();
+        let (x, y) = at(&e, 2);
+        assert_eq!(hit(&e, x, y, PLOT), Some(2));
+        assert_eq!(hit(&e, x, y + 10.0 / PLOT.1, PLOT), Some(2));
+        assert_eq!(hit(&e, x, y + 40.0 / PLOT.1, PLOT), None);
+    }
+
+    #[test]
+    fn a_selected_band_moves_as_one_group_in_one_undo_step() {
+        let mut e = editor();
+        e.curve.select_voltage_range(850, 950);
+        let before = e.curve.points.clone();
+        let (x, y) = at(&e, 2);
+        drag(&mut e, (x, y), (x, y - 0.1), Modifiers::default());
+        assert_eq!(e.curve.selection(), Some((1, 3)));
+        let moved: Vec<i32> = (0..6).map(|i| e.curve.points[i].y - before[i].y).collect();
+        assert!(moved[1] > 0 && moved[1] == moved[2] && moved[2] == moved[3]);
+        assert_eq!((moved[0], moved[4], moved[5]), (0, 0, 0));
+        assert!(e.curve.points.iter().zip(&before).all(|(a, b)| a.x == b.x));
+        assert!(e.curve.undo());
+        assert_eq!(e.curve.points, before);
+        assert!(!e.curve.can_undo());
+    }
+
+    #[test]
+    fn shift_drag_on_free_space_selects_and_a_plain_click_clears() {
+        let mut e = editor();
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        // Free space well below the curve.
+        let (x1, x4) = (at(&e, 1).0, at(&e, 4).0);
+        drag(&mut e, (x1, 0.98), (x4, 0.98), shift);
+        assert_eq!(e.curve.selection(), Some((1, 4)));
+        assert!(!e.curve.can_undo(), "Selecting creates no history");
+        assert!(press(&mut e, x1, 0.98, PLOT, Modifiers::default()).is_none());
+        assert_eq!(e.curve.selection(), None);
+    }
+
+    #[test]
+    fn escape_during_a_drag_restores_without_history() {
+        let mut e = editor();
+        let before = e.curve.points.clone();
+        let (x, y) = at(&e, 3);
+        e.gesture = press(&mut e, x, y, PLOT, Modifiers::default());
+        let Some(Gesture::Point { start, down, mode }) = &e.gesture else {
+            panic!("point drag expected")
+        };
+        let (start, down, mode) = (start.clone(), *down, *mode);
+        e.curve
+            .drag_gpu(&start, mode, 40 - down.y + down.y)
+            .unwrap();
+        assert_ne!(e.curve.points, before);
+        e.finish_gesture(true);
+        assert_eq!(e.curve.points, before);
+        assert!(!e.curve.can_undo());
+        assert!(e.gesture.is_none());
+    }
+
+    #[test]
+    fn documented_keys_decode_to_editor_commands() {
+        assert_eq!(
+            decode_key("\n", true, false),
+            Some(Command::Edit(Key::Flatten))
+        );
+        assert_eq!(decode_key("\n", false, false), Some(Command::EditValue));
+        assert_eq!(decode_key("d", false, true), Some(Command::Revert));
+        assert_eq!(decode_key("s", false, true), Some(Command::Save));
+        assert_eq!(decode_key("0", false, true), Some(Command::Fit));
+        assert_eq!(
+            decode_key("+", false, false),
+            Some(Command::Zoom { inward: true })
+        );
+        assert_eq!(
+            decode_key("-", false, true),
+            Some(Command::Zoom { inward: false })
+        );
+        assert_eq!(decode_key("\u{f704}", false, false), Some(Command::Help));
+        assert_eq!(decode_key("Z", true, true), Some(Command::Edit(Key::Redo)));
+        // Afterburner's L is a voltage lock; it is not silently a flatten here.
+        assert_eq!(decode_key("l", false, false), None);
+        assert_eq!(decode_key("0", false, false), None);
+    }
+
     #[test]
     fn connected_curve_uses_the_same_viewport_as_markers_and_input() {
         let view = Viewport {

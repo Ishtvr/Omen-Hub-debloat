@@ -105,6 +105,8 @@ export global Workbench {
     in property <bool> can-undo;
     in property <bool> can-redo;
     in property <bool> curve-selection-mode;
+    // Value and change of the dragged point, shown beside it while dragging.
+    in property <string> curve-readout;
     in property <bool> has-selection;
     in property <float> selection-low;
     in property <float> selection-high;
@@ -180,7 +182,11 @@ export global Workbench {
     callback open-curve(bool);
     callback curve-action(string);
     callback select-point(int);
-    callback chart-event(int, float, float, bool, bool, bool);
+    // kind (0 down, 1 drag, 2 up, 3 cancel, 5 double-click), x/y in 0..1,
+    // plot width/height in px, Shift, Ctrl, Alt.
+    callback chart-event(int, float, float, float, float, bool, bool, bool);
+    // Wheel delta x/y in px, pointer x/y in 0..1, Shift, Ctrl.
+    callback chart-wheel(float, float, float, float, bool, bool);
     callback chart-key(string, bool, bool, bool) -> bool;
     callback lighting-power();
     callback select-lighting-group(int);
@@ -446,21 +452,56 @@ component CurveCanvas inherits Rectangle {
             height: self.width;
             background: point.selected ? Theme.accent : Theme.ink;
         }
+        readout := Rectangle {
+            visible: Workbench.curve-readout != "" && Workbench.nodes.length > 0;
+            property <length> anchor-x: Workbench.nodes[Workbench.point-index].x * parent.width;
+            property <length> anchor-y: (1 - Workbench.nodes[Workbench.point-index].y) * parent.height;
+            width: readout-text.preferred-width + 12px;
+            height: readout-text.preferred-height + 6px;
+            x: clamp(self.anchor-x + 10px, 0px, max(0px, parent.width - self.width));
+            y: clamp(self.anchor-y - self.height - 10px, 0px, max(0px, parent.height - self.height));
+            background: Theme.control;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.accent.with-alpha(0.55);
+            readout-text := Text {
+                text: Workbench.curve-readout;
+                color: Theme.ink;
+                font-family: "Consolas";
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
         canvas-input := TouchArea {
+            mouse-cursor: crosshair;
             clicked => { chart-focus.focus(); }
             moved => {
-                if (self.pressed) { Workbench.chart-event(1, self.mouse-x / self.width, self.mouse-y / self.height, false, false, false); }
+                if (self.pressed) {
+                    Workbench.chart-event(1, self.mouse-x / self.width, self.mouse-y / self.height,
+                    self.width / 1px, self.height / 1px, false, false, false);
+                }
+            }
+            double-clicked => {
+                Workbench.chart-event(5, self.mouse-x / self.width, self.mouse-y / self.height,
+                self.width / 1px, self.height / 1px, false, false, false);
             }
             pointer-event(e) => {
                 if e.kind == PointerEventKind.cancel {
-                    Workbench.chart-event(3,0,0,false,false,false);
+                    Workbench.chart-event(3, 0, 0, self.width / 1px, self.height / 1px, false, false, false);
                 } else if (e.button == PointerEventButton.left) {
                     chart-focus.focus();
                     Workbench.chart-event(e.kind == PointerEventKind.down ? 0 : e.kind == PointerEventKind.up ? 2 : 3,
-                    self.mouse-x / self.width, self.mouse-y / self.height, e.modifiers.shift, e.modifiers.control, e.modifiers.alt);
+                    self.mouse-x / self.width, self.mouse-y / self.height, self.width / 1px, self.height / 1px,
+                    e.modifiers.shift, e.modifiers.control, e.modifiers.alt);
                 }
             }
-            scroll-event(e) => { Workbench.curve-action(e.delta-y > 0px ? "zoom-in" : "zoom-out"); return accept; }
+            scroll-event(e) => {
+                Workbench.chart-wheel(e.delta-x / 1px, e.delta-y / 1px, self.mouse-x / self.width,
+                self.mouse-y / self.height, e.modifiers.shift, e.modifiers.control);
+                return accept;
+            }
         }
 
         chart-focus := FocusScope {
@@ -550,6 +591,8 @@ component ConfirmPrompt inherits FocusScope {
 
 export component AppWindow inherits Window {
     public function focus-curve() { chart.focus(); }
+    // Enter in the chart: edit the selected point's value numerically.
+    public function edit-curve-value() { point-y.focus(); }
     callback color-picker-closed(int);
     color-picker-closed(target) => {
         if target == 0 { color-background.focus(); }
@@ -1818,6 +1861,10 @@ export component AppWindow inherits Window {
                                 accessible-label: Workbench.curve-y-label;
                                 text <=> Workbench.point-y;
                                 width: 96px;
+                                accepted => {
+                                    Workbench.curve-action("set");
+                                    chart.focus();
+                                }
                             }
 
                             Text {
@@ -1928,7 +1975,10 @@ export component AppWindow inherits Window {
     if Workbench.confirm-kind == 5: MessageDialog {
         title: Workbench.notice-title;
         text: Workbench.notice-text;
-        closed => { Workbench.close-notice-details(); notification.focus-details(); }
+        closed => {
+            Workbench.close-notice-details();
+            if Workbench.curve-open && !Workbench.notice-visible { chart.focus(); } else { notification.focus-details(); }
+        }
     }
     if Workbench.confirm-kind == 4: ColorPicker { }
     if Workbench.confirm-kind > 0 && Workbench.confirm-kind < 4: ConfirmPrompt {

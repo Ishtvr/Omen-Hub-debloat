@@ -31,15 +31,16 @@ On the reference device, all **127 actual Graphics voltage anchors** are fixed i
 
 | Gesture | Draft change |
 | --- | --- |
-| Drag a point | Move its frequency vertically, or move its selected band together |
+| Drag a point (within 15 px) | Move its frequency vertically; a point inside the selected band moves the whole band by one shared, clamped offset |
 | Shift + drag point | Offset the entire curve/band using the loaded reference shape |
 | Alt + drag point | Offset the entire curve/band while preserving the current draft shape |
 | Ctrl + drag point | Tilt around the opposite fixed edge anchor |
 | Shift + drag empty chart | Select a contiguous voltage range |
-| Double-click | Clear range selection |
+| Click on free chart space | Clear range selection |
+| Double-click | Clear range selection; on fan curves, add a point on free space |
 | Shift + Enter | Flatten selected range; otherwise plateau from the selected point |
 
-A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state. The opposite tilt anchor remains fixed.
+A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state and adds no history. During a drag other keys are ignored; toolbar actions finish the drag first. A readout beside the dragged point shows voltage, frequency and the change since the drag started. There is no `L` shortcut: in Afterburner it locks a voltage, which this editor does not support.
 
 ## Keyboard and viewport
 
@@ -56,12 +57,12 @@ Commands apply with chart focus unless noted. Native numeric fields provide an a
 | Enter | Open numeric/profile view and focus the selected Y value |
 | Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z | Undo / redo |
 | Escape | Cancel drag, otherwise clear range |
-| Ctrl + D | Restore the active loaded draft, with undo support |
+| Ctrl + D | Restore the curve loaded at the start of this editing session, with undo support (Reset returns the GPU curve to the driver factory curve) |
 | Ctrl + S | Save in the saved-profile editor; the in-memory preset chart returns through Accept |
-| F1 | Show native shortcut help |
-| Wheel or +/− | Zoom X around pointer/selection |
+| F1 | Show shortcut help |
+| Wheel or +/− | Zoom X around the pointer (wheel) or the selected point (keys) |
 | Ctrl + wheel or Ctrl with +/− | Zoom Y |
-| Shift + wheel | Pan horizontally |
+| Shift + wheel, sideways touchpad swipe | Pan horizontally |
 | Ctrl + 0 | Fit the complete curve |
 | Ctrl + Left/Right, fans | Move temperature 1 °C; Shift uses 10 °C |
 | Shift + Up/Down, fans | Change fan value 10 percentage points |
@@ -85,5 +86,7 @@ cannot gain sign-in authorization. [GPU contracts](GPU_PROFILES.md),
 ## Implementation and validation
 
 `core/curve_editor.rs` owns editing/history, `curve_input.rs` abstract input and `curve_view.rs` viewport/grid rules. `app/curve_widget.rs` owns GDI/native input; `curve_ui.rs` owns load/save/merge. Full curves and unrelated settings survive merge; conflicting concurrent edits fail.
+
+Since 0.10.0-beta.8 the Slint editor implements these gestures itself (`app/slint_ui/curve.rs`: pick radius, press/drag/finish, wheel accumulation, key decoding); unit tests cover point picking, group drag as one undo step, Shift band selection, Escape without history and the key table. A mouse run of the Slint editor in `--ui-test` was not performed in this change.
 
 Native smoke checks exercised chart opening from new/dirty presets, reference/current dragging, bands, flatten, undo/redo, fit, numeric alternatives and fan draft persistence without hardware Apply. Recorded client renders do not cover all DPI/titlebar/high-contrast/accessibility behavior. [Validation](VALIDATION.md).

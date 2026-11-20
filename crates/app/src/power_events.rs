@@ -6,7 +6,9 @@ use windows_sys::{
         Foundation::HWND,
         System::{
             Power::*,
-            SystemServices::{GUID_ACDC_POWER_SOURCE, GUID_SESSION_DISPLAY_STATUS},
+            SystemServices::{
+                GUID_ACDC_POWER_SOURCE, GUID_ACTIVE_POWERSCHEME, GUID_SESSION_DISPLAY_STATUS,
+            },
         },
         UI::WindowsAndMessaging::*,
     },
@@ -17,6 +19,7 @@ pub struct Notifications {
     source: HPOWERNOTIFY,
     display: HPOWERNOTIFY,
     sleep: HPOWERNOTIFY,
+    scheme: HPOWERNOTIFY,
 }
 impl Notifications {
     pub fn register(hwnd: HWND) -> Result<Self, String> {
@@ -24,6 +27,7 @@ impl Notifications {
             source: 0,
             display: 0,
             sleep: 0,
+            scheme: 0,
         };
         // SAFETY: A live owned window receives notifications until Drop.
         unsafe {
@@ -48,6 +52,12 @@ impl Notifications {
             if notifications.sleep == 0 {
                 return Err(std::io::Error::last_os_error().to_string());
             }
+            // Optional: a missing plan notification only delays the next check.
+            notifications.scheme = RegisterPowerSettingNotification(
+                hwnd,
+                &GUID_ACTIVE_POWERSCHEME,
+                DEVICE_NOTIFY_WINDOW_HANDLE,
+            );
         }
         Ok(notifications)
     }
@@ -63,6 +73,9 @@ impl Drop for Notifications {
             }
             if self.sleep != 0 {
                 UnregisterSuspendResumeNotification(self.sleep);
+            }
+            if self.scheme != 0 {
+                UnregisterPowerSettingNotification(self.scheme);
             }
         }
     }
@@ -97,10 +110,14 @@ pub unsafe fn decode(kind: u32, data: isize) -> Option<Event> {
         PBT_POWERSETTINGCHANGE if data != 0 => unsafe {
             let header = data as *const POWERBROADCAST_SETTING;
             let length = ptr::addr_of!((*header).DataLength).read_unaligned();
+            let guid = ptr::addr_of!((*header).PowerSetting).read_unaligned();
+            // The active plan arrives as a 16-byte GUID; its value is not needed.
+            if length == 16 && same_guid(&guid, &GUID_ACTIVE_POWERSCHEME) {
+                return Some(Event::SchemeChanged);
+            }
             if length != 4 {
                 return None;
             }
-            let guid = ptr::addr_of!((*header).PowerSetting).read_unaligned();
             let value = ptr::addr_of!((*header).Data)
                 .cast::<[u8; 4]>()
                 .read_unaligned();

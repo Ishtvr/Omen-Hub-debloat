@@ -94,6 +94,10 @@ pub struct Controller {
     /// Windows targets written in this transaction (accepted by later checks).
     windows_targets: BTreeMap<Feature, Value>,
     planned_power_scheme: Option<u128>,
+    /// The preset runs the HP mode Unleashed: the firmware keeps the fast
+    /// limit (PPT) at its own value there (about 2,200 rewrites, 12 to 20
+    /// November 2026, always back at 80 W), so this preset skips PPT.
+    firmware_ppt: bool,
     smu: Option<super::smu::Smu>,
     cpu_readback_trace: Option<Vec<super::cpu_tuning::CpuReadbackTrace>>,
 }
@@ -204,6 +208,7 @@ impl Controller {
             fan_observations: vec![],
             windows_targets: BTreeMap::new(),
             planned_power_scheme: None,
+            firmware_ppt: false,
             smu: None,
             cpu_readback_trace: None,
         })
@@ -521,9 +526,29 @@ impl Controller {
                 self.curve_target = Some((requested.value.clone(), live));
             }
         }
-        // A single missing/drifted value must fail current-state verification;
-        // a filtered partial list would also incorrectly qualify sign-in.
-        self.verify_targets(&saved.requested)
+        // A normal Apply leaves a value that did not stick at its captured
+        // original and applies the rest (user rule, 30 October 2026). Such a
+        // value no longer blocks sign-in approval, but only while it still
+        // reads back as exactly that original; any other drift fails, and at
+        // least one requested value must be confirmed.
+        let mut verified = vec![];
+        let mut first_error = None;
+        for (original, requested) in saved.original.iter().zip(&saved.requested) {
+            match self.verify_target(requested) {
+                Ok(value) => verified.push(Setting {
+                    feature: requested.feature,
+                    value,
+                }),
+                Err(error) => {
+                    self.verify_captured(original).map_err(|_| error.clone())?;
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) if verified.is_empty() => Err(error),
+            _ => Ok(verified),
+        }
     }
     pub fn validate_gpu_curve(
         &mut self,
@@ -686,6 +711,10 @@ impl Backend for Controller {
         // A running HP service no longer blocks the whole preset (user rule,
         // 30 October 2026); each PPT/Slow write checks it and is skipped alone.
         self.planned_power_scheme = super::windows_settings::requested_scheme(settings)?;
+        self.firmware_ppt = omen_core::hp_mode::HpMode::of_settings(
+            settings,
+            super::power_status().ac_connected == Some(true),
+        ) == Some(omen_core::hp_mode::HpMode::Unleashed);
         Ok(())
     }
     fn write_order(&self, settings: &[Setting]) -> Vec<usize> {
@@ -1151,6 +1180,13 @@ impl Backend for Controller {
         }
         if let RestoreState::AmdSmu { image } = &saved.restore {
             let feature = saved.feature;
+            // A firmware-kept PPT was never written: verify, do not write.
+            if self.firmware_ppt
+                && feature == Feature::CpuPptLimitMw
+                && super::cpu_tuning::capture(self.smu()?, feature)? == *image
+            {
+                return Ok(());
+            }
             let tracing = self.cpu_readback_trace.is_some();
             let mut samples = Vec::new();
             let result =
@@ -1893,8 +1929,16 @@ impl Backend for Controller {
             return Ok(());
         }
         if super::cpu_tuning::handles(setting.feature) {
-            if !self.captured.contains_key(&setting.feature) {
+            let Some(saved) = self.captured.get(&setting.feature) else {
                 return Err("No captured SMU original".into());
+            };
+            if self.firmware_ppt && setting.feature == Feature::CpuPptLimitMw {
+                // Nothing is written; the value is skipped and named.
+                let held = match &saved.value {
+                    Value::Integer(mw) => format!("{} W", mw / 1000),
+                    other => format!("{other:?}"),
+                };
+                return Err(omen_core::message::msg("cpu.err.firmware_ppt", &[&held]));
             }
             super::cpu_tuning::write(self.smu()?, setting.feature, &setting.value)?;
             self.windows_targets

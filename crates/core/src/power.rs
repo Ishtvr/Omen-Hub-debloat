@@ -5,6 +5,17 @@ pub enum Event {
     Resume,
     Display(bool),
     SourceChanged,
+    /// The active Windows power plan changed (another app or the user).
+    SchemeChanged,
+}
+impl Event {
+    /// Events after which firmware or other tools commonly reset limits.
+    pub fn may_reset_controls(self) -> bool {
+        matches!(
+            self,
+            Self::Resume | Self::Display(true) | Self::SourceChanged | Self::SchemeChanged
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +51,8 @@ impl Sampling {
             }
             Event::Display(on) => std::mem::replace(&mut self.display_on, on) != on,
             Event::SourceChanged => true,
+            // Sensor sampling does not depend on the power plan.
+            Event::SchemeChanged => false,
         };
         if changed {
             self.generation = self.generation.wrapping_add(1);

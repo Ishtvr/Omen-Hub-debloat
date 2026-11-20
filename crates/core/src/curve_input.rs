@@ -7,7 +7,7 @@ pub struct Modifiers {
     pub ctrl: bool,
     pub alt: bool,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Left,
     Right,

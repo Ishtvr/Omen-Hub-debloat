@@ -1525,7 +1525,13 @@ unsafe extern "system" fn event_proc(
                     as isize
             }
             WM_POWERBROADCAST => {
-                if let Some(e) = crate::power_events::decode(wparam as u32, lparam)
+                let event = crate::power_events::decode(wparam as u32, lparam);
+                // Firmware and other tools often reset limits around these
+                // events; one debounced check follows the last of them.
+                if event.is_some_and(omen_core::power::Event::may_reset_controls) {
+                    crate::preset_hold::nudge();
+                }
+                if let Some(e) = event
                     && host
                         .power
                         .lock()
@@ -2384,8 +2390,17 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
         }
         h.draw_curve();
     });
-    callback!(on_chart_event, |h, kind, x, y, shift, ctrl, alt| {
-        h.chart_event(kind, x, y, shift, ctrl, alt);
+    callback!(on_chart_event, |h, kind, x, y, w, ht, shift, ctrl, alt| {
+        h.chart_event(
+            kind,
+            x,
+            y,
+            (w, ht),
+            omen_core::curve_input::Modifiers { shift, ctrl, alt },
+        );
+    });
+    callback!(on_chart_wheel, |h, dx, dy, x, y, shift, ctrl| {
+        h.chart_wheel(dx, dy, x, y, shift, ctrl);
     });
     callback!(on_chart_key, |h, key, shift, ctrl, alt| {
         h.chart_key(key.as_str(), shift, ctrl, alt)

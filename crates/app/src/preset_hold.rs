@@ -10,15 +10,56 @@ use omen_core::{
     profiles::{Setting, Value},
 };
 use omen_platform::{ControlLease, Controller, GpuLimitProbe, profile_store::ProfileStore};
-use std::{sync::Mutex, thread, time::Duration};
+use std::{
+    sync::{Condvar, Mutex},
+    thread,
+    time::Instant,
+};
 
-const INTERVAL: Duration = Duration::from_secs(5);
 /// Consecutive locked readings before the mode counts as lost, so one
 /// transient sample during a load change does not rewrite it.
 const LOCKED_CHECKS: u8 = 2;
 static NOTICE: Mutex<Option<String>> = Mutex::new(None);
 pub fn take_notice() -> Option<String> {
     NOTICE.lock().ok()?.take()
+}
+
+/// Debounced trigger from Windows power events and finished Apply/mode work.
+static WAKE: Mutex<Option<Instant>> = Mutex::new(None);
+static WAKE_SIGNAL: Condvar = Condvar::new();
+/// Requests one prompt check after the last of several close events.
+pub fn nudge() {
+    let mut due = WAKE.lock().unwrap_or_else(|e| e.into_inner());
+    *due = Some(Instant::now() + hold::EVENT_DEBOUNCE);
+    WAKE_SIGNAL.notify_one();
+}
+/// Sleeps until `next` or a debounced nudge; true when a nudge fired.
+fn wait_until(next: Instant) -> bool {
+    let mut due = WAKE.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let now = Instant::now();
+        if due.is_some_and(|at| at <= now) {
+            *due = None;
+            return true;
+        }
+        if now >= next {
+            return false;
+        }
+        let until = due.map_or(next, |at| at.min(next));
+        due = WAKE_SIGNAL
+            .wait_timeout(due, until - now)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    }
+}
+
+/// What one check means for the pacing.
+#[derive(Default)]
+struct Outcome {
+    /// New revision or a rewrite: keep checking closely for a while.
+    trigger: bool,
+    /// Gave up: the back-off runs at the slow interval.
+    calm: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +74,13 @@ impl Applied {
     /// contains skipped requests for Recovery; those are not active targets.
     fn from_result(result: &serde_json::Value) -> Option<Self> {
         if result["operation"] != "apply" || !result["result"]["Ok"].is_object() {
+            return None;
+        }
+        // Volatile firmware values return to stock at a restart; an Apply
+        // from an earlier boot is not re-applied piecemeal without sign-in
+        // approval. Records without a boot time predate this rule.
+        let boot = result["boot_unix_s"].as_u64()?;
+        if boot.abs_diff(omen_platform::boot_unix_s()) > 120 {
             return None;
         }
         let applied = Self {
@@ -82,12 +130,27 @@ pub fn spawn() {
         let mut controller = None;
         let mut active = None;
         let mut release = Release::default();
+        let origin = Instant::now();
+        let mut pace = hold::Pace::default();
+        pace.trigger(origin.elapsed());
+        let mut next = origin + hold::FAST_INTERVAL;
         loop {
-            thread::sleep(INTERVAL);
-            if tick(&mut hold, &mut controller, &mut active, &mut release).is_err() {
-                // Driver or helper state may be stale; reopen on the next tick.
-                controller = None;
+            if wait_until(next) {
+                pace.trigger(origin.elapsed());
             }
+            match tick(&mut hold, &mut controller, &mut active, &mut release) {
+                Ok(outcome) => {
+                    if outcome.trigger {
+                        pace.trigger(origin.elapsed());
+                    }
+                    if outcome.calm {
+                        pace.calm();
+                    }
+                }
+                // Driver or helper state may be stale; reopen on the next tick.
+                Err(_) => controller = None,
+            }
+            next = Instant::now() + pace.interval(origin.elapsed());
         }
     });
 }
@@ -99,7 +162,7 @@ fn tick(
     controller: &mut Option<Controller>,
     active: &mut Option<Applied>,
     release: &mut Release,
-) -> Result<(), String> {
+) -> Result<Outcome, String> {
     let store = ProfileStore::user_data()?;
     let stop = |hold: &mut Hold, release: &mut Release| {
         hold.clear();
@@ -107,7 +170,7 @@ fn tick(
     };
     if !store.app_settings().is_ok_and(|s| s.hold_preset) {
         stop(hold, release);
-        return Ok(());
+        return Ok(Outcome::default());
     }
     if let Ok(result) = store.control_result() {
         match result["operation"].as_str() {
@@ -118,33 +181,36 @@ fn tick(
     }
     let Some(applied) = active.as_ref() else {
         stop(hold, release);
-        return Ok(());
+        return Ok(Outcome::default());
     };
     // Never during a transaction or a pending recovery.
     if store.pending()? || store.fan_policy_pending()? {
-        return Ok(());
+        return Ok(Outcome::default());
     }
     let Some((id, applied_digest, settings)) = store.applied_settings()? else {
         stop(hold, release);
-        return Ok(());
+        return Ok(Outcome::default());
     };
     if !applied.matches_journal(&id, &applied_digest, &settings) {
         stop(hold, release);
-        return Ok(());
+        return Ok(Outcome::default());
     }
     // Explicit Apply of the same preset is a new attempt, too.
-    hold.track(&format!(
-        "{}:{}",
-        applied.digest,
-        applied.nonce.as_deref().unwrap_or_default()
-    ));
+    let mut outcome = Outcome {
+        trigger: hold.track(&format!(
+            "{}:{}",
+            applied.digest,
+            applied.nonce.as_deref().unwrap_or_default()
+        )),
+        calm: false,
+    };
     // An unavailable NVML must not stop keeping the CPU limits and flags.
     if keep_mode(hold, release, &store, applied).is_err() {
         *release = Release::default();
     }
     let targets = hold::targets(&applied.settings);
     if targets.is_empty() {
-        return Ok(());
+        return Ok(outcome);
     }
     let controller = match controller {
         Some(controller) => controller,
@@ -163,10 +229,12 @@ fn tick(
         let drift = controller.hold_check(&target)?;
         match hold.decide(target.feature, drift.is_some()) {
             Action::Rewrite => {
+                outcome.trigger = true;
                 let result = controller.reassert(&target);
                 log(&store, &id, &target, drift.as_ref(), &result);
             }
             Action::GiveUp => {
+                outcome.calm = true;
                 if let Ok(mut notice) = NOTICE.lock() {
                     *notice = Some(crate::i18n::tf(
                         "hold.conflict",
@@ -184,7 +252,7 @@ fn tick(
             Action::Keep | Action::Ignore => {}
         }
     }
-    Ok(())
+    Ok(outcome)
 }
 
 /// A Dynamic Boost preset switched to Unleashed (Performance on battery). A
@@ -312,7 +380,16 @@ mod tests {
     };
 
     fn result(nonce: &str, settings: &[Setting]) -> serde_json::Value {
-        serde_json::json!({"operation":"apply","profile_id":"preset-test","profile_digest":"revision","nonce":nonce,"result":{"Ok":{"verified":settings}}})
+        serde_json::json!({"operation":"apply","profile_id":"preset-test","profile_digest":"revision","nonce":nonce,"boot_unix_s":omen_platform::boot_unix_s(),"result":{"Ok":{"verified":settings}}})
+    }
+    #[test]
+    fn an_apply_from_an_earlier_boot_is_not_held() {
+        let mut record = result("a", &[]);
+        assert!(Applied::from_result(&record).is_some());
+        record["boot_unix_s"] = serde_json::json!(omen_platform::boot_unix_s() - 3600);
+        assert!(Applied::from_result(&record).is_none());
+        record.as_object_mut().unwrap().remove("boot_unix_s");
+        assert!(Applied::from_result(&record).is_none());
     }
     #[test]
     fn skipped_requests_never_become_hold_targets() {
