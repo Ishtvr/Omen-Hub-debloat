@@ -39,6 +39,10 @@ pub(super) struct Editor {
     selection_mode: bool,
     /// Unused wheel delta below one zoom/pan step.
     wheel: f32,
+    /// GPU driver default curve; offsets and the reference line use it.
+    factory: Option<Vec<Point>>,
+    /// Point under the pointer while no button is pressed.
+    hover: Option<usize>,
 }
 impl Host {
     pub(super) fn gpu_curve_dirty(&self) -> bool {
@@ -111,14 +115,7 @@ impl Host {
     }
     pub(super) fn open_loaded_curve(&self, curve: Curve) {
         let gpu = curve.kind == Kind::Gpu;
-        let view = Viewport::initial(&curve);
-        *self.curve.borrow_mut() = Some(Editor {
-            curve,
-            view,
-            gesture: None,
-            selection_mode: false,
-            wheel: 0.0,
-        });
+        *self.curve.borrow_mut() = Some(Editor::new(curve));
         if let Some(w) = self.window.upgrade() {
             let data = w.global::<Workbench>();
             data.set_curve_open(true);
@@ -166,8 +163,11 @@ impl Host {
         let d = w.global::<Workbench>();
         let curve = &editor.curve;
         let v = editor.view;
+        let baseline = editor.baseline();
         d.set_curve_path(path(&curve.points, v).into());
-        d.set_reference_path(path(curve.reference(), v).into());
+        d.set_reference_path(path(baseline, v).into());
+        d.set_curve_driver_reference(editor.factory.is_some());
+        d.set_curve_delta(driver_delta(editor).into());
         d.set_curve_selection_mode(editor.selection_mode);
         let selection = curve.selection();
         d.set_has_selection(selection.is_some());
@@ -199,8 +199,7 @@ impl Host {
             .map(|(i, p)| CurveNode {
                 x: (p.x - v.lo.x) as f32 / sx,
                 y: (p.y - v.lo.y) as f32 / sy,
-                reference_y: curve
-                    .reference()
+                reference_y: baseline
                     .get(i)
                     .map_or((p.y - v.lo.y) as f32 / sy, |p| (p.y - v.lo.y) as f32 / sy),
                 selected: curve
@@ -209,25 +208,26 @@ impl Host {
             })
             .collect::<Vec<_>>();
         d.set_nodes(Rc::new(VecModel::from(nodes)).into());
+        // Grid lines and labels sit at round data values, mapped exactly like
+        // the points and the path; spacing follows the actual plot size.
+        let (width, height) = plot_size(d.get_plot_width(), d.get_plot_height());
+        d.set_x_ticks(Rc::new(VecModel::from(ticks(v.lo.x, v.hi.x, width, X_TICK_SPACING))).into());
         d.set_y_ticks(
-            Rc::new(VecModel::from(
-                (0..6)
-                    .map(|i| AxisTick {
-                        position: i as f32 / 5.0,
-                        label: format!("{}", v.lo.y + (v.hi.y - v.lo.y) * i / 5).into(),
-                    })
-                    .collect::<Vec<_>>(),
-            ))
+            Rc::new(VecModel::from(ticks(
+                v.lo.y,
+                v.hi.y,
+                height,
+                Y_TICK_SPACING,
+            )))
             .into(),
         );
-        d.set_curve_readout(readout(editor).into());
+        show_readout(&d, editor);
         d.set_can_undo(curve.can_undo());
         d.set_can_redo(curve.can_redo());
         let (xunit, yunit) = curve.kind.units();
         d.set_curve_x_label(xunit.into());
         d.set_curve_y_label(yunit.into());
-        d.set_curve_low(format!("{}", v.lo.x).into());
-        d.set_curve_high(format!("{}", v.hi.x).into());
+
         d.set_point_labels(strings(
             curve
                 .points
@@ -424,6 +424,7 @@ impl Host {
                     }
                     if kind == 2 {
                         e.finish_gesture(false);
+                        e.hover = hit(e, x, y, plot);
                     }
                 }
                 3 => e.finish_gesture(true),
@@ -480,6 +481,25 @@ impl Host {
             }
         }
         self.draw_curve();
+    }
+    /// Pointer movement without a pressed button shows the values of the
+    /// point within the pick radius; x < 0 means the pointer left the chart.
+    pub(super) fn chart_hover(&self, x: f32, y: f32, plot: (f32, f32)) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let mut current = self.curve.borrow_mut();
+        let Some(e) = current.as_mut() else {
+            return;
+        };
+        if e.gesture.is_some() {
+            return;
+        }
+        let hover = if x < 0.0 { None } else { hit(e, x, y, plot) };
+        if hover != e.hover {
+            e.hover = hover;
+            show_readout(&w.global::<Workbench>(), e);
+        }
     }
     pub(super) fn chart_key(&self, text: &str, shift: bool, ctrl: bool, alt: bool) -> bool {
         let Some(command) = decode_key(text, shift, ctrl) else {
@@ -561,17 +581,104 @@ impl Host {
     }
 }
 
-/// While a point is dragged: its anchor, value and change from the drag start.
-fn readout(e: &Editor) -> String {
-    let Some(Gesture::Point { start, .. }) = &e.gesture else {
-        return String::new();
-    };
-    let i = e.curve.selected;
-    let (Some(p), Some(from)) = (e.curve.points.get(i), start.get(i)) else {
+/// The point whose values are shown beside it: the dragged point, otherwise
+/// the point under the pointer, provided it is inside the visible range.
+fn readout_point(e: &Editor) -> Option<usize> {
+    let index = match &e.gesture {
+        Some(Gesture::Point { .. }) => Some(e.curve.selected),
+        Some(Gesture::Band { .. }) => None,
+        None => e.hover,
+    }?;
+    let p = e.curve.points.get(index)?;
+    let v = e.view;
+    ((v.lo.x..=v.hi.x).contains(&p.x) && (v.lo.y..=v.hi.y).contains(&p.y)).then_some(index)
+}
+/// Anchor and value; GPU points add their offset from the driver default
+/// curve, fan points the change since the drag started.
+fn readout(e: &Editor, index: usize) -> String {
+    let Some(p) = e.curve.points.get(index) else {
         return String::new();
     };
     let (xunit, yunit) = e.curve.kind.units();
-    format!("{} {xunit} · {} {yunit} ({:+})", p.x, p.y, p.y - from.y)
+    if let Some(base) = e.factory.as_ref().and_then(|f| f.get(index)) {
+        return tf("curve.readout_driver", &[&p.x, &p.y, &signed(p.y - base.y)]);
+    }
+    match &e.gesture {
+        Some(Gesture::Point { start, .. }) => match start.get(index) {
+            Some(from) => format!(
+                "{} {xunit} · {} {yunit} ({})",
+                p.x,
+                p.y,
+                signed(p.y - from.y)
+            ),
+            None => format!("{} {xunit} · {} {yunit}", p.x, p.y),
+        },
+        _ => format!("{} {xunit} · {} {yunit}", p.x, p.y),
+    }
+}
+fn show_readout(d: &Workbench<'_>, e: &Editor) {
+    let Some(index) = readout_point(e) else {
+        d.set_curve_readout("".into());
+        return;
+    };
+    let p = e.curve.points[index];
+    let v = e.view;
+    d.set_readout_x((p.x - v.lo.x) as f32 / (v.hi.x - v.lo.x).max(1) as f32);
+    d.set_readout_y((p.y - v.lo.y) as f32 / (v.hi.y - v.lo.y).max(1) as f32);
+    d.set_readout_hover(e.gesture.is_none());
+    d.set_curve_readout(readout(e, index).into());
+}
+/// Offset of the whole draft from the driver default curve, as one value or
+/// as its range across all anchors.
+fn driver_delta(e: &Editor) -> String {
+    let Some(factory) = &e.factory else {
+        return String::new();
+    };
+    let offsets = e.curve.points.iter().zip(factory).map(|(p, f)| p.y - f.y);
+    let (Some(lo), Some(hi)) = (offsets.clone().min(), offsets.max()) else {
+        return String::new();
+    };
+    if lo == 0 && hi == 0 {
+        t("curve.delta_none").to_owned()
+    } else if lo == hi {
+        tf("curve.delta_uniform", &[&signed(lo)])
+    } else {
+        tf("curve.delta_range", &[&signed(lo), &signed(hi)])
+    }
+}
+/// Signed MHz offset with a typographic minus, as elsewhere in the UI.
+fn signed(value: i32) -> String {
+    if value < 0 {
+        format!("−{}", value.unsigned_abs())
+    } else {
+        format!("+{value}")
+    }
+}
+/// Minimum on-screen distance between labelled grid lines, in logical px.
+const X_TICK_SPACING: i32 = 64;
+const Y_TICK_SPACING: i32 = 24;
+/// Plot size reported by the canvas; a nominal size until it is laid out.
+fn plot_size(width: f32, height: f32) -> (f32, f32) {
+    if width >= 1.0 && height >= 1.0 {
+        (width, height)
+    } else {
+        (600.0, 300.0)
+    }
+}
+/// Grid ticks at multiples of a readable step inside `lo..=hi`, positioned
+/// with the same `(value - lo) / span` mapping as points and path.
+fn ticks(lo: i32, hi: i32, pixels: f32, spacing: i32) -> Vec<AxisTick> {
+    let span = (hi - lo).max(1);
+    let step = omen_core::curve_view::tick_step(span, pixels.round() as i32, spacing).max(1) as i32;
+    let first = lo.div_euclid(step) * step + if lo.rem_euclid(step) == 0 { 0 } else { step };
+    (0..)
+        .map(|i| first + i * step)
+        .take_while(|value| *value <= hi)
+        .map(|value| AxisTick {
+            position: (value - lo) as f32 / span as f32,
+            label: value.to_string().into(),
+        })
+        .collect()
 }
 /// Slint reports a classic wheel notch as 120 logical pixels on Windows;
 /// touchpads deliver smaller deltas that accumulate to the same step.
@@ -590,6 +697,22 @@ pub(super) enum Gesture {
     Band { x: i32 },
 }
 impl Editor {
+    pub(super) fn new(curve: Curve) -> Self {
+        Self {
+            view: Viewport::initial(&curve),
+            factory: curve.factory().and_then(Result::ok),
+            curve,
+            gesture: None,
+            selection_mode: false,
+            wheel: 0.0,
+            hover: None,
+        }
+    }
+    /// Offsets and the reference line compare against the driver default
+    /// curve; without one (fan curves) against the curve loaded at opening.
+    fn baseline(&self) -> &[Point] {
+        self.factory.as_deref().unwrap_or(self.curve.reference())
+    }
     /// Ends a drag: one undo step, or none when cancelled.
     fn finish_gesture(&mut self, cancel: bool) {
         if self.gesture.take().is_some() {
@@ -776,15 +899,9 @@ mod tests {
             first_index: 0,
             last_index: 5,
         };
-        let curve = gpu_editor(state, None).unwrap();
-        let view = Viewport::fit(&curve);
-        Editor {
-            curve,
-            view,
-            gesture: None,
-            selection_mode: false,
-            wheel: 0.0,
-        }
+        let mut e = Editor::new(gpu_editor(state, None).unwrap());
+        e.view = Viewport::fit(&e.curve);
+        e
     }
     /// Normalized position of point `i` in the editor's viewport.
     fn at(e: &Editor, i: usize) -> (f32, f32) {
@@ -898,6 +1015,89 @@ mod tests {
         // Afterburner's L is a voltage lock; it is not silently a flatten here.
         assert_eq!(decode_key("l", false, false), None);
         assert_eq!(decode_key("0", false, false), None);
+    }
+
+    #[test]
+    fn grid_ticks_sit_on_round_values_with_the_point_mapping() {
+        let (lo, hi) = (437, 1162);
+        let ticks = ticks(lo, hi, 1000.0, X_TICK_SPACING);
+        let values: Vec<i32> = ticks.iter().map(|t| t.label.parse().unwrap()).collect();
+        assert_eq!(values.first(), Some(&450));
+        assert_eq!(values.last(), Some(&1150));
+        assert!(values.windows(2).all(|w| w[1] - w[0] == 50));
+        for (tick, value) in ticks.iter().zip(&values) {
+            let expected = (value - lo) as f32 / (hi - lo) as f32;
+            assert!((tick.position - expected).abs() < 1e-6);
+        }
+        // A tick exactly on the lower bound is kept; spacing never shrinks
+        // below the requested on-screen distance.
+        let y = super::ticks(1000, 2000, 300.0, Y_TICK_SPACING);
+        assert_eq!(y.first().map(|t| t.position), Some(0.0));
+        assert!(y.len() <= 300 / Y_TICK_SPACING as usize + 1);
+        assert_eq!(plot_size(0.0, 0.0), (600.0, 300.0));
+        assert_eq!(
+            (signed(-870), signed(0), signed(25)),
+            ("−870".into(), "+0".into(), "+25".into())
+        );
+    }
+
+    #[test]
+    fn offsets_are_shown_against_the_driver_default_not_the_loaded_preset() {
+        let state = omen_core::vf::VfState {
+            nodes: (0..4)
+                .map(|i| omen_core::vf::VfNode {
+                    index: i,
+                    voltage_uv: 800_000 + u32::from(i) * 50_000,
+                    // The live curve carries an applied +100 MHz offset.
+                    frequency_khz: (1100 + u32::from(i) * 100) * 1000,
+                    delta_khz: 100_000,
+                })
+                .collect(),
+            minimum_delta_khz: -500_000,
+            maximum_delta_khz: 500_000,
+            first_index: 0,
+            last_index: 3,
+        };
+        let loaded = state.value().unwrap();
+        let mut e = Editor::new(gpu_editor(state, Some(&loaded)).unwrap());
+        e.view = Viewport::fit(&e.curve);
+        assert_eq!(e.baseline()[0].y, 1000);
+        assert_eq!(driver_delta(&e), tf("curve.delta_uniform", &[&"+100"]));
+        e.curve.points[3].y += 20;
+        assert_eq!(
+            driver_delta(&e),
+            tf("curve.delta_range", &[&"+100", &"+120"])
+        );
+        assert_eq!(
+            readout(&e, 3),
+            tf("curve.readout_driver", &[&950, &1420, &"+120"])
+        );
+        assert!(e.curve.reset().unwrap());
+        assert_eq!(driver_delta(&e), t("curve.delta_none"));
+    }
+
+    #[test]
+    fn hovering_a_point_shows_its_values_without_a_drag() {
+        let mut e = editor();
+        assert_eq!(readout_point(&e), None);
+        let (x, y) = at(&e, 2);
+        e.hover = hit(&e, x, y, PLOT);
+        assert_eq!(readout_point(&e), Some(2));
+        assert_eq!(
+            readout(&e, 2),
+            tf("curve.readout_driver", &[&900, &1200, &"+0"])
+        );
+        // Free space shows nothing; a drag shows the dragged point instead.
+        e.hover = hit(&e, x, 0.98, PLOT);
+        assert_eq!(readout_point(&e), None);
+        let (x4, y4) = at(&e, 4);
+        e.gesture = press(&mut e, x4, y4, PLOT, Modifiers::default());
+        assert_eq!(readout_point(&e), Some(4));
+        // A point outside the zoomed view has no readout.
+        e.finish_gesture(true);
+        e.hover = Some(0);
+        e.view.lo.x = 900;
+        assert_eq!(readout_point(&e), None);
     }
 
     #[test]

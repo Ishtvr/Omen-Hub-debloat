@@ -4,6 +4,22 @@ Current software summary updated **20 November 2026**, version **0.10.0-beta.11*
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
+## Curve editor layout, grid and hover — 20 November 2026
+
+Software validation only, on top of beta.11; no hardware write.
+
+- Format check, **353 unit tests** (170 core / 83 app / 100 platform), all-target
+  Clippy with `-D warnings` and a locked release build passed.
+- New regressions: grid ticks on round values using the point mapping, hover
+  readouts, and GPU offsets against the driver default curve rather than the
+  loaded preset.
+- `test-slint-ui.py` (developer MCP build, software renderer) passed in German,
+  English and the GPU-curve, new-profile and editor-extension modes on beta.8.
+  On beta.11 the GPU-curve and new-profile modes pass; the full
+  German/English runs and the editor-extension mode fail in preset-page steps
+  exactly as without this change (regrouped fields), not in the curve editor.
+  Screenshots checked the GPU and fan editors at 860×540, 820×500 and 1600×1000 logical px.
+
 ## Startup fix — 20 November 2026
 
 Version **0.10.0-beta.11**. beta.10 panicked at start (group list count 7 versus 8 groups); reproduced with the beta.10 binary in `--ui-test` and fixed. The beta.11 release binary was started in `--ui-test` and stayed up. Unit tests and Clippy did not cover the window construction; this start check is now part of the release routine for UI catalog changes.

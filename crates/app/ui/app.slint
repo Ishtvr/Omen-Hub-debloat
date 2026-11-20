@@ -95,12 +95,18 @@ export global Workbench {
     in property <[CurveNode]> nodes;
     in property <string> curve-path;
     in property <string> reference-path;
+    in property <[AxisTick]> x-ticks;
     in property <[AxisTick]> y-ticks;
+    // Plot size in logical px, reported by the canvas for tick spacing.
+    in-out property <float> plot-width;
+    in-out property <float> plot-height;
+    // The reference line is the NVIDIA driver default curve (GPU).
+    in property <bool> curve-driver-reference;
+    // Offset of the whole draft from the driver default curve.
+    in property <string> curve-delta;
     in property <string> curve-title;
     in property <string> curve-x-label;
     in property <string> curve-y-label;
-    in property <string> curve-low;
-    in property <string> curve-high;
     in-out property <string> point-x;
     in-out property <string> point-y;
     in property <[string]> point-labels;
@@ -108,8 +114,11 @@ export global Workbench {
     in property <bool> can-undo;
     in property <bool> can-redo;
     in property <bool> curve-selection-mode;
-    // Value and change of the dragged point, shown beside it while dragging.
+    // Values of the dragged or hovered point, shown beside it; position in 0..1.
     in property <string> curve-readout;
+    in property <float> readout-x;
+    in property <float> readout-y;
+    in property <bool> readout-hover;
     in property <bool> has-selection;
     in property <float> selection-low;
     in property <float> selection-high;
@@ -193,6 +202,10 @@ export global Workbench {
     callback chart-key(string, bool, bool, bool) -> bool;
     // A slider row moved to a whole-watt value.
     callback slider-field(int, float);
+    // Pointer x/y in 0..1 without a pressed button (x < 0: left the chart),
+    // plot width/height in px.
+    callback chart-hover(float, float, float, float);
+    callback chart-resized();
     callback lighting-power();
     callback select-lighting-group(int);
     callback keyboard-layout(bool);
@@ -400,30 +413,110 @@ component Measurement inherits Rectangle {
 component CurveCanvas inherits Rectangle {
     forward-focus: chart-focus;
     background: Theme.surface;
+    border-radius: 6px;
     clip: true;
     min-height: 190px;
+    // Margins around the plot: Y labels left, X labels below, captions above.
+    private property <length> plot-left: 52px;
+    private property <length> plot-top: 26px;
+    private property <length> plot-right: 18px;
+    private property <length> plot-bottom: 26px;
+
+    Text {
+        x: 4px;
+        y: 4px;
+        width: root.plot-left - 10px;
+        height: 16px;
+        text: Workbench.curve-y-label;
+        color: Theme.quiet;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: root.plot-left + 120px;
+        y: 4px;
+        width: max(0px, root.width - root.plot-left - root.plot-right - 120px);
+        height: 16px;
+        text: Workbench.curve-delta;
+        color: Theme.ink;
+        font-size: 12px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
     for tick in Workbench.y-ticks: Text {
         x: 4px;
-        y: 12px + (1 - tick.position) * (parent.height - 28px) - self.height / 2;
+        y: root.plot-top + (1 - tick.position) * plot.height - self.height / 2;
+        width: root.plot-left - 10px;
+        height: 14px;
         text: tick.label;
         color: Theme.muted;
         font-family: "Consolas";
         font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
     }
+
+    Text {
+        x: 4px;
+        y: root.plot-top + plot.height + 6px;
+        width: root.plot-left - 22px;
+        height: 14px;
+        text: Workbench.curve-x-label;
+        color: Theme.quiet;
+        font-size: 11px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    // Centred under their grid line; labels on the plot edges align with it.
+    for tick in Workbench.x-ticks: Text {
+        property <bool> first: tick.position < 0.001;
+        property <bool> last: tick.position > 0.999;
+        x: self.first ? root.plot-left : self.last ? root.plot-left + plot.width - self.width : min(root.plot-left + tick.position * plot.width - self.width / 2, root.width - self.width);
+        y: root.plot-top + plot.height + 6px;
+        width: 48px;
+        height: 14px;
+        text: tick.label;
+        color: Theme.muted;
+        font-family: "Consolas";
+        font-size: 11px;
+        horizontal-alignment: self.first ? TextHorizontalAlignment.left : self.last ? TextHorizontalAlignment.right : TextHorizontalAlignment.center;
+        vertical-alignment: center;
+    }
+
     plot := Rectangle {
-        x: 46px;
-        y: 12px;
-        width: parent.width - 60px;
-        height: parent.height - 28px;
+        x: root.plot-left;
+        y: root.plot-top;
+        width: max(1px, root.width - root.plot-left - root.plot-right);
+        height: max(1px, root.height - root.plot-top - root.plot-bottom);
         clip: true;
-        for grid in 6: Rectangle {
-            y: parent.height * grid / 5;
-            height: 1px;
+        init => {
+            Workbench.plot-width = self.width / 1px;
+            Workbench.plot-height = self.height / 1px;
+        }
+        changed width => {
+            Workbench.plot-width = self.width / 1px;
+            Workbench.chart-resized();
+        }
+        changed height => {
+            Workbench.plot-height = self.height / 1px;
+            Workbench.chart-resized();
+        }
+
+        // Grid lines use the same mapping as points and path, snapped to one
+        // physical pixel so every line has the same weight.
+        for tick in Workbench.y-ticks: Rectangle {
+            y: floor((1 - tick.position) * parent.height / 1phx) * 1phx;
+            height: 1phx;
             background: Theme.line;
         }
-        for grid in 9: Rectangle {
-            x: parent.width * grid / 8;
-            width: 1px;
+        for tick in Workbench.x-ticks: Rectangle {
+            x: floor(tick.position * parent.width / 1phx) * 1phx;
+            width: 1phx;
             background: Theme.line;
         }
         selection-band := Rectangle {
@@ -457,15 +550,15 @@ component CurveCanvas inherits Rectangle {
 
         Rectangle {
             visible: Workbench.nodes.length > 0;
-            x: Workbench.nodes[Workbench.point-index].x * parent.width;
-            width: 1px;
+            x: floor(Workbench.nodes[Workbench.point-index].x * parent.width / 1phx) * 1phx;
+            width: 1phx;
             background: Theme.accent.with-alpha(0.25);
         }
 
         Rectangle {
             visible: Workbench.nodes.length > 0;
-            y: (1 - Workbench.nodes[Workbench.point-index].y) * parent.height;
-            height: 1px;
+            y: floor((1 - Workbench.nodes[Workbench.point-index].y) * parent.height / 1phx) * 1phx;
+            height: 1phx;
             background: Theme.accent.with-alpha(0.25);
         }
 
@@ -476,25 +569,38 @@ component CurveCanvas inherits Rectangle {
             height: self.width;
             background: point.selected ? Theme.accent : Theme.ink;
         }
+
+        hover-marker := Rectangle {
+            visible: Workbench.curve-readout != "" && Workbench.readout-hover;
+            x: Workbench.readout-x * parent.width - self.width / 2;
+            y: (1 - Workbench.readout-y) * parent.height - self.height / 2;
+            width: 13px;
+            height: 13px;
+            border-radius: 3px;
+            border-width: 2px;
+            border-color: Theme.accent;
+        }
+
         readout := Rectangle {
-            visible: Workbench.curve-readout != "" && Workbench.nodes.length > 0;
-            property <length> anchor-x: Workbench.nodes[Workbench.point-index].x * parent.width;
-            property <length> anchor-y: (1 - Workbench.nodes[Workbench.point-index].y) * parent.height;
-            width: readout-text.preferred-width + 12px;
-            height: readout-text.preferred-height + 6px;
-            x: clamp(self.anchor-x + 10px, 0px, max(0px, parent.width - self.width));
-            y: clamp(self.anchor-y - self.height - 10px, 0px, max(0px, parent.height - self.height));
+            visible: Workbench.curve-readout != "";
+            property <length> anchor-x: Workbench.readout-x * parent.width;
+            property <length> anchor-y: (1 - Workbench.readout-y) * parent.height;
+            width: readout-text.preferred-width + 16px;
+            height: readout-text.preferred-height + 10px;
+            // Beside the point, flipped away from the plot edges.
+            x: clamp(self.anchor-x + 12px + self.width > parent.width ? self.anchor-x - 12px - self.width : self.anchor-x + 12px, 0px, max(0px, parent.width - self.width));
+            y: clamp(self.anchor-y - 12px - self.height < 0px ? self.anchor-y + 12px : self.anchor-y - 12px - self.height, 0px, max(0px, parent.height - self.height));
             background: Theme.control;
             border-radius: 4px;
             border-width: 1px;
             border-color: Theme.accent.with-alpha(0.55);
             readout-text := Text {
+                x: 8px;
+                y: 5px;
                 text: Workbench.curve-readout;
                 color: Theme.ink;
                 font-family: "Consolas";
                 font-size: 11px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
             }
         }
 
@@ -511,8 +617,18 @@ component CurveCanvas inherits Rectangle {
                 Workbench.chart-event(5, self.mouse-x / self.width, self.mouse-y / self.height,
                 self.width / 1px, self.height / 1px, false, false, false);
             }
+            changed has-hover => {
+                if !self.has-hover {
+                    Workbench.chart-hover(-1, -1, self.width / 1px, self.height / 1px);
+                }
+            }
             pointer-event(e) => {
-                if e.kind == PointerEventKind.cancel {
+                if e.kind == PointerEventKind.move {
+                    if !self.pressed {
+                        Workbench.chart-hover(self.mouse-x / self.width, self.mouse-y / self.height,
+                        self.width / 1px, self.height / 1px);
+                    }
+                } else if e.kind == PointerEventKind.cancel {
                     Workbench.chart-event(3, 0, 0, self.width / 1px, self.height / 1px, false, false, false);
                 } else if (e.button == PointerEventButton.left) {
                     chart-focus.focus();
@@ -1729,227 +1845,44 @@ export component AppWindow inherits Window {
                         }
 
                         chart := CurveCanvas {
-                            preferred-height: max(190px, curve-editor.visible-height - (Workbench.curve-gpu ? 322px : 226px));
+                            preferred-height: max(220px, curve-editor.visible-height - (Workbench.curve-gpu ? 386px : 290px));
                         }
 
-                        if Workbench.curve-gpu: HorizontalLayout {
-                            spacing: 6px;
-                            select-range-mode := ActionButton {
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                text: Workbench.tr("curve.mark_range");
-                                accessible-checkable: true;
-                                accessible-checked: Workbench.curve-selection-mode;
-                                background: Workbench.curve-selection-mode ? Theme.hover : Theme.control;
-                                clicked => { Workbench.curve-action("selection-mode"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("curve.select_all");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("select-all"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("curve.select_right");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("select-right"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("curve.clear_selection");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("clear-selection"); }
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-                        }
-                        if Workbench.curve-gpu: HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: Workbench.tr("curve.from");
-                                color: Theme.muted;
-                                vertical-alignment: center;
-                            }
-
-                            range-from := LineEdit {
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                width: 80px;
-                                accessible-label: Workbench.tr("curve.range_from");
-                                text <=> Workbench.range-from;
-                            }
-
-                            Text {
-                                text: Workbench.tr("curve.to");
-                                color: Theme.muted;
-                                vertical-alignment: center;
-                            }
-
-                            range-to := LineEdit {
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                width: 80px;
-                                accessible-label: Workbench.tr("curve.range_to");
-                                text <=> Workbench.range-to;
-                            }
-
-                            Text {
-                                text: Workbench.curve-x-label;
-                                color: Theme.muted;
-                                vertical-alignment: center;
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("curve.select_range");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("select-range"); }
-                            }
-
-                            Text {
-                                text: Workbench.selection-label;
-                                color: Theme.muted;
-                                wrap: word-wrap;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-                        }
-
+                        // Legend and view tools belong to the chart.
                         HorizontalLayout {
                             spacing: 8px;
-                            Rectangle {
-                                width: 20px;
-                                height: 2px;
-                                background: Theme.accent;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 18px;
+                                    height: 2px;
+                                    background: Theme.accent;
+                                }
                             }
 
                             Text {
                                 text: Workbench.tr("ui.curve_draft");
                                 color: Theme.muted;
                                 font-size: 12px;
+                                vertical-alignment: center;
                             }
 
-                            Rectangle {
-                                width: 20px;
-                                height: 1px;
-                                background: Theme.muted;
-                            }
-
-                            Text {
-                                text: Workbench.tr("ui.curve_reference");
-                                color: Theme.muted;
-                                font-size: 12px;
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            Text {
-                                text: Workbench.curve-low;
-                                color: Theme.muted;
-                                font-family: "Consolas";
-                            }
-
-                            Text {
-                                text: Workbench.curve-x-label;
-                                color: Theme.muted;
-                                horizontal-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-
-                            Text {
-                                text: Workbench.curve-high;
-                                color: Theme.muted;
-                                font-family: "Consolas";
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            point-selector := ComboBox {
-                                model: Workbench.point-labels;
-                                current-index <=> Workbench.point-index;
-                                selected(value) => { Workbench.select-point(self.current-index); }
-                            }
-
-                            point-x := LineEdit {
-                                accessible-label: Workbench.curve-x-label;
-                                text <=> Workbench.point-x;
-                                enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                                width: 96px;
-                            }
-
-                            point-y := LineEdit {
-                                accessible-label: Workbench.curve-y-label;
-                                text <=> Workbench.point-y;
-                                width: 96px;
-                                accepted => {
-                                    Workbench.curve-action("set");
-                                    chart.focus();
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 18px;
+                                    height: 1px;
+                                    background: Theme.muted;
                                 }
                             }
 
                             Text {
-                                text: Workbench.curve-y-label;
+                                text: Workbench.tr(Workbench.curve-driver-reference ? "curve.legend_driver" : "ui.curve_reference");
                                 color: Theme.muted;
+                                font-size: 12px;
                                 vertical-alignment: center;
                             }
-                        }
 
-                        HorizontalLayout {
-                            spacing: 4px;
-                            ActionButton {
-                                enabled: Workbench.confirm-kind == 0;
-                                text: Workbench.tr("ui.set_point");
-                                clicked => { Workbench.curve-action("set"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("ui.undo");
-                                enabled: (Workbench.can-undo) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("undo"); }
-                            }
-
-                            ActionButton {
-                                text: Workbench.tr("ui.redo");
-                                enabled: (Workbench.can-redo) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("redo"); }
-                            }
-
-                            ActionButton {
-                                control-width: 160px;
-                                text: Workbench.tr(Workbench.has-selection ? "curve.equalize" : "curve.flatten_right");
-                                enabled: Workbench.curve-gpu && (Workbench.has-selection || !Workbench.curve-selection-mode) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("flatten"); }
-                            }
-
-                            ActionButton {
-                                text: "+";
-                                enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("insert"); }
-                            }
-
-                            ActionButton {
-                                text: "−";
-                                enabled: (!Workbench.curve-gpu) && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.curve-action("remove"); }
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 6px;
-                            if Workbench.curve-gpu: ActionButton {
-                                control-width: 160px;
-                                text: Workbench.tr("preset.cancel_edit");
-                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
-                                clicked => { Workbench.cancel-preset(); }
-                            }
                             Rectangle {
                                 horizontal-stretch: 1;
                             }
@@ -1970,6 +1903,191 @@ export component AppWindow inherits Window {
                                 enabled: Workbench.confirm-kind == 0;
                                 text: Workbench.tr("ui.fit");
                                 clicked => { Workbench.curve-action("fit"); }
+                            }
+                        }
+
+                        // Editing: the selected point, then the GPU voltage range.
+                        Rectangle {
+                            background: Theme.surface;
+                            border-radius: 6px;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    point-selector := ComboBox {
+                                        width: 160px;
+                                        model: Workbench.point-labels;
+                                        current-index <=> Workbench.point-index;
+                                        selected(value) => { Workbench.select-point(self.current-index); }
+                                    }
+
+                                    if !Workbench.curve-gpu: LineEdit {
+                                        accessible-label: Workbench.curve-x-label;
+                                        text <=> Workbench.point-x;
+                                        enabled: Workbench.confirm-kind == 0;
+                                        width: 80px;
+                                    }
+
+                                    point-y := LineEdit {
+                                        accessible-label: Workbench.curve-y-label;
+                                        text <=> Workbench.point-y;
+                                        width: 80px;
+                                        accepted => {
+                                            Workbench.curve-action("set");
+                                            chart.focus();
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Workbench.curve-y-label;
+                                        color: Theme.muted;
+                                        vertical-alignment: center;
+                                    }
+
+                                    ActionButton {
+                                        enabled: Workbench.confirm-kind == 0;
+                                        text: Workbench.tr("ui.set_point");
+                                        clicked => { Workbench.curve-action("set"); }
+                                    }
+
+                                    if Workbench.curve-gpu: ActionButton {
+                                        control-width: 160px;
+                                        text: Workbench.tr(Workbench.has-selection ? "curve.equalize" : "curve.flatten_right");
+                                        enabled: (Workbench.has-selection || !Workbench.curve-selection-mode) && Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("flatten"); }
+                                    }
+
+                                    if !Workbench.curve-gpu: ActionButton {
+                                        text: "+";
+                                        enabled: Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("insert"); }
+                                    }
+
+                                    if !Workbench.curve-gpu: ActionButton {
+                                        text: "−";
+                                        enabled: Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("remove"); }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+
+                                if Workbench.curve-gpu: Hairline { }
+
+                                if Workbench.curve-gpu: HorizontalLayout {
+                                    spacing: 6px;
+                                    select-range-mode := ActionButton {
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        text: Workbench.tr("curve.mark_range");
+                                        accessible-checkable: true;
+                                        accessible-checked: Workbench.curve-selection-mode;
+                                        background: Workbench.curve-selection-mode ? Theme.hover : Theme.control;
+                                        border-width: Workbench.curve-selection-mode ? 1px : 0px;
+                                        border-color: Theme.accent;
+                                        clicked => { Workbench.curve-action("selection-mode"); }
+                                    }
+
+                                    ActionButton {
+                                        text: Workbench.tr("curve.select_all");
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("select-all"); }
+                                    }
+
+                                    ActionButton {
+                                        text: Workbench.tr("curve.select_right");
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("select-right"); }
+                                    }
+
+                                    ActionButton {
+                                        text: Workbench.tr("curve.clear_selection");
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("clear-selection"); }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+
+                                if Workbench.curve-gpu: HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: Workbench.tr("curve.from");
+                                        color: Theme.muted;
+                                        vertical-alignment: center;
+                                    }
+
+                                    range-from := LineEdit {
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        width: 80px;
+                                        accessible-label: Workbench.tr("curve.range_from");
+                                        text <=> Workbench.range-from;
+                                    }
+
+                                    Text {
+                                        text: Workbench.tr("curve.to");
+                                        color: Theme.muted;
+                                        vertical-alignment: center;
+                                    }
+
+                                    range-to := LineEdit {
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        width: 80px;
+                                        accessible-label: Workbench.tr("curve.range_to");
+                                        text <=> Workbench.range-to;
+                                    }
+
+                                    Text {
+                                        text: Workbench.curve-x-label;
+                                        color: Theme.muted;
+                                        vertical-alignment: center;
+                                    }
+
+                                    ActionButton {
+                                        text: Workbench.tr("curve.select_range");
+                                        enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                        clicked => { Workbench.curve-action("select-range"); }
+                                    }
+
+                                    Text {
+                                        text: Workbench.selection-label;
+                                        color: Theme.muted;
+                                        wrap: word-wrap;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // History and leaving the session.
+                        HorizontalLayout {
+                            spacing: 6px;
+                            if Workbench.curve-gpu: ActionButton {
+                                control-width: 160px;
+                                text: Workbench.tr("preset.cancel_edit");
+                                enabled: !Workbench.busy && Workbench.confirm-kind == 0;
+                                clicked => { Workbench.cancel-preset(); }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            ActionButton {
+                                text: Workbench.tr("ui.undo");
+                                enabled: (Workbench.can-undo) && Workbench.confirm-kind == 0;
+                                clicked => { Workbench.curve-action("undo"); }
+                            }
+
+                            ActionButton {
+                                text: Workbench.tr("ui.redo");
+                                enabled: (Workbench.can-redo) && Workbench.confirm-kind == 0;
+                                clicked => { Workbench.curve-action("redo"); }
                             }
 
                             ActionButton {

@@ -2463,6 +2463,12 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     callback!(on_chart_wheel, |h, dx, dy, x, y, shift, ctrl| {
         h.chart_wheel(dx, dy, x, y, shift, ctrl);
     });
+    callback!(on_chart_hover, |h, x, y, w, ht| {
+        h.chart_hover(x, y, (w, ht));
+    });
+    callback!(on_chart_resized, |h| {
+        h.draw_curve();
+    });
     callback!(on_chart_key, |h, key, shift, ctrl, alt| {
         h.chart_key(key.as_str(), shift, ctrl, alt)
     });

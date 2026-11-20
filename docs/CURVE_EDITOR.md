@@ -23,7 +23,11 @@ an empty range is an error and disables tail flattening. Clear the range/mode to
 use the separate **Flatten to end** action. **Cancel editing** restores the whole
 currently loaded preset baseline; it differs from Back, Use curve and Reset.
 
-Square nodes are the draft; the dotted line is the draft loaded at the start of this editing session. It can be a saved profile, not necessarily current firmware. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
+Square nodes are the draft. On GPU curves the thin line is the **NVIDIA driver default curve** (the driver curve with every programmed delta removed); the readout and the offset line above the chart compare the draft with it, never with the current preset or applied offsets. Fan curves have no driver default; their thin line is the curve loaded at the start of this editing session. Selected guides follow the editing selection; they are not a live GPU operating point. Fan templates are drafts, not hardware reads.
+
+Grid lines and axis labels sit at round values (for example every 25 mV and 100 MHz). The step follows the visible range and the actual plot size, and lines, labels, points and the curve share one coordinate mapping.
+
+Layout: chart with legend and view tools, one editing panel (selected point; GPU range selection below a divider), then Cancel editing, Undo, Redo and Reset.
 
 ## GPU rules and gestures
 
@@ -40,7 +44,7 @@ On the reference device, all **127 actual Graphics voltage anchors** are fixed i
 | Double-click | Clear range selection; on fan curves, add a point on free space |
 | Shift + Enter | Flatten selected range; otherwise plateau from the selected point |
 
-A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state and adds no history. During a drag other keys are ignored; toolbar actions finish the drag first. A readout beside the dragged point shows voltage, frequency and the change since the drag started. There is no `L` shortcut: in Afterburner it locks a voltage, which this editor does not support.
+A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state and adds no history. During a drag other keys are ignored; toolbar actions finish the drag first. Hovering a point (within the pick radius) or dragging it shows a readout beside it: GPU voltage, frequency and offset from the driver default curve; fan temperature and value, plus the change since the drag started while dragging. There is no `L` shortcut: in Afterburner it locks a voltage, which this editor does not support.
 
 ## Keyboard and viewport
 
@@ -87,6 +91,6 @@ cannot gain sign-in authorization. [GPU contracts](GPU_PROFILES.md),
 
 `core/curve_editor.rs` owns editing/history, `curve_input.rs` abstract input and `curve_view.rs` viewport/grid rules. `app/curve_widget.rs` owns GDI/native input; `curve_ui.rs` owns load/save/merge. Full curves and unrelated settings survive merge; conflicting concurrent edits fail.
 
-Since 0.10.0-beta.8 the Slint editor implements these gestures itself (`app/slint_ui/curve.rs`: pick radius, press/drag/finish, wheel accumulation, key decoding); unit tests cover point picking, group drag as one undo step, Shift band selection, Escape without history and the key table. A mouse run of the Slint editor in `--ui-test` was not performed in this change.
+Since 0.10.0-beta.8 the Slint editor implements these gestures itself (`app/slint_ui/curve.rs`: pick radius, press/drag/finish, wheel accumulation, key decoding); unit tests cover point picking, group drag as one undo step, Shift band selection, Escape without history, the key table, grid ticks on round values with the point mapping, hover readouts and offsets against the driver default curve. A mouse run of the Slint editor in `--ui-test` was not performed in this change.
 
 Native smoke checks exercised chart opening from new/dirty presets, reference/current dragging, bands, flatten, undo/redo, fit, numeric alternatives and fan draft persistence without hardware Apply. Recorded client renders do not cover all DPI/titlebar/high-contrast/accessibility behavior. [Validation](VALIDATION.md).

@@ -366,6 +366,11 @@ impl Curve {
     pub fn reference(&self) -> &[Point] {
         &self.original
     }
+    /// GPU: the driver's factory curve (live curve without programmed deltas),
+    /// the baseline for offsets shown to the user. Fan curves have none.
+    pub fn factory(&self) -> Option<Result<Vec<Point>, String>> {
+        self.gpu.as_ref().map(factory_points)
+    }
     /// Ctrl+D: the curve loaded at the start of this editing session (saved
     /// preset or fresh driver curve), as one undoable step. Reset instead
     /// returns a GPU curve to the driver's factory curve.
