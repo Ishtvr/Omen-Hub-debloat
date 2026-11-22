@@ -50,7 +50,7 @@ pub use startup::{
 };
 use std::collections::HashMap;
 pub use thermal::{CoolingSnapshot, read_cooling_snapshot};
-pub use tray_task::{set_tray_task, tray_task_command};
+pub use tray_task::{set_tray_task, tray_task_command, tray_task_restarts};
 pub(crate) use user_data::profile_directory;
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use wmi::{Variant, WMIConnection};

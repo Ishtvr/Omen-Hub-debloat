@@ -77,6 +77,26 @@ pub fn tray_task_command() -> Result<Option<(String, String)>, String> {
     })
 }
 
+/// Whether this user's logon task restarts the dashboard after a failed
+/// exit; `None` when the task is absent. Tasks registered by older builds
+/// have no restart rule.
+pub fn tray_task_restarts() -> Result<Option<bool>, String> {
+    let name = task_name(&super::current_user_sid()?);
+    with_service(move |service| unsafe {
+        let task = match service
+            .GetFolder(&BSTR::from("\\"))?
+            .GetTask(&BSTR::from(name.as_str()))
+        {
+            Ok(task) => task,
+            Err(e) if e.code().0 as u32 == NOT_FOUND => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut count = 0;
+        task.Definition()?.Settings()?.RestartCount(&mut count)?;
+        Ok(Some(count > 0))
+    })
+}
+
 /// Creates or updates the task for `executable` with `arguments`, or removes
 /// it with `None`.
 pub fn set_tray_task(command: Option<(&Path, &str)>) -> Result<(), String> {

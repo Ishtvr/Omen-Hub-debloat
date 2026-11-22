@@ -92,7 +92,9 @@ pub fn set_entry(entry: Option<&str>) -> Result<(), String> {
 }
 
 /// Moves an older Run entry to the logon task once administrator rights are
-/// available. Failure keeps the entry; Settings can save it again.
+/// available. Failure keeps the entry; Settings can save it again. A logon
+/// task from an older build is registered again with the same command, so it
+/// gains the restart after a crash.
 pub fn migrate() {
     if !crate::single_instance::elevated() {
         return;
@@ -101,6 +103,11 @@ pub fn migrate() {
         && matches!(omen_platform::tray_task_command(), Ok(None))
     {
         let _ = set_entry(Some(&entry));
+    }
+    if matches!(omen_platform::tray_task_restarts(), Ok(Some(false)))
+        && let Ok(Some((program, arguments))) = omen_platform::tray_task_command()
+    {
+        let _ = omen_platform::set_tray_task(Some((Path::new(&program), arguments.trim())));
     }
 }
 

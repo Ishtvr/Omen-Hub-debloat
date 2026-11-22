@@ -338,8 +338,10 @@ impl GpuTemperature {
     }
 }
 
-/// Enforced power limit and draw only, for "Keep preset". A separate small NVML
-/// session: the dashboard's telemetry sessions live on another thread.
+/// Enforced power limit and draw only, for "Keep preset". Open it for one
+/// read in a disposable process, never retained in the dashboard: a retained
+/// session crashed the dashboard inside `nvml.dll` (access violation while
+/// reading device state; the trigger is not identified).
 pub struct GpuLimitProbe {
     _library: Library,
     shutdown: StatusFn,

@@ -25,9 +25,16 @@ fn escape(text: &str) -> String {
     out
 }
 
+/// Restarts after a failed exit (a crash): the automatic battery change and
+/// "Keep preset" live in this process.
+pub const RESTART_COUNT: u32 = 3;
+/// Shortest interval Task Scheduler accepts.
+pub const RESTART_INTERVAL: &str = "PT1M";
+
 /// Starts `executable` with `arguments` (one of [`ARGUMENTS`]) at the user's
 /// sign-in with the highest run level, on battery too, without a time limit
-/// and without a second copy.
+/// and without a second copy. An exit with an error code (a crash) starts it
+/// again after a minute, up to [`RESTART_COUNT`] times; a normal exit does not.
 pub fn task_xml(sid: &str, executable: &str, arguments: &str) -> String {
     let (sid, executable, arguments) = (escape(sid), escape(executable), escape(arguments));
     format!(
@@ -51,6 +58,10 @@ pub fn task_xml(sid: &str, executable: &str, arguments: &str) -> String {
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>false</StartWhenAvailable>
+    <RestartOnFailure>
+      <Interval>{RESTART_INTERVAL}</Interval>
+      <Count>{RESTART_COUNT}</Count>
+    </RestartOnFailure>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
@@ -86,6 +97,9 @@ mod tests {
             "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
             "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
             "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+            "<RestartOnFailure>",
+            "<Interval>PT1M</Interval>",
+            "<Count>3</Count>",
             r#"<Command>"D:\Omen Gaming Hub Rewrite\dist\Omen Hub++.exe"</Command>"#,
             "<Arguments>--tray</Arguments>",
         ] {

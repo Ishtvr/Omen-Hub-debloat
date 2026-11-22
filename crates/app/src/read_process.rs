@@ -236,12 +236,15 @@ fn child_status(process: &OwnedHandle) -> Result<Option<u32>, String> {
 pub enum ReadCommand {
     Inventory,
     GpuTelemetry,
+    /// Enforced GPU power limit and draw for "Keep preset".
+    GpuLimit,
 }
 impl ReadCommand {
     fn argument(self) -> &'static str {
         match self {
             Self::Inventory => "inventory",
             Self::GpuTelemetry => "gpu-telemetry-read",
+            Self::GpuLimit => "gpu-limit-read",
         }
     }
 }

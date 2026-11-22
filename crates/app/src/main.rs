@@ -377,6 +377,15 @@ fn run() -> Result<(), String> {
             );
         }
         #[cfg(windows)]
+        Some("gpu-limit-read") if args.len() == 1 => {
+            // One short NVML session per read, in this disposable process.
+            let reading = omen_platform::GpuLimitProbe::new()?.read()?;
+            println!(
+                "{}",
+                serde_json::to_string(&reading).map_err(|e| e.to_string())?
+            );
+        }
+        #[cfg(windows)]
         Some("hp-control-guardian") if args.len() == 1 => {
             omen_platform::hp_control::run_guardian_process()?;
         }

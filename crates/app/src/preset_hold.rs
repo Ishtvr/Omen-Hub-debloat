@@ -9,7 +9,7 @@ use omen_core::{
     hp_mode::{self, HpMode},
     profiles::{Setting, Value},
 };
-use omen_platform::{ControlLease, Controller, GpuLimitProbe, profile_store::ProfileStore};
+use omen_platform::{ControlLease, Controller, profile_store::ProfileStore};
 use std::{
     sync::{Condvar, Mutex},
     thread,
@@ -115,11 +115,12 @@ impl Applied {
     }
 }
 
-/// Watches the GPU release of a Dynamic Boost preset.
+/// Watches the GPU release of a Dynamic Boost preset. No NVML session lives
+/// in this process: the driver library crashed the dashboard with a retained
+/// session (22 November 2026, `nvml.dll` access violation), so every reading
+/// comes from a disposable child like the dashboard's GPU telemetry.
 #[derive(Default)]
 struct Release {
-    /// Opened only while such a preset is held.
-    probe: Option<GpuLimitProbe>,
     locked: u8,
 }
 
@@ -281,11 +282,8 @@ fn keep_mode(
             return Ok(());
         }
     };
-    let probe = match &mut release.probe {
-        Some(probe) => probe,
-        None => release.probe.insert(GpuLimitProbe::new()?),
-    };
-    let (limit_mw, draw_mw) = probe.read()?;
+    let (limit_mw, draw_mw): (u32, u32) =
+        crate::read_process::capture(crate::read_process::ReadCommand::GpuLimit)?;
     if hp_mode::gpu_release_lost(limit_mw, draw_mw) {
         release.locked = release.locked.saturating_add(1);
     } else {
