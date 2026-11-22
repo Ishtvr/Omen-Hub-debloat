@@ -1041,7 +1041,13 @@ impl Host {
                         self.status(&message, false);
                         self.completed(&message);
                     }
-                    Err(error) => self.status(&crate::i18n::error_message(&error), true),
+                    Err(error) => {
+                        if outcome.automatic {
+                            // The power worker decides whether to try again.
+                            let _ = self.tx.send(ui::Request::BatteryFailed);
+                        }
+                        self.status(&crate::i18n::error_message(&error), true);
+                    }
                 }
                 if let Some(w) = self.window.upgrade() {
                     w.global::<Workbench>()

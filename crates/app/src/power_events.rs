@@ -1,6 +1,9 @@
 //! Public Windows power subscriptions. This module never changes a power state.
 use omen_core::power::Event;
-use std::ptr;
+use std::{
+    ptr,
+    sync::atomic::{AtomicU8, Ordering},
+};
 use windows_sys::{
     Win32::{
         Foundation::HWND,
@@ -14,6 +17,23 @@ use windows_sys::{
     },
     core::GUID,
 };
+
+/// Power source seen last (see [`source_code`]); `UNSEEN` before the first.
+static LAST_SOURCE: AtomicU8 = AtomicU8::new(UNSEEN);
+const UNSEEN: u8 = u8::MAX;
+fn source_code(ac: Option<bool>) -> u8 {
+    match ac {
+        Some(false) => 0,
+        Some(true) => 1,
+        None => 2,
+    }
+}
+/// Whether `ac` differs from the source seen last; remembers it. Windows also
+/// sends `PBT_APMPOWERSTATUSCHANGE` for every battery percent, which is no
+/// source change and must not start the checks that follow one.
+fn source_edge(ac: Option<bool>) -> bool {
+    LAST_SOURCE.swap(source_code(ac), Ordering::Relaxed) != source_code(ac)
+}
 
 pub struct Notifications {
     source: HPOWERNOTIFY,
@@ -29,6 +49,7 @@ impl Notifications {
             sleep: 0,
             scheme: 0,
         };
+        source_edge(omen_platform::power_status().ac_connected);
         // SAFETY: A live owned window receives notifications until Drop.
         unsafe {
             notifications.source = RegisterPowerSettingNotification(
@@ -93,6 +114,9 @@ fn setting(guid: &GUID, data: &[u8]) -> Option<Event> {
             _ => None,
         }
     } else if same_guid(guid, &GUID_ACDC_POWER_SOURCE) && value <= 2 {
+        // The dedicated notification always counts: Windows sends it for a
+        // source change only (and once on registration).
+        source_edge(omen_platform::power_status().ac_connected);
         Some(Event::SourceChanged)
     } else {
         None
@@ -106,7 +130,9 @@ pub unsafe fn decode(kind: u32, data: isize) -> Option<Event> {
     match kind {
         PBT_APMSUSPEND => Some(Event::Suspend),
         PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => Some(Event::Resume),
-        PBT_APMPOWERSTATUSCHANGE => Some(Event::SourceChanged),
+        PBT_APMPOWERSTATUSCHANGE => {
+            source_edge(omen_platform::power_status().ac_connected).then_some(Event::SourceChanged)
+        }
         PBT_POWERSETTINGCHANGE if data != 0 => unsafe {
             let header = data as *const POWERBROADCAST_SETTING;
             let length = ptr::addr_of!((*header).DataLength).read_unaligned();
@@ -161,6 +187,17 @@ mod tests {
             unsafe { decode(PBT_APMRESUMEAUTOMATIC, 0) },
             Some(Event::Resume)
         );
+    }
+    #[test]
+    fn a_battery_percent_step_is_not_a_source_change() {
+        // First sighting and every real change count; repeats do not.
+        LAST_SOURCE.store(UNSEEN, Ordering::Relaxed);
+        assert!(source_edge(Some(true)));
+        assert!(!source_edge(Some(true)));
+        assert!(source_edge(Some(false)));
+        assert!(!source_edge(Some(false)));
+        assert!(source_edge(None));
+        assert!(source_edge(Some(true)));
     }
     #[test]
     fn only_typed_complete_display_and_ac_values_are_accepted() {

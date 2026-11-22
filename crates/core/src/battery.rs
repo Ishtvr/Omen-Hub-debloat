@@ -62,7 +62,14 @@ pub struct State {
     /// The user chose another selection by hand on battery; no automatic
     /// battery switch until the charger is connected again.
     pub manual_override: bool,
+    /// Boot in which this state was written (wall-clock boot time). A
+    /// restart returns volatile firmware values to stock, so a battery
+    /// session of an earlier boot is over. `None` in files of older builds.
+    pub boot_unix_s: Option<u64>,
 }
+
+/// Two readings of the same boot differ by clock adjustments only.
+const BOOT_TOLERANCE_S: u64 = 120;
 
 /// What to apply for the current power source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +115,21 @@ pub fn decide(ac: Option<bool>, battery: Option<&Selection>, state: &State) -> O
 }
 
 impl State {
+    /// The state as it holds in the boot that started at `boot_unix_s`: an
+    /// automatic battery session or manual override of an earlier boot ended
+    /// with that boot, so the next check applies the battery selection again
+    /// (or nothing on AC, where sign-in applies its own preset).
+    pub fn at_boot(mut self, boot_unix_s: u64) -> Self {
+        if self
+            .boot_unix_s
+            .is_some_and(|saved| saved.abs_diff(boot_unix_s) > BOOT_TOLERANCE_S)
+        {
+            self.switched = false;
+            self.manual_override = false;
+        }
+        self.boot_unix_s = Some(boot_unix_s);
+        self
+    }
     /// After an automatic switch completed.
     pub fn switched_to(&mut self, battery: bool) {
         self.switched = battery;
@@ -127,9 +149,21 @@ impl State {
     }
 }
 
-/// Minimum quiet time after the last power event before the source is read
-/// and acted on: lid, adapter and display events arrive in bursts.
-pub const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(750);
+/// Quiet time after the last power event before the source is read again and
+/// acted on: lid, adapter and display events arrive in bursts. The values
+/// follow the OMEN Hub (1 s after a source change; 2 s on AC, where it lets
+/// the adapter and firmware settle before it writes its power limits).
+pub fn debounce(ac: Option<bool>) -> std::time::Duration {
+    std::time::Duration::from_millis(if ac == Some(false) { 1000 } else { 2000 })
+}
+
+/// Waits before a failed automatic switch is tried again; after the last one
+/// the switch rests until the next power event.
+pub const RETRY_DELAYS: [std::time::Duration; 3] = [
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(15),
+    std::time::Duration::from_secs(60),
+];
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,7 +282,7 @@ mod tests {
         let state = State {
             ac_selection: Some(gaming()),
             switched: true,
-            manual_override: false,
+            ..State::default()
         };
         assert!(matches!(
             decide(Some(true), Some(&quiet()), &state),
@@ -288,6 +322,47 @@ mod tests {
         // A manual choice on AC becomes the new AC state.
         state.manual(&other, Some(true));
         assert_eq!(state.ac_selection, Some(other));
+    }
+
+    #[test]
+    fn a_restart_ends_the_battery_session_of_the_earlier_boot() {
+        let battery = quiet();
+        let saved = State {
+            ac_selection: Some(gaming()),
+            switched: true,
+            manual_override: true,
+            boot_unix_s: Some(1_000_000),
+        };
+        // Same boot (clock adjusted by a few seconds): nothing changes.
+        let same = saved.clone().at_boot(1_000_030);
+        assert!(same.switched && same.manual_override);
+        assert_eq!(decide(Some(false), Some(&battery), &same), None);
+        // Restarted on battery: firmware is back at stock, apply again.
+        let later = saved.clone().at_boot(1_003_600);
+        assert!(!later.switched && !later.manual_override);
+        assert_eq!(later.ac_selection, Some(gaming()));
+        assert_eq!(later.boot_unix_s, Some(1_003_600));
+        assert_eq!(
+            decide(Some(false), Some(&battery), &later),
+            Some(Switch::ToBattery(battery.clone()))
+        );
+        // Restarted on AC: sign-in applies its own preset, nothing to return.
+        assert_eq!(decide(Some(true), Some(&battery), &later), None);
+        // A file of an older build has no boot time and keeps its state.
+        let legacy = State {
+            boot_unix_s: None,
+            ..saved
+        }
+        .at_boot(1_003_600);
+        assert!(legacy.switched);
+        assert_eq!(legacy.boot_unix_s, Some(1_003_600));
+    }
+
+    #[test]
+    fn waits_follow_the_power_source() {
+        assert!(debounce(Some(false)) < debounce(Some(true)));
+        assert_eq!(debounce(None), debounce(Some(true)));
+        assert!(RETRY_DELAYS.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

@@ -821,24 +821,46 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             // Approval ends for a changed preset, device or binding; a firmware
             // step or value that fails after those checks does not revoke it.
             let mut device_checked = false;
+            // Signed in on battery: a preset with its own battery behaviour is
+            // not applied. The running dashboard applies that behaviour and
+            // returns to this preset when the charger is connected.
+            let mut skipped_on_battery = false;
             let result = (|| {
                 let Some(profile) = store.startup_profile()? else {
                     return Ok(None);
                 };
+                let selection = omen_core::battery::Selection::Preset(profile.id.clone());
+                let ac = omen_platform::power_status().ac_connected;
+                skipped_on_battery =
+                    ac == Some(false) && store.battery_selection_for(Some(&selection)).is_some();
+                // Either way this preset is the one in use on AC from now on,
+                // so its battery behaviour and the return apply to it. A new
+                // boot also ends the battery session of the earlier one.
+                let mut state = store.battery_state().at_boot(omen_platform::boot_unix_s());
+                state.ac_selection = Some(selection);
+                if skipped_on_battery {
+                    store.save_battery_state(&state)?;
+                    return Ok(None);
+                }
                 omen_core::fan_profile::startup_allowed(&profile, true)?;
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
                 let mut controller = prepare_apply(&profile, &mut store, true, false)?;
                 device_checked = true;
                 apply_hp_prelude(&profile, controller.inventory())?;
-                transaction::apply(&profile, &digest, &mut controller, &mut store, true)
-                    .map(Some)
-                    .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))
+                let completion =
+                    transaction::apply(&profile, &digest, &mut controller, &mut store, true)
+                        .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+                if ac != Some(false) {
+                    // Best effort: the applied preset stands either way.
+                    let _ = store.save_battery_state(&state);
+                }
+                Ok(Some(completion))
             })();
             if result.is_err() && !device_checked {
                 store.disable_startup()?;
             }
-            store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"result":result}))?;
+            store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"skipped_on_battery":skipped_on_battery,"result":result}))?;
             print(&result)?;
             result.map(|_| ())
         }

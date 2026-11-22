@@ -20,6 +20,8 @@ pub(super) struct ResultData {
     pub generation: u64,
     pub result: Result<String, String>,
     pub pending: Option<bool>,
+    /// The work was an automatic AC/battery switch, not a manual choice.
+    pub automatic: bool,
 }
 pub(super) struct Handle {
     state: Arc<(Mutex<State>, Condvar)>,
@@ -87,7 +89,8 @@ impl Handle {
                     crate::elevation::run_serial(Some(id), crate::elevation::Action::Replace)
                         .map(|r| crate::elevation::applied_status(&r))
                 }
-                Target::Battery(switch) => crate::ui::execute_battery_switch(switch, true),
+                Target::Battery(switch) => crate::ui::execute_battery_switch(switch, true)
+                    .map_err(|error| crate::ui::battery_failure(switch, &error)),
             },
             |target| {
                 let selection = match target {
@@ -151,6 +154,7 @@ impl Handle {
                         generation,
                         result,
                         pending: pending(),
+                        automatic: matches!(target, Target::Battery(_)),
                     })
                     .is_err()
                 {

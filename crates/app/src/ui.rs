@@ -58,6 +58,8 @@ pub(crate) enum Request {
     Refresh,
     Visibility(bool),
     Power,
+    /// An automatic battery switch failed in the apply queue.
+    BatteryFailed,
     Stop,
 }
 
@@ -194,16 +196,21 @@ fn apply_selection(selection: &Selection) -> Result<serde_json::Value, String> {
 /// until the charger is connected again.
 pub(crate) fn record_manual(selection: &Selection) {
     if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
-        let mut state = store.battery_state();
+        let mut state = battery_state(&store);
         state.manual(selection, omen_platform::power_status().ac_connected);
         let _ = store.save_battery_state(&state);
     }
+}
+/// The persisted switch state as it holds in the current boot: a battery
+/// session of an earlier boot ended with the restart.
+fn battery_state(store: &omen_platform::profile_store::ProfileStore) -> omen_core::battery::State {
+    store.battery_state().at_boot(omen_platform::boot_unix_s())
 }
 /// What the automatic battery switch should do now (startup, debounced
 /// power event, resume). Reads the source once more after the debounce.
 pub(crate) fn battery_decision() -> Option<Switch> {
     let store = omen_platform::profile_store::ProfileStore::user_data().ok()?;
-    let state = store.battery_state();
+    let state = battery_state(&store);
     // The battery behaviour belongs to the preset in use on AC.
     omen_core::battery::decide(
         omen_platform::power_status().ac_connected,
@@ -216,16 +223,31 @@ pub(crate) fn battery_decision() -> Option<Switch> {
 /// Records a completed automatic switch.
 pub(crate) fn record_battery_switch(switch: &Switch) {
     if let Ok(store) = omen_platform::profile_store::ProfileStore::user_data() {
-        let mut state = store.battery_state();
+        let mut state = battery_state(&store);
         state.switched_to(matches!(switch, Switch::ToBattery(_)));
         let _ = store.save_battery_state(&state);
     }
 }
-/// Runs one automatic switch: on return, the battery preset's own journal is
-/// restored first (only when it is still the last completed Apply), so its
-/// Windows policies and refresh rate return exactly; then the AC selection.
-/// `serial` waits for the helper's real end (queue owner); otherwise the
-/// normal bounded wait applies.
+/// Status line of a failed automatic switch.
+pub(crate) fn battery_failure(switch: &Switch, error: &str) -> String {
+    tf(
+        "battery.failed",
+        &[
+            &selection_name(match switch {
+                Switch::ToBattery(selection) | Switch::BackToAc { selection, .. } => selection,
+            }),
+            &crate::i18n::error_message(error),
+        ],
+    )
+}
+/// Runs one automatic switch. Each direction first undoes the preset it
+/// leaves, when that is still the last completed Apply: its journal returns
+/// Windows policies, refresh rate, limits and GPU values to what they were
+/// before it, so the gaming preset's power plan does not stay on battery and
+/// the battery preset's values do not stay on AC. A failed undo is not fatal;
+/// the selection that follows overwrites what it names. `serial` waits for
+/// the helper's real end (queue owner); otherwise the normal bounded wait
+/// applies.
 pub(crate) fn execute_battery_switch(switch: &Switch, serial: bool) -> Result<String, String> {
     use crate::elevation::Action;
     let run = |id: Option<&str>, action: Action| {
@@ -235,17 +257,40 @@ pub(crate) fn execute_battery_switch(switch: &Switch, serial: bool) -> Result<St
             crate::elevation::run(id, action, || false)
         }
     };
+    let store = omen_platform::profile_store::ProfileStore::user_data()?;
+    let undo = |id: &str| {
+        if store
+            .applied_settings()
+            .ok()
+            .flatten()
+            .is_some_and(|(applied, _, _)| applied == id)
+        {
+            let _ = run(Some(id), Action::RestoreKeepStartup);
+        }
+    };
     let (selection, to_battery) = match switch {
-        Switch::ToBattery(selection) => (selection, true),
-        Switch::BackToAc { selection, restore } => {
-            if let Some(id) = restore
-                && omen_platform::profile_store::ProfileStore::user_data()
-                    .and_then(|store| store.applied_settings())
-                    .ok()
-                    .flatten()
-                    .is_some_and(|(applied, _, _)| applied == *id)
+        Switch::ToBattery(selection) => {
+            if let Some(Selection::Preset(id)) = battery_state(&store).ac_selection
+                && Selection::Preset(id.clone()) != *selection
             {
-                run(Some(id), Action::RestoreKeepStartup)?;
+                undo(&id);
+            }
+            // The firmware mode has no readback and is not part of any
+            // journal. A battery preset without a Dynamic Boost field leaves
+            // the mode alone, which could keep Unleashed on battery: return
+            // to the BIOS default mode first.
+            if let Selection::Preset(id) = selection
+                && store
+                    .load(id)
+                    .is_ok_and(|profile| HpMode::of_preset(&profile, false).is_none())
+            {
+                let _ = run(None, Action::ReplaceMode(HpMode::Balanced));
+            }
+            (selection, true)
+        }
+        Switch::BackToAc { selection, restore } => {
+            if let Some(id) = restore {
+                undo(id);
             }
             (selection, false)
         }
@@ -279,15 +324,7 @@ fn battery_switch() -> Option<String> {
             record_battery_switch(&switch);
             text
         }
-        Err(error) => tf(
-            "battery.failed",
-            &[
-                &selection_name(match &switch {
-                    Switch::ToBattery(selection) | Switch::BackToAc { selection, .. } => selection,
-                }),
-                &crate::i18n::error_message(&error),
-            ],
-        ),
+        Err(error) => battery_failure(&switch, &error),
     })
 }
 /// Manual controls have their own sleeping worker: a slow GPU/inventory/CPU
@@ -428,7 +465,12 @@ pub(crate) fn worker(
     let mut hardware: Option<crate::cpu_sensor_bridge::CpuSensorBridge> = None;
     let mut reopen_at = Instant::now();
     // Startup check of the battery switch (a crash or restart on battery).
-    let mut evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
+    let mut evaluate_at = Some(Instant::now() + omen_core::battery::debounce(ac));
+    // Failed automatic switches since the last power event.
+    let mut retries = 0usize;
+    // The sign-in task runs beside the dashboard start and names the preset
+    // in use on AC; check the level once more after it has finished.
+    let mut settle_check = Some(Instant::now() + Duration::from_secs(20));
     let publish = |snapshot: &Snapshot| {
         *shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         // SAFETY: PostMessage does not dereference hwnd; a closed window rejects the message.
@@ -520,7 +562,12 @@ pub(crate) fn worker(
         publish(&snapshot);
         if snapshot.power.ac_connected != ac {
             ac = snapshot.power.ac_connected;
-            evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
+            evaluate_at = Some(Instant::now() + omen_core::battery::debounce(ac));
+            retries = 0;
+        }
+        if settle_check.is_some_and(|at| Instant::now() >= at) {
+            settle_check = None;
+            evaluate_at.get_or_insert_with(Instant::now);
         }
         if evaluate_at.is_some_and(|at| Instant::now() >= at) {
             evaluate_at = None;
@@ -562,7 +609,11 @@ pub(crate) fn worker(
                 }
             }
         }
-        let wait = evaluate_at.map(|at| at.saturating_duration_since(Instant::now()));
+        let wait = [evaluate_at, settle_check]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(|at| at.saturating_duration_since(Instant::now()));
         let request = if (visible && !suspended) || wait.is_some() {
             let limit = if visible && !suspended {
                 Duration::from_secs(3)
@@ -599,10 +650,23 @@ pub(crate) fn worker(
             Some(Request::Power) => {
                 // Resume or source change: debounced level check (Windows may
                 // not report a plug change made during sleep).
-                evaluate_at = Some(Instant::now() + omen_core::battery::DEBOUNCE);
+                evaluate_at = Some(
+                    Instant::now()
+                        + omen_core::battery::debounce(omen_platform::power_status().ac_connected),
+                );
+                retries = 0;
                 cpu = None;
                 nvidia = None;
                 reopen_at = Instant::now();
+            }
+            Some(Request::BatteryFailed) => {
+                // Firmware and drivers may not be ready right after a source
+                // change or resume: try again a few times, then rest until
+                // the next power event.
+                if let Some(delay) = omen_core::battery::RETRY_DELAYS.get(retries) {
+                    retries += 1;
+                    evaluate_at = Some(Instant::now() + *delay);
+                }
             }
             None => (),
         }

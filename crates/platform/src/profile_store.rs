@@ -666,9 +666,10 @@ impl ProfileStore {
             manual_override: state["manual_override_on_battery"]
                 .as_bool()
                 .unwrap_or(false),
+            boot_unix_s: state["boot_unix_s"].as_u64(),
         }
     }
-    /// Writes the three fields in one atomic file replacement.
+    /// Writes the state's fields in one atomic file replacement.
     pub fn save_battery_state(&self, battery: &omen_core::battery::State) -> Result<(), String> {
         let mut state = self.power_state();
         match &battery.ac_selection {
@@ -679,6 +680,12 @@ impl ProfileStore {
         }
         state["battery_switched"] = battery.switched.into();
         state["manual_override_on_battery"] = battery.manual_override.into();
+        match battery.boot_unix_s {
+            Some(boot) => state["boot_unix_s"] = boot.into(),
+            None => {
+                state.as_object_mut().map(|o| o.remove("boot_unix_s"));
+            }
+        }
         atomic_json(&self.root.join("power-switch.json"), &state)
     }
     /// Start type HPOmenCap had before the "Disable HP OMEN Cap" setting.
@@ -1587,6 +1594,7 @@ mod battery_state_tests {
             ac_selection: Some(Selection::Preset("preset-gaming".into())),
             switched: true,
             manual_override: false,
+            boot_unix_s: Some(1_795_300_000),
         };
         store.save_battery_state(&state).unwrap();
         let reopened = ProfileStore::at(path.clone()).unwrap();
@@ -1596,6 +1604,7 @@ mod battery_state_tests {
             ac_selection: None,
             switched: false,
             manual_override: true,
+            boot_unix_s: None,
         };
         reopened.save_battery_state(&cleared).unwrap();
         assert_eq!(reopened.battery_state(), cleared);
