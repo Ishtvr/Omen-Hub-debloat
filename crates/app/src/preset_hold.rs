@@ -151,7 +151,13 @@ pub fn spawn() {
                 // Driver or helper state may be stale; reopen on the next tick.
                 Err(_) => controller = None,
             }
-            next = Instant::now() + pace.interval(origin.elapsed());
+            let mut interval = pace.interval(origin.elapsed());
+            if interval == hold::SLOW_INTERVAL
+                && omen_platform::power_status().ac_connected == Some(false)
+            {
+                interval = hold::BATTERY_INTERVAL;
+            }
+            next = Instant::now() + interval;
         }
     });
 }
@@ -272,6 +278,12 @@ fn keep_mode(
     // On battery an NVML probe would wake a sleeping dGPU from D3cold; the
     // mode watch pauses until the charger returns.
     if !ac {
+        *release = Release::default();
+        return Ok(());
+    }
+    // The same holds on AC in hybrid mode: a powered-down dGPU has no limit
+    // to watch, and the query would wake it.
+    if omen_platform::nvidia_gpu_awake() == Some(false) {
         *release = Release::default();
         return Ok(());
     }

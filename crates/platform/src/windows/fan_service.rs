@@ -35,6 +35,37 @@ use windows_sys::Win32::{
 };
 
 const CYCLE: Duration = Duration::from_secs(2);
+/// Below this GPU temperature the driver is asked only every
+/// [`GPU_IDLE_POLL`], with no driver session kept in between, so a dGPU in
+/// hybrid mode can power down. The OMEN Hub reads the GPU every 30 s in idle.
+const GPU_IDLE_C: i32 = 60;
+const GPU_IDLE_POLL: Duration = Duration::from_secs(30);
+/// The chassis sensor is a firmware call; the OMEN Hub reads it every 30 s.
+const IR_POLL: Duration = Duration::from_secs(10);
+
+/// How the GPU temperature of one cycle is obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuRead {
+    /// The dGPU is powered down: no query (it would wake it).
+    Asleep,
+    /// Cool and read recently: reuse that reading, no driver session.
+    Rest(i32),
+    /// Ask the driver now.
+    Query,
+}
+/// `awake` is the device-tree power state (`None`: unknown, ask as before);
+/// `last` the previous reading with its age.
+fn gpu_read(awake: Option<bool>, last: Option<(i32, Duration)>) -> GpuRead {
+    if awake == Some(false) {
+        return GpuRead::Asleep;
+    }
+    match last {
+        Some((temperature, age)) if temperature < GPU_IDLE_C && age < GPU_IDLE_POLL => {
+            GpuRead::Rest(temperature)
+        }
+        _ => GpuRead::Query,
+    }
+}
 /// The Hub sends its heartbeat every 30 s; stay well inside that window.
 const HEARTBEAT: Duration = Duration::from_secs(20);
 const LEASE_RETRY: Duration = Duration::from_millis(50);
@@ -411,6 +442,8 @@ pub fn run_until(
     // Idle BIOS/Hub-waiting states do not open a kernel reader or NVIDIA DLL.
     let mut cpu = None;
     let mut gpu: Option<GpuTemperature> = None;
+    let mut last_gpu: Option<(i32, Instant)> = None;
+    let mut last_ir: Option<(u8, Instant)> = None;
     let mut smoother = (Smoother::default(), Smoother::default());
     let mut last_heartbeat: Option<Instant> = None;
     let mut last_heartbeat_unix_ms = None;
@@ -568,18 +601,44 @@ pub fn run_until(
                 .as_mut()
                 .and_then(|r| r.temperature_sample().ok())
                 .and_then(|s| s.temperature_c);
-            if !max && gpu.is_none() {
-                gpu = GpuTemperature::new().ok();
+            let gpu_plan = if max {
+                GpuRead::Asleep
+            } else {
+                gpu_read(
+                    super::dgpu::nvidia_gpu_awake(),
+                    last_gpu.map(|(temperature, at)| (temperature, at.elapsed())),
+                )
+            };
+            let gpu_asleep = !max && gpu_plan == GpuRead::Asleep;
+            let gpu_c = match gpu_plan {
+                GpuRead::Asleep => {
+                    gpu = None;
+                    last_gpu = None;
+                    None
+                }
+                GpuRead::Rest(temperature) => Some(temperature),
+                GpuRead::Query => {
+                    if gpu.is_none() {
+                        gpu = GpuTemperature::new().ok();
+                    }
+                    let reading = gpu.as_ref().and_then(|reader| reader.sample().ok());
+                    last_gpu = reading.map(|temperature| (temperature, Instant::now()));
+                    // A cool GPU is not polled until the reading expires;
+                    // release the driver session so it may power down.
+                    if reading.is_none_or(|temperature| temperature < GPU_IDLE_C) {
+                        gpu = None;
+                    }
+                    reading
+                }
+            };
+            if last_ir.is_none_or(|(_, at)| at.elapsed() >= IR_POLL) {
+                last_ir = bios
+                    .get(Read::SurfaceSensor)
+                    .ok()
+                    .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
+                    .map(|t| (t.celsius, Instant::now()));
             }
-            let gpu_c = gpu.as_ref().and_then(|reader| reader.sample().ok());
-            if gpu_c.is_none() {
-                gpu = None;
-            }
-            let ir_c = bios
-                .get(Read::SurfaceSensor)
-                .ok()
-                .and_then(|(code, bytes)| FirmwareIrTemperature::decode(code, &bytes).ok())
-                .map(|t| t.celsius);
+            let ir_c = last_ir.map(|(celsius, _)| celsius);
             // All sensor/layout reads above happen without the hardware lease.
             // A bounded busy cycle preserves responsibility and stays alive;
             // it must not publish a fresh Max acknowledgement or renew OMCC.
@@ -631,10 +690,11 @@ pub fn run_until(
                     .and_then(|time| time.as_millis().try_into().ok());
             }
             // Maximum is unconditional and works without loading sensor drivers.
-            // A curve may never lower cooling when its GPU reader is unavailable.
+            // A curve may never lower cooling when its GPU reader is unavailable;
+            // a powered-down dGPU is not a failed reader and produces no heat.
             let full = !max
                 && (write_was_blocked
-                    || gpu_c.is_none()
+                    || (gpu_c.is_none() && !gpu_asleep)
                     || fan::emergency(
                         cpu_c.map(|t| t as f32),
                         gpu_c.map(|t| t as f32),
@@ -763,6 +823,31 @@ pub fn run_until(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sleeping_or_cool_gpu_is_not_queried_every_cycle() {
+        let age = Duration::from_secs;
+        // Powered down: never ask, whatever was read before.
+        assert_eq!(gpu_read(Some(false), None), GpuRead::Asleep);
+        assert_eq!(gpu_read(Some(false), Some((80, age(1)))), GpuRead::Asleep);
+        // Awake or unknown state without a reading: ask.
+        for awake in [Some(true), None] {
+            assert_eq!(gpu_read(awake, None), GpuRead::Query);
+        }
+        // Cool and fresh: rest on the reading until it expires.
+        assert_eq!(gpu_read(Some(true), Some((55, age(10)))), GpuRead::Rest(55));
+        assert_eq!(gpu_read(None, Some((59, age(29)))), GpuRead::Rest(59));
+        assert_eq!(
+            gpu_read(Some(true), Some((55, GPU_IDLE_POLL))),
+            GpuRead::Query
+        );
+        // Warm: every cycle, as before.
+        assert_eq!(
+            gpu_read(Some(true), Some((GPU_IDLE_C, age(1)))),
+            GpuRead::Query
+        );
+        assert_eq!(gpu_read(Some(true), Some((85, age(1)))), GpuRead::Query);
+    }
     #[test]
     fn maximum_and_emergency_ignore_a_saved_quiet_curve() {
         let curve = curve_of(&[

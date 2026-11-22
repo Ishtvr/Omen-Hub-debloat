@@ -279,9 +279,23 @@ struct Host {
     operation_busy: Cell<bool>,
     was_minimized: Cell<bool>,
     surface_timer: slint::Timer,
+    drain: Cell<omen_core::battery::DrainWatch>,
 }
 
 impl Host {
+    /// Tells the user once per AC session that the battery discharges
+    /// although the charger is connected.
+    fn observe_drain(&self) {
+        let power = omen_platform::power_status();
+        let mut watch = self.drain.get();
+        let lost = watch.observe(power.ac_connected, power.battery_percent);
+        self.drain.set(watch);
+        if let Some(lost) = lost {
+            let text = tf("battery.drain_on_ac", &[&lost]);
+            self.status(&text, false);
+            self.notice(t("notice.background"), &text, false);
+        }
+    }
     fn show_about(&self) {
         if self.about.borrow().is_none() {
             match AboutWindow::new() {
@@ -1533,6 +1547,10 @@ unsafe extern "system" fn event_proc(
                     as isize
             }
             WM_POWERBROADCAST => {
+                if wparam as u32 == PBT_APMPOWERSTATUSCHANGE && !host.test {
+                    // Sent for every battery percent and source change.
+                    host.observe_drain();
+                }
                 let event = crate::power_events::decode(wparam as u32, lparam);
                 // Firmware and other tools often reset limits around these
                 // events; one debounced check follows the last of them.
@@ -1753,6 +1771,7 @@ pub fn run(
         operation_busy: Cell::new(false),
         was_minimized: Cell::new(false),
         surface_timer: Default::default(),
+        drain: Default::default(),
     });
     let initial_appearance = if test {
         host.test_settings

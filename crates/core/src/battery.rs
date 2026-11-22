@@ -157,6 +157,44 @@ pub fn debounce(ac: Option<bool>) -> std::time::Duration {
     std::time::Duration::from_millis(if ac == Some(false) { 1000 } else { 2000 })
 }
 
+/// Battery level lost on AC before the user is told. Firmware lets a full
+/// battery float a few points below 100 % before it recharges.
+pub const DRAIN_NOTICE_POINTS: u8 = 5;
+
+/// Notices a battery that discharges although the charger is connected: the
+/// applied limits draw more than the adapter delivers (measured 22 November
+/// 2026: 65.0 to 36.2 Wh in under five hours of gaming on AC). It only
+/// reports; it never changes a limit.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DrainWatch {
+    /// Highest level seen in this AC session.
+    peak: Option<u8>,
+    reported: bool,
+}
+impl DrainWatch {
+    /// One reading of the power source and battery level. Returns the points
+    /// lost since the peak, once per AC session; a recovered battery arms it
+    /// again.
+    pub fn observe(&mut self, ac: Option<bool>, percent: Option<u8>) -> Option<u8> {
+        let (Some(true), Some(percent)) = (ac, percent) else {
+            // On battery or unknown: the next AC session starts fresh.
+            *self = Self::default();
+            return None;
+        };
+        let peak = self.peak.map_or(percent, |peak| peak.max(percent));
+        self.peak = Some(peak);
+        let lost = peak - percent;
+        if lost == 0 {
+            self.reported = false;
+        }
+        if lost >= DRAIN_NOTICE_POINTS && !self.reported {
+            self.reported = true;
+            return Some(lost);
+        }
+        None
+    }
+}
+
 /// Waits before a failed automatic switch is tried again; after the last one
 /// the switch rests until the next power event.
 pub const RETRY_DELAYS: [std::time::Duration; 3] = [
@@ -356,6 +394,32 @@ mod tests {
         .at_boot(1_003_600);
         assert!(legacy.switched);
         assert_eq!(legacy.boot_unix_s, Some(1_003_600));
+    }
+
+    #[test]
+    fn a_battery_that_drains_on_ac_is_reported_once_per_session() {
+        let mut watch = DrainWatch::default();
+        // Float below full is normal.
+        for level in [100, 99, 97, 96] {
+            assert_eq!(watch.observe(Some(true), Some(level)), None);
+        }
+        assert_eq!(watch.observe(Some(true), Some(95)), Some(5));
+        // Not repeated while it keeps falling.
+        for level in [94, 80, 56] {
+            assert_eq!(watch.observe(Some(true), Some(level)), None);
+        }
+        // Recovered to the peak: armed again.
+        assert_eq!(watch.observe(Some(true), Some(100)), None);
+        assert_eq!(watch.observe(Some(true), Some(90)), Some(10));
+        // A battery session resets the peak; charging up from low is no drain.
+        assert_eq!(watch.observe(Some(false), Some(60)), None);
+        for level in [40, 45, 60, 58] {
+            assert_eq!(watch.observe(Some(true), Some(level)), None);
+        }
+        assert_eq!(watch.observe(Some(true), Some(55)), Some(5));
+        // Unknown readings never report.
+        assert_eq!(watch.observe(Some(true), None), None);
+        assert_eq!(watch.observe(None, Some(10)), None);
     }
 
     #[test]

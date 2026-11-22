@@ -525,10 +525,20 @@ pub(crate) fn worker(
         // On battery NVML/NVAPI queries would wake a sleeping dGPU from D3cold
         // (several watts); GPU telemetry pauses until the charger returns.
         let on_battery = snapshot.power.ac_connected == Some(false);
-        if visible && !suspended && on_battery {
+        // The same on AC in hybrid mode: the device tree tells without a
+        // driver query whether the dGPU has powered down.
+        let gpu_asleep = visible && !suspended && omen_platform::nvidia_gpu_awake() == Some(false);
+        if visible && !suspended && (on_battery || gpu_asleep) {
             nvidia = None;
             snapshot.gpu = None;
-            snapshot.warnings = vec![t("warning.gpu_paused_battery").into()];
+            snapshot.warnings = vec![
+                t(if gpu_asleep {
+                    "warning.gpu_asleep"
+                } else {
+                    "warning.gpu_paused_battery"
+                })
+                .into(),
+            ];
         } else if visible && !suspended && Instant::now() >= reopen_at {
             let nvidia = nvidia.get_or_insert_with(crate::telemetry_worker::GpuTelemetry::new);
             snapshot.gpu = nvidia.sample();

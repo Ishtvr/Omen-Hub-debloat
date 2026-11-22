@@ -30,6 +30,9 @@ pub const FAST_PHASE: Duration = Duration::from_secs(60);
 /// Interval while every kept value stays stable. Firmware on 8E35 rewrites
 /// limits without any Windows event, so a rare check remains necessary.
 pub const SLOW_INTERVAL: Duration = Duration::from_secs(30);
+/// Stable interval on battery: each check reads the SMU and the BIOS, which
+/// costs wakeups; the firmware resets seen so far happened on AC.
+pub const BATTERY_INTERVAL: Duration = Duration::from_secs(60);
 /// Windows sends several power events within a few hundred milliseconds
 /// (lid, AC adapter, display); one check follows the last of them.
 pub const EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
