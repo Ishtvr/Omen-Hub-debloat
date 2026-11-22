@@ -203,10 +203,14 @@ pub(crate) fn record_manual(selection: &Selection) {
 /// power event, resume). Reads the source once more after the debounce.
 pub(crate) fn battery_decision() -> Option<Switch> {
     let store = omen_platform::profile_store::ProfileStore::user_data().ok()?;
+    let state = store.battery_state();
+    // The battery behaviour belongs to the preset in use on AC.
     omen_core::battery::decide(
         omen_platform::power_status().ac_connected,
-        store.battery_selection().as_ref(),
-        &store.battery_state(),
+        store
+            .battery_selection_for(state.ac_selection.as_ref())
+            .as_ref(),
+        &state,
     )
 }
 /// Records a completed automatic switch.
@@ -259,10 +263,12 @@ pub(crate) fn execute_battery_switch(switch: &Switch, serial: bool) -> Result<St
         },
         &[&name],
     );
-    if let Selection::Preset(_) = selection {
-        text.push(' ');
-        text.push_str(&crate::elevation::applied_status(&record));
-    }
+    text.push(' ');
+    text.push_str(&match selection {
+        Selection::Preset(_) => crate::elevation::applied_status(&record),
+        // A mode SET has no thermal-mode readback; name what was confirmed.
+        Selection::Mode(mode) => crate::elevation::mode_written_status(*mode, &record),
+    });
     Ok(text)
 }
 /// Legacy dashboard path (no apply queue): runs the switch directly.

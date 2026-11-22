@@ -73,22 +73,27 @@ struct FieldDraft {
     included: bool,
     text: String,
 }
-fn battery_entries(profiles: &[PerformanceProfile], saved: Option<&str>) -> Vec<Selection> {
-    let mut entries = MODES
+/// Choices of a preset's battery behaviour: every other preset, the
+/// battery-optimised template until it exists (saving the preset creates it),
+/// and the stored choice even when it is an older HP mode or a deleted preset.
+fn battery_entries(
+    profiles: &[PerformanceProfile],
+    current: Option<&str>,
+    saved: Option<&Selection>,
+) -> Vec<Selection> {
+    let mut entries = profiles
         .iter()
-        .map(|(_, m)| Selection::Mode(*m))
-        .chain(profiles.iter().map(|p| Selection::Preset(p.id.clone())))
+        .filter(|p| Some(p.id.as_str()) != current)
+        .map(|p| Selection::Preset(p.id.clone()))
         .collect::<Vec<_>>();
-    // The battery-optimised template is offered until it exists; choosing it
-    // and saving the settings creates it.
     let template = Selection::Preset(crate::battery_preset::ID.into());
-    if !entries.contains(&template) {
+    if current != Some(crate::battery_preset::ID) && !entries.contains(&template) {
         entries.push(template);
     }
-    if let Some(saved) = saved.and_then(Selection::parse)
-        && !entries.contains(&saved)
+    if let Some(saved) = saved
+        && !entries.contains(saved)
     {
-        entries.push(saved);
+        entries.push(saved.clone());
     }
     entries
 }
@@ -185,17 +190,7 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     .map(|s| s.disabled),
             ),
             Aux::SaveSettings(base, options, appearance, startup) => {
-                // Choosing the battery-optimised template creates it first.
-                let template = Selection::Preset(crate::battery_preset::ID.into()).key();
-                let created = if options.battery_preset.as_deref() == Some(template.as_str()) {
-                    ProfileStore::user_data()
-                        .and_then(|store| crate::battery_preset::ensure(&store))
-                } else {
-                    Ok(())
-                };
-                AuxResult::SettingsSaved(
-                    created.and_then(|()| settings::save(&base, &options, &appearance, startup)),
-                )
+                AuxResult::SettingsSaved(settings::save(&base, &options, &appearance, startup))
             }
             Aux::Lighting(target) => {
                 let applied = target.is_some();
@@ -315,72 +310,60 @@ impl Host {
         }
         self.paint_about();
     }
-    fn set_lists(&self, profiles: Vec<PerformanceProfile>, applied: Option<Selection>) {
+    fn set_lists(&self, profiles: Vec<PerformanceProfile>) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
         let data = w.global::<Workbench>();
-        let previous = if data.get_mode_index() < 4 {
-            MODES
-                .get(data.get_mode_index() as usize)
-                .map(|(_, m)| Selection::Mode(*m))
-        } else {
-            self.profiles
-                .borrow()
-                .get((data.get_mode_index() - 4) as usize)
-                .map(|p| Selection::Preset(p.id.clone()))
-        };
-        let selected = applied.or(previous);
-        let index = match selected {
-            Some(Selection::Mode(m)) => MODES
-                .iter()
-                .position(|(_, mode)| *mode == m)
-                .map(|i| i as i32),
-            Some(Selection::Preset(id)) => profiles
-                .iter()
-                .position(|p| p.id == id)
-                .map(|i| i as i32 + 4),
-            None => None,
-        }
-        .unwrap_or(-1);
         data.set_profiles(strings(
             std::iter::once(t("preset.new_entry").to_owned())
                 .chain(profiles.iter().map(|p| p.name.clone())),
         ));
-        data.set_modes(strings(
-            MODES
-                .iter()
-                .map(|(key, _)| tf("mode.default_entry", &[&t(key)]))
-                .chain(profiles.iter().map(|p| p.name.clone())),
-        ));
-        data.set_mode_index(index);
-        data.set_modes_ready(true);
-        let selected_battery = usize::try_from(data.get_battery_index() - 1)
+        // Keep the battery behaviour chosen in the draft across a list refresh.
+        let selected = usize::try_from(data.get_battery_index() - 1)
             .ok()
             .and_then(|i| self.battery_entries.borrow().get(i).cloned());
-        let mut entries = battery_entries(
-            &profiles,
-            self.baseline_settings
-                .borrow()
-                .as_ref()
-                .and_then(|s| s.options.battery_preset.as_deref()),
-        );
-        if let Some(selected) = &selected_battery
-            && !entries.contains(selected)
-        {
-            entries.push(selected.clone());
-        }
+        let current = self
+            .view
+            .borrow()
+            .as_ref()
+            .and_then(|v| v.selected.as_ref().map(|p| p.id.clone()));
+        self.show_battery(&profiles, current.as_deref(), selected);
+        *self.profiles.borrow_mut() = profiles;
+    }
+    /// Fills the battery-behaviour choices of the preset being edited.
+    fn show_battery(
+        &self,
+        profiles: &[PerformanceProfile],
+        current: Option<&str>,
+        selected: Option<Selection>,
+    ) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let data = w.global::<Workbench>();
+        let entries = battery_entries(profiles, current, selected.as_ref());
         data.set_battery_choices(strings(
             std::iter::once(t("battery.off").to_owned())
-                .chain(entries.iter().map(|s| selection_label(s, &profiles))),
+                .chain(entries.iter().map(|s| selection_label(s, profiles))),
         ));
         data.set_battery_index(
-            selected_battery
+            selected
                 .and_then(|s| entries.iter().position(|e| *e == s))
                 .map_or(0, |i| i as i32 + 1),
         );
         *self.battery_entries.borrow_mut() = entries;
-        *self.profiles.borrow_mut() = profiles;
+    }
+    /// The battery behaviour chosen in the draft; `None` is off.
+    fn battery_choice(&self) -> Option<Selection> {
+        let index = self
+            .window
+            .upgrade()?
+            .global::<Workbench>()
+            .get_battery_index();
+        usize::try_from(index - 1)
+            .ok()
+            .and_then(|i| self.battery_entries.borrow().get(i).cloned())
     }
     fn visible_hwnd(&self) -> HWND {
         self.window
@@ -690,7 +673,12 @@ impl Host {
         data.set_dirty(missing_toggles);
         *self.fields.borrow_mut() = fields;
         *self.gpu_draft.borrow_mut() = None;
-        self.set_lists(view.profiles.clone(), None);
+        self.set_lists(view.profiles.clone());
+        self.show_battery(
+            &view.profiles,
+            view.selected.as_ref().map(|p| p.id.as_str()),
+            view.battery.clone(),
+        );
         let blockers = view
             .blockers
             .iter()
@@ -874,6 +862,10 @@ impl Host {
             },
             startup: (data.get_preset_startup() != view.startup_enabled)
                 .then_some(data.get_preset_startup()),
+            battery: {
+                let chosen = self.battery_choice();
+                (chosen != view.battery).then_some(chosen)
+            },
         })
     }
     fn save_preset(&self) {
@@ -1110,7 +1102,7 @@ impl Host {
                                 }
                                 _ => None,
                             });
-                            self.set_lists(profiles, applied);
+                            self.set_lists(profiles);
                             if let Some(w) = self.window.upgrade() {
                                 w.global::<Workbench>().set_recovery_pending(pending);
                             }
@@ -1384,25 +1376,8 @@ impl Host {
         d.set_start_in_tray(s.options.start_in_tray);
         d.set_close_index(i32::from(!s.options.close_to_tray));
         d.set_hold_preset(s.options.hold_preset);
-        let battery = s
-            .options
-            .battery_preset
-            .as_deref()
-            .and_then(Selection::parse);
-        let profiles = self.profiles.borrow();
-        let choices = battery_entries(&profiles, s.options.battery_preset.as_deref());
-        d.set_battery_choices(strings(
-            std::iter::once(t("battery.off").to_owned())
-                .chain(choices.iter().map(|s| selection_label(s, &profiles))),
-        ));
-        d.set_battery_index(
-            battery
-                .and_then(|b| choices.iter().position(|s| *s == b))
-                .map_or(0, |i| i as i32 + 1),
-        );
         d.set_settings_ready(true);
         d.set_settings_dirty(false);
-        *self.battery_entries.borrow_mut() = choices;
         if saved {
             self.status(
                 t(
@@ -1442,10 +1417,6 @@ impl Host {
         options.start_in_tray = d.get_start_in_tray();
         options.close_to_tray = d.get_close_index() == 0;
         options.hold_preset = d.get_hold_preset();
-        let choices = self.battery_entries.borrow();
-        options.battery_preset = usize::try_from(d.get_battery_index() - 1)
-            .ok()
-            .and_then(|i| choices.get(i).map(Selection::key));
         Some((
             base,
             options,
@@ -1690,12 +1661,6 @@ pub fn run(
     d.set_test_mode(test);
     d.set_admin(crate::single_instance::elevated());
     d.set_page(page);
-    d.set_modes(strings(
-        MODES
-            .iter()
-            .map(|(key, _)| tf("mode.default_entry", &[&t(key)])),
-    ));
-    d.set_mode_index(1);
     let (tx, rx) = mpsc::channel();
     let (control, controls) = mpsc::channel();
     let (preset, presets) = mpsc::channel();
@@ -2216,6 +2181,7 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
         blockers: vec![],
         startup_enabled: false,
         startup_valid: false,
+        battery: None,
     }
 }
 
@@ -2412,21 +2378,8 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     callback!(on_fan_library_request, |h| {
         h.request_fan_library();
     });
-    callback!(on_apply_mode, |h| {
-        if let Some(w) = h.window.upgrade() {
-            let i = w.global::<Workbench>().get_mode_index();
-            let target = if (0..4).contains(&i) {
-                MODES.get(i as usize).map(|(_, m)| apply::Target::Mode(*m))
-            } else {
-                h.profiles
-                    .borrow()
-                    .get((i - 4) as usize)
-                    .map(|p| apply::Target::Preset(p.id.clone()))
-            };
-            if let Some(target) = target {
-                h.queue_apply(target);
-            }
-        }
+    callback!(on_battery_selected, |h, _index| {
+        h.dirty();
     });
     callback!(on_fan_change, |h, index| {
         if let Some(mode) = FanMode::from_index(index as usize) {
@@ -2613,21 +2566,45 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
 mod tests {
     use super::*;
     #[test]
-    fn missing_saved_battery_preset_remains_a_distinct_selection() {
-        let entries = battery_entries(&[], Some("preset:removed-preset"));
+    fn battery_choices_are_other_presets_the_template_and_the_stored_choice() {
+        let preset = |id: &str| PerformanceProfile {
+            schema: omen_core::profiles::PROFILE_SCHEMA,
+            id: id.into(),
+            name: id.into(),
+            binding: test_view(None, &[]).binding,
+            settings: vec![],
+        };
+        let template = Selection::Preset(crate::battery_preset::ID.into());
+        // Nothing saved yet: only the template, labelled as not yet created.
+        let fresh = battery_entries(&[], None, None);
+        assert_eq!(fresh, vec![template.clone()]);
+        assert_eq!(selection_label(&fresh[0], &[]), t("battery.optimized_new"));
+        // The edited preset never names itself; other presets are offered.
+        let profiles = [preset("preset-gaming"), preset("preset-office")];
         assert_eq!(
-            entries.last(),
-            Some(&Selection::Preset("removed-preset".into()))
+            battery_entries(&profiles, Some("preset-gaming"), None),
+            vec![Selection::Preset("preset-office".into()), template.clone()]
         );
-        // Four modes, the not yet created battery template, the missing preset.
-        assert_eq!(entries.len(), 6);
-        assert_eq!(battery_entries(&[], Some("mode:quiet")).len(), 5);
-        let fresh = battery_entries(&[], None);
-        assert_eq!(fresh.len(), 5);
-        assert!(fresh.contains(&Selection::Preset(crate::battery_preset::ID.into())));
+        // A deleted preset and an older HP mode stay distinct selections.
+        let missing = Selection::Preset("removed-preset".into());
         assert_eq!(
-            selection_label(fresh.last().unwrap(), &[]),
-            t("battery.optimized_new")
+            battery_entries(&profiles, Some("preset-gaming"), Some(&missing)).last(),
+            Some(&missing)
+        );
+        let mode = Selection::Mode(HpMode::Quiet);
+        assert_eq!(
+            battery_entries(&[], None, Some(&mode)),
+            vec![template.clone(), mode]
+        );
+        // The existing template is listed once, and not for itself.
+        let with_template = [preset("preset-gaming"), preset(crate::battery_preset::ID)];
+        assert_eq!(
+            battery_entries(&with_template, Some("preset-gaming"), None),
+            vec![template]
+        );
+        assert_eq!(
+            battery_entries(&with_template, Some(crate::battery_preset::ID), None),
+            vec![Selection::Preset("preset-gaming".into())]
         );
     }
 }

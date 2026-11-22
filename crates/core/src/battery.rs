@@ -30,6 +30,26 @@ impl Selection {
     }
 }
 
+/// Stored battery behaviour of a preset that turns the automatic change off.
+pub const OFF: &str = "off";
+
+/// The selection applied on battery while `ac` is the selection in use on AC.
+/// A preset's own battery behaviour (`links`: preset id to a selection key or
+/// [`OFF`]) wins; a preset without one, and every mode, uses `fallback` (the
+/// older global setting). Unknown or malformed stored values read as off.
+pub fn selection_for(
+    ac: Option<&Selection>,
+    links: &std::collections::BTreeMap<String, String>,
+    fallback: Option<&Selection>,
+) -> Option<Selection> {
+    if let Some(Selection::Preset(id)) = ac
+        && let Some(stored) = links.get(id)
+    {
+        return Selection::parse(stored);
+    }
+    fallback.cloned()
+}
+
 /// Persisted state of the automatic battery switch (`power-switch.json`).
 /// It survives restarts and crashes, so a later plug-in still returns to the
 /// AC state saved before unplugging.
@@ -133,6 +153,46 @@ mod tests {
         for bad in ["", "mode:turbo", "preset:", "preset:../x", "quiet"] {
             assert_eq!(Selection::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_presets_own_battery_behaviour_wins_over_the_global_setting() {
+        let links = std::collections::BTreeMap::from([
+            (
+                "preset-gaming".to_owned(),
+                "preset:preset-battery".to_owned(),
+            ),
+            ("preset-office".to_owned(), OFF.to_owned()),
+            ("preset-broken".to_owned(), "mode:turbo".to_owned()),
+        ]);
+        let fallback = quiet();
+        assert_eq!(
+            selection_for(Some(&gaming()), &links, Some(&fallback)),
+            Some(Selection::Preset("preset-battery".into()))
+        );
+        // Explicitly off, and a malformed value, never fall back.
+        for id in ["preset-office", "preset-broken"] {
+            assert_eq!(
+                selection_for(Some(&Selection::Preset(id.into())), &links, Some(&fallback)),
+                None
+            );
+        }
+        // A preset without its own choice, a mode and an unknown AC state use
+        // the global setting.
+        for ac in [
+            Some(Selection::Preset("preset-other".into())),
+            Some(Selection::Mode(HpMode::Balanced)),
+            None,
+        ] {
+            assert_eq!(
+                selection_for(ac.as_ref(), &links, Some(&fallback)),
+                Some(quiet())
+            );
+        }
+        assert_eq!(
+            selection_for(Some(&gaming()), &Default::default(), None),
+            None
+        );
     }
 
     #[test]

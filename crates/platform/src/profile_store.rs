@@ -215,7 +215,14 @@ impl ProfileStore {
         let hash = format!("{:x}", Sha256::digest(&bytes));
         // Flush the retained bytes before removing the selectable name.
         atomic_bytes(&archive.join(format!("{}-{hash}.json", profile.id)), &bytes)?;
-        fs::remove_file(self.path(id)?).map_err(|e| e.to_string())
+        fs::remove_file(self.path(id)?).map_err(|e| e.to_string())?;
+        // The deleted preset's own battery behaviour goes with it. Presets
+        // that named it keep the reference and show it as missing.
+        let mut links = self.battery_links();
+        if links.remove(id).is_some() {
+            self.write_battery_links(&links)?;
+        }
+        Ok(())
     }
     pub fn list(&self) -> Result<Vec<PerformanceProfile>, String> {
         let mut result = vec![];
@@ -591,6 +598,45 @@ impl ProfileStore {
             .battery_preset
             .as_deref()
             .and_then(Selection::parse)
+    }
+    /// Battery behaviour chosen per preset (`battery-presets.json`): preset id
+    /// to a selection key or `off`. A separate file, because protected older
+    /// helpers reject unknown fields in `app-settings.json`. Absent or
+    /// unreadable means no preset has its own choice.
+    pub fn battery_links(&self) -> std::collections::BTreeMap<String, String> {
+        read_json::<serde_json::Value>(&self.root.join("battery-presets.json"))
+            .ok()
+            .filter(|v| v["schema"] == 1)
+            .and_then(|v| serde_json::from_value(v["by_preset"].clone()).ok())
+            .unwrap_or_default()
+    }
+    /// The selection applied on battery while `ac` is in use on AC: the
+    /// preset's own choice, otherwise the older global setting.
+    pub fn battery_selection_for(&self, ac: Option<&Selection>) -> Option<Selection> {
+        omen_core::battery::selection_for(
+            ac,
+            &self.battery_links(),
+            self.battery_selection().as_ref(),
+        )
+    }
+    /// Stores the battery behaviour of preset `id`; `None` turns it off.
+    pub fn save_battery_link(&self, id: &str, battery: Option<&Selection>) -> Result<(), String> {
+        omen_core::profiles::validate_id(id)?;
+        let mut links = self.battery_links();
+        links.insert(
+            id.to_owned(),
+            battery.map_or_else(|| omen_core::battery::OFF.to_owned(), Selection::key),
+        );
+        self.write_battery_links(&links)
+    }
+    fn write_battery_links(
+        &self,
+        links: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        atomic_json(
+            &self.root.join("battery-presets.json"),
+            &serde_json::json!({"schema": 1, "by_preset": links}),
+        )
     }
     /// Last mode or preset applied from the dashboard while on AC power.
     pub fn ac_selection(&self) -> Option<Selection> {
@@ -1049,6 +1095,44 @@ mod tests {
             store.app_settings().unwrap().language,
             omen_core::app_settings::LanguagePreference::English
         );
+        fs::remove_file(store.root().join("app-settings.json")).unwrap();
+    }
+    #[test]
+    fn a_presets_battery_behaviour_lives_in_its_own_file() {
+        use omen_core::hp_mode::HpMode;
+        let fixture = Fixture::new();
+        let store = &fixture.0;
+        let gaming = Selection::Preset("preset-gaming".into());
+        let battery = Selection::Preset("preset-battery".into());
+        assert_eq!(store.battery_selection_for(Some(&gaming)), None);
+        // The older global setting applies until the preset has its own choice.
+        let mut settings = store.app_settings().unwrap();
+        settings.battery_preset = Some(Selection::Mode(HpMode::Quiet).key());
+        store.save_app_settings(&settings).unwrap();
+        assert_eq!(
+            store.battery_selection_for(Some(&gaming)),
+            Some(Selection::Mode(HpMode::Quiet))
+        );
+        store
+            .save_battery_link("preset-gaming", Some(&battery))
+            .unwrap();
+        assert_eq!(store.battery_selection_for(Some(&gaming)), Some(battery));
+        store.save_battery_link("preset-gaming", None).unwrap();
+        assert_eq!(store.battery_selection_for(Some(&gaming)), None);
+        // Another preset and the settings file are untouched.
+        assert_eq!(
+            store.battery_selection_for(Some(&Selection::Preset("preset-office".into()))),
+            Some(Selection::Mode(HpMode::Quiet))
+        );
+        assert_eq!(store.app_settings().unwrap(), settings);
+        assert!(store.save_battery_link("../x", None).is_err());
+        // A damaged file reads as no own choice instead of blocking the switch.
+        fs::write(store.root().join("battery-presets.json"), b"{").unwrap();
+        assert_eq!(
+            store.battery_selection_for(Some(&gaming)),
+            Some(Selection::Mode(HpMode::Quiet))
+        );
+        fs::remove_file(store.root().join("battery-presets.json")).unwrap();
         fs::remove_file(store.root().join("app-settings.json")).unwrap();
     }
     #[test]

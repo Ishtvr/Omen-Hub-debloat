@@ -80,6 +80,8 @@ pub(crate) struct View {
     pub(crate) blockers: Vec<String>,
     pub(crate) startup_enabled: bool,
     pub(crate) startup_valid: bool,
+    /// Selection applied on battery while this preset is in use on AC.
+    pub(crate) battery: Option<omen_core::battery::Selection>,
 }
 fn load(id: Option<&str>) -> Result<View, String> {
     let store = ProfileStore::user_data()?;
@@ -145,6 +147,13 @@ fn load(id: Option<&str>) -> Result<View, String> {
             p.as_ref()
                 .is_some_and(|p| omen_platform::verify_startup_profile(p).is_ok())
         });
+    // A new preset starts with the older global setting, if any.
+    let battery = store.battery_selection_for(
+        selected
+            .as_ref()
+            .map(|p| omen_core::battery::Selection::Preset(p.id.clone()))
+            .as_ref(),
+    );
     Ok(View {
         profiles: store.list()?,
         selected,
@@ -162,6 +171,7 @@ fn load(id: Option<&str>) -> Result<View, String> {
             .collect(),
         startup_enabled,
         startup_valid,
+        battery,
     })
 }
 pub(crate) struct SaveData {
@@ -171,6 +181,9 @@ pub(crate) struct SaveData {
     pub(crate) edits: Vec<(Feature, Option<Value>)>,
     /// Autostart chosen in the draft; `None` leaves it unchanged.
     pub(crate) startup: Option<bool>,
+    /// Battery behaviour chosen in the draft: `None` leaves it unchanged,
+    /// `Some(None)` turns the automatic change off for this preset.
+    pub(crate) battery: Option<Option<omen_core::battery::Selection>>,
 }
 pub(crate) enum Request {
     List,
@@ -268,6 +281,14 @@ pub(crate) fn worker(
                     );
                     omen_core::fan_profile::startup_allowed(&profile, enable)?;
                     store.save(&profile)?;
+                    if let Some(battery) = &data.battery {
+                        // Choosing the battery-optimised template creates it.
+                        if matches!(battery, Some(omen_core::battery::Selection::Preset(id)) if id == crate::battery_preset::ID)
+                        {
+                            crate::battery_preset::ensure(&store)?;
+                        }
+                        store.save_battery_link(&profile.id, battery.as_ref())?;
+                    }
                     // A changed sign-in preset is applied and approved again
                     // instead of failing at the next sign-in (user rule, 30
                     // October 2026).
@@ -986,6 +1007,7 @@ fn collect(state: &State) -> Result<SaveData, String> {
         name,
         edits,
         startup: (wanted != view.startup_enabled).then_some(wanted),
+        battery: None,
     })
 }
 unsafe fn show(handle: HWND, visible: bool) {

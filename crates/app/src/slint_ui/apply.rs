@@ -5,7 +5,6 @@ use std::sync::Condvar;
 #[derive(Clone)]
 pub(crate) enum Target {
     Preset(String),
-    Mode(HpMode),
     /// Automatic AC/battery switch: a newer manual choice replaces it while
     /// it waits, and a running one finishes before the next starts.
     Battery(omen_core::battery::Switch),
@@ -88,16 +87,11 @@ impl Handle {
                     crate::elevation::run_serial(Some(id), crate::elevation::Action::Replace)
                         .map(|r| crate::elevation::applied_status(&r))
                 }
-                Target::Mode(m) => {
-                    crate::elevation::run_serial(None, crate::elevation::Action::ReplaceMode(*m))
-                        .map(|report| crate::elevation::mode_written_status(*m, &report))
-                }
                 Target::Battery(switch) => crate::ui::execute_battery_switch(switch, true),
             },
             |target| {
                 let selection = match target {
                     Target::Preset(id) => Selection::Preset(id.clone()),
-                    Target::Mode(m) => Selection::Mode(*m),
                     Target::Battery(switch) => {
                         crate::ui::record_battery_switch(switch);
                         return;
@@ -320,7 +314,7 @@ mod tests {
             || {},
         );
         handle.submit(Target::Preset("replaced".into()));
-        let latest = handle.submit(Target::Mode(HpMode::Balanced));
+        let latest = handle.submit(Target::Preset("latest".into()));
         assert!(started_rx.try_recv().is_err());
         handle.pause(false);
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();

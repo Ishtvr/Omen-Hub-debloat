@@ -63,9 +63,6 @@ export global Workbench {
     in property <string> cpu-source;
     in property <string> power-source;
     in property <string> last-apply;
-    in property <[string]> modes;
-    in property <bool> modes-ready;
-    in-out property <int> mode-index;
     in property <[string]> profiles;
     in-out property <int> profile-index;
     in-out property <string> preset-name;
@@ -165,7 +162,6 @@ export global Workbench {
     callback navigate(int);
     callback window-action(int);
     callback refresh();
-    callback apply-mode();
     callback select-preset(int);
     callback new-preset();
     callback name-edited(string);
@@ -180,6 +176,7 @@ export global Workbench {
     callback reset-preset();
     callback cancel-preset();
     callback profile-fan-selected(int);
+    callback battery-selected(int);
     callback fan-library-selected(int);
     callback fan-library-new();
     callback fan-library-name-edited(string);
@@ -759,6 +756,7 @@ export component AppWindow inherits Window {
     changed dark-appearance => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
     init => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
     private property <bool> device-details;
+    private property <bool> battery-details;
 
     titlebar := Rectangle {
         x: 0px;
@@ -1053,33 +1051,6 @@ export component AppWindow inherits Window {
                                 }
                                 Hairline { }
 
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    Text {
-                                        text: Workbench.tr("ui.performance");
-                                        color: Theme.ink;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-
-                                    mode-selector := ComboBox {
-                                        model: Workbench.modes;
-                                        accessible-label: Workbench.tr("ui.performance");
-                                        current-index <=> Workbench.mode-index;
-                                        enabled: Workbench.confirm-kind == 0;
-                                        min-width: Theme.field-width;
-                                        preferred-width: Theme.field-width;
-                                        max-width: Theme.field-width;
-                                    }
-
-                                    mode-apply := ActionButton {
-                                        text: Workbench.tr("preset.apply_button");
-                                        primary: true;
-                                        enabled: Workbench.modes-ready && Workbench.confirm-kind == 0;
-                                        clicked => { Workbench.apply-mode(); }
-                                    }
-                                }
-
                                 SectionTitle {
                                     text: Workbench.tr("ui.presets");
                                 }
@@ -1135,8 +1106,36 @@ export component AppWindow inherits Window {
                                     }
                                 }
 
-                                Text {
-                                    text: Workbench.last-apply;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    padding-right: 16px;
+                                    Text {
+                                        text: Workbench.tr("battery.behaviour");
+                                        color: Theme.muted;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    battery := ComboBox {
+                                        accessible-label: Workbench.tr("battery.behaviour");
+                                        width: Theme.field-width;
+                                        model: Workbench.battery-choices;
+                                        current-index <=> Workbench.battery-index;
+                                        enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
+                                        selected(value) => { Workbench.battery-selected(self.current-index); }
+                                    }
+
+                                    battery-info := ActionButton {
+                                        text: "i";
+                                        accessible-label: Workbench.tr("battery.behaviour_info");
+                                        background: transparent;
+                                        enabled: Workbench.confirm-kind == 0;
+                                        clicked => { root.battery-details = !root.battery-details; }
+                                    }
+                                }
+
+                                if root.battery-details: Text {
+                                    text: Workbench.tr("info.battery_behaviour");
                                     color: Theme.muted;
                                     font-size: 12px;
                                     wrap: word-wrap;
@@ -1743,23 +1742,6 @@ export component AppWindow inherits Window {
                         }
 
                         Hairline { }
-
-                        HorizontalLayout {
-                            Text {
-                                text: Workbench.tr("settings.battery");
-                                color: Theme.ink;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-
-                            battery := ComboBox {
-                                width: Theme.field-width;
-                                model: Workbench.battery-choices;
-                                current-index <=> Workbench.battery-index;
-                                enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
-                                selected(value) => { Workbench.settings-changed(); }
-                            }
-                        }
 
                         hold := CheckBox {
                             text: Workbench.tr("settings.hold_preset");
