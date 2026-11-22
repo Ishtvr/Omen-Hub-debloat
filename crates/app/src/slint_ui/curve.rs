@@ -48,7 +48,7 @@ pub(super) struct Editor {
     click: Option<(f32, f32)>,
     /// Fan point added by the last click. The second click of a double-click
     /// lands on it and must not remove it again.
-    added: Option<usize>,
+    added: Option<(usize, std::time::Instant)>,
 }
 impl Host {
     pub(super) fn gpu_curve_dirty(&self) -> bool {
@@ -756,6 +756,8 @@ fn press(e: &mut Editor, x: f32, y: f32, plot: (f32, f32), m: Modifiers) -> Opti
 }
 /// Movement (logical px) up to which a press and release still count as a click.
 const CLICK_SLOP: f32 = 4.0;
+/// Slint's double-click interval (500 ms) with margin for the press itself.
+const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(700);
 /// One pointer event on the plot: 0 press, 1 move, 2 release, 3 cancel,
 /// 5 double-click (Slint reports it before the second release). Returns a
 /// completed GPU range selection.
@@ -779,10 +781,12 @@ fn pointer(
             e.gesture = press(e, x, y, plot, m);
             let plain = !(m.shift || m.ctrl || m.alt);
             e.click = (fan && plain && e.gesture.is_none()).then_some((x * plot.0, y * plot.1));
-            // Only the second click of a double-click on the new point keeps it.
-            if !matches!(e.gesture, Some(Gesture::Point { .. }))
-                || e.added != Some(e.curve.selected)
-            {
+            // Only the second click of a double-click on the new point keeps
+            // it; a later double-click on that point removes it as usual.
+            let second_click = e.added.is_some_and(|(index, at)| {
+                index == e.curve.selected && at.elapsed() <= DOUBLE_CLICK_WINDOW
+            });
+            if !matches!(e.gesture, Some(Gesture::Point { .. })) || !second_click {
                 e.added = None;
             }
         }
@@ -827,7 +831,7 @@ fn pointer(
                 e.finish_gesture(false);
                 if e.click.take().is_some() {
                     e.curve.insert_at(point)?;
-                    e.added = Some(e.curve.selected);
+                    e.added = Some((e.curve.selected, std::time::Instant::now()));
                 }
                 e.hover = hit(e, x, y, plot);
             }
@@ -844,7 +848,9 @@ fn pointer(
             let added = e.added.take();
             if !fan {
                 e.curve.clear_selection();
-            } else if let Some(index) = hit(e, x, y, plot).filter(|i| Some(*i) != added) {
+            } else if let Some(index) =
+                hit(e, x, y, plot).filter(|i| added.is_none_or(|(a, _)| a != *i))
+            {
                 e.curve.select(index, false);
                 e.curve.remove()?;
                 e.hover = None;
@@ -1225,6 +1231,26 @@ mod tests {
         };
         let _ = pointer(&mut e, 0, at_free.0, at_free.1, PLOT, shift);
         let _ = pointer(&mut e, 2, at_free.0, at_free.1, PLOT, shift);
+        assert_eq!(e.curve.points, before);
+    }
+
+    #[test]
+    fn a_later_double_click_removes_a_point_just_added_by_click() {
+        let mut e = fan_editor();
+        let before = e.curve.points.clone();
+        let at_free = spot(&e, 42, 37);
+        send(&mut e, 0, at_free);
+        send(&mut e, 2, at_free);
+        assert_eq!(e.curve.points.len(), before.len() + 1);
+        // Past the double-click interval the new point is an ordinary point.
+        let (index, when) = e.added.unwrap();
+        e.added = when
+            .checked_sub(std::time::Duration::from_secs(2))
+            .map(|old| (index, old));
+        let target = at(&e, index);
+        for kind in [0, 2, 0, 5, 2] {
+            send(&mut e, kind, target);
+        }
         assert_eq!(e.curve.points, before);
     }
 
