@@ -1,8 +1,21 @@
 # Validation
 
-Current software summary updated **22 November 2026**, version **0.10.0-beta.14**, Windows x64 / Rust 1.99.0. Source: beta.12 plus the curve fixes of beta.13, battery behavior per preset, the NVML isolation and the settings-row layout, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **22 November 2026**, version **0.10.0-beta.15**, Windows x64 / Rust 1.99.0. Source: beta.14 plus sign-in for presets with a linked fan curve, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Sign-in with a linked fan curve — 22 November 2026
+
+version **0.10.0-beta.15**. [Release notes](releases/0.10.0-beta.15.md). Software and
+UI validation only; no reboot and no sign-in task run.
+
+- Format check, **366 unit tests** (175 core / 87 app / 104 platform), 14 Guardian
+  process scenarios, all-target Clippy with `-D warnings` and a locked release build
+  passed. The core regression now accepts a valid CPU/GPU pair at sign-in, refuses a
+  lone curve and checks that the sign-in transaction plans only the direct controls.
+- `test-slint-ui.py` editor-extension mode: saving a preset with a linked fan preset
+  and the sign-in box ticked now saves instead of showing the refusal.
+- Reported by the user on 22 November 2026 with a screenshot of the refusal.
 
 ## Battery behavior, NVML isolation and settings rows — 22 November 2026
 

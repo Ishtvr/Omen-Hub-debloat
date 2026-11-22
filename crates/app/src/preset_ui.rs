@@ -307,7 +307,13 @@ pub(crate) fn worker(
                             let mut controller = Controller::new(true, None)?;
                             // The preset is already saved: any later failure is
                             // reported with the reloaded view, never as a lost save.
-                            if !transaction::plan(&profile, &mut controller, true).applicable {
+                            if !transaction::plan(
+                                &omen_core::fan_profile::direct_part(&profile)?,
+                                &mut controller,
+                                true,
+                            )
+                            .applicable
+                            {
                                 format!("{} {}", t("preset.saved"), t("preset.startup_blocked"))
                             } else {
                                 match elevation::run_serial(Some(&profile.id), Action::Replace) {
@@ -371,9 +377,8 @@ pub(crate) fn worker(
                         omen_core::fan_profile::startup_allowed(&store.load(&id)?, true)?;
                         let record = if store.startup_eligibility(&id).is_err() {
                             let mut controller = Controller::new(true, None)?;
-                            if !transaction::plan(&store.load(&id)?, &mut controller, true)
-                                .applicable
-                            {
+                            let direct = omen_core::fan_profile::direct_part(&store.load(&id)?)?;
+                            if !transaction::plan(&direct, &mut controller, true).applicable {
                                 return Err(t("preset.startup_blocked").into());
                             }
                             Some(elevation::run_serial(Some(&id), Action::Replace)?)

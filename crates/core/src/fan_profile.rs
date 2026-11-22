@@ -80,16 +80,19 @@ pub fn split(profile: &PerformanceProfile) -> Result<Parts, String> {
     // transaction's own for_settings matching scopes incidental GPU identity.
     Ok(Parts { direct, shared })
 }
+/// Sign-in applies a linked curve as the same helper request as a manual
+/// Apply (user decision, 22 November 2026). Only a curve the helper cannot
+/// take, a lone or differing CPU/GPU curve, is refused.
 pub fn startup_allowed(profile: &PerformanceProfile, enabled: bool) -> Result<(), String> {
-    if enabled
-        && profile
-            .settings
-            .iter()
-            .any(|s| matches!(s.feature, Feature::CpuFanCurve | Feature::GpuFanCurve))
-    {
+    if enabled && shared_curve(profile).is_err() {
         return Err(msg("fan_profile.err.startup", &[]));
     }
     Ok(())
+}
+/// The part of a profile the sign-in transaction plans and applies: the
+/// direct controls without the linked curve, which is a helper request.
+pub fn direct_part(profile: &PerformanceProfile) -> Result<PerformanceProfile, String> {
+    Ok(split(profile)?.direct)
 }
 
 #[cfg(test)]
@@ -143,9 +146,19 @@ mod tests {
         let parts = split(&decoded).unwrap();
         assert_eq!(parts.direct, baseline);
         assert_eq!(parts.shared, Some(points()));
-        assert!(startup_allowed(&p, true).is_err());
+        // A valid shared pair is applied at sign-in like any other value.
+        assert!(startup_allowed(&p, true).is_ok());
         assert!(startup_allowed(&baseline, true).is_ok());
         assert!(startup_allowed(&p, false).is_ok());
+        assert_eq!(direct_part(&p).unwrap().settings, baseline.settings);
+        // A lone curve has no helper meaning and stays refused.
+        let mut lone = baseline.clone();
+        lone.settings.push(Setting {
+            feature: Feature::CpuFanCurve,
+            value: Value::FanCurve(points()),
+        });
+        assert!(startup_allowed(&lone, true).is_err());
+        assert!(startup_allowed(&lone, false).is_ok());
     }
     #[test]
     fn partial_mismatched_and_fan_only_profiles_fail_before_dispatch() {

@@ -793,8 +793,9 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
             omen_core::fan_profile::startup_allowed(&profile, true)?;
-            let mut controller = Controller::for_profile(&profile)?;
-            let plan = transaction::plan(&profile, &mut controller, true);
+            let direct = omen_core::fan_profile::direct_part(&profile)?;
+            let mut controller = Controller::for_profile(&direct)?;
+            let plan = transaction::plan(&direct, &mut controller, true);
             if !plan.applicable {
                 return Err(serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?);
             }
@@ -825,6 +826,9 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             // not applied. The running dashboard applies that behaviour and
             // returns to this preset when the charger is connected.
             let mut skipped_on_battery = false;
+            // The linked curve's helper request, or why it was not made.
+            let mut cooling = None;
+            let mut cooling_error = None;
             let result = (|| {
                 let Some(profile) = store.startup_profile()? else {
                     return Ok(None);
@@ -845,12 +849,39 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 omen_core::fan_profile::startup_allowed(&profile, true)?;
                 omen_platform::verify_startup_profile(&profile)?;
                 let digest = profile_digest(&profile)?;
-                let mut controller = prepare_apply(&profile, &mut store, true, false)?;
+                let direct = omen_core::fan_profile::direct_part(&profile)?;
+                let mut controller = prepare_apply(&direct, &mut store, true, false)?;
                 device_checked = true;
-                apply_hp_prelude(&profile, controller.inventory())?;
+                // The linked curve is requested from the fan helper exactly as
+                // a manual Apply does. A helper that cannot take it yet (it
+                // may still be starting) does not hold back the other values.
+                let request =
+                    match crate::profile_fan::prepare(&profile, &store, controller.inventory()) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            cooling_error = Some(error);
+                            None
+                        }
+                    };
+                if let Err(error) = apply_hp_prelude(&profile, controller.inventory()) {
+                    return Err(crate::profile_fan::prelude_failed(
+                        &store,
+                        request.as_ref(),
+                        error,
+                    ));
+                }
+                let applied =
+                    transaction::apply(&direct, &digest, &mut controller, &mut store, true);
+                let (applied, requested) = crate::profile_fan::finish(
+                    &mut store,
+                    &mut controller,
+                    &profile,
+                    request.as_ref(),
+                    applied,
+                );
+                cooling = requested;
                 let completion =
-                    transaction::apply(&profile, &digest, &mut controller, &mut store, true)
-                        .map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+                    applied.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
                 if ac != Some(false) {
                     // Best effort: the applied preset stands either way.
                     let _ = store.save_battery_state(&state);
@@ -860,7 +891,7 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             if result.is_err() && !device_checked {
                 store.disable_startup()?;
             }
-            store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"skipped_on_battery":skipped_on_battery,"result":result}))?;
+            store.save_startup_result(&serde_json::json!({"schema":1,"recorded_at_unix_seconds":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d|d.as_secs()).ok(),"process_id":std::process::id(),"executable":std::env::current_exe().map_err(|e| e.to_string())?,"profile_directory":store.root(),"selection_at_start":selection_at_start,"skipped_on_battery":skipped_on_battery,"cooling":cooling,"cooling_error":cooling_error,"result":result}))?;
             print(&result)?;
             result.map(|_| ())
         }
@@ -876,8 +907,9 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 };
                 store.startup_eligibility(&profile.id)?;
                 omen_platform::verify_startup_profile(&profile)?;
-                let mut controller = Controller::for_profile(&profile)?;
-                let plan = transaction::plan(&profile, &mut controller, true);
+                let direct = omen_core::fan_profile::direct_part(&profile)?;
+                let mut controller = Controller::for_profile(&direct)?;
+                let plan = transaction::plan(&direct, &mut controller, true);
                 if !plan.applicable {
                     return Err(serde_json::to_string(&plan).map_err(|e| e.to_string())?);
                 }

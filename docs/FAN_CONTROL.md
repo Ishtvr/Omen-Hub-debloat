@@ -77,14 +77,18 @@ This flow resumes/uses the **installed** helper and never replaces it merely for
 new UI build, including a profile with CCD selection. The current 0.9.0-beta.3
 helper supplies no curve-digest acknowledgement. Success says cooling **requested**,
 separately from verified direct settings; it does not prove physical curve uptake,
-complete firmware rollback or BIOS ownership. Linked curves cannot gain sign-in authorization:
-sign-in approval is rejected before saving or changing grants. Existing unlinked
-startup permissions keep their contract.
+complete firmware rollback or BIOS ownership. Since 0.10.0-beta.15 (user decision,
+22 November 2026) a preset with a linked curve can be the sign-in preset: the sign-in
+task applies its direct controls and makes the same helper request as Apply. A
+helper that cannot take the request at sign-in (for example still starting) does not
+hold back the direct controls; `last-startup-result.json` then names the error under
+`cooling_error`. Only a lone or differing CPU/GPU curve is still refused. Sign-in with
+a linked curve is not yet tested across a real reboot.
 
 An already configured AC/DC selection still uses the same runtime Apply route,
 including this coordinator, if it references such a profile. No battery choice is
 changed or enabled by creating a library/link. Actual AC/DC transitions with linked
-curves remain unqualified; this does not grant sign-in permission.
+curves remain unqualified.
 
 The loop checks full known layout before first arm, uses a model-bound heartbeat at 20 seconds and level cycles at roughly two seconds, waits while the original Hub is detected and releases unused readers while paused. Curves use fixed CPU Tctl, public GPU temperature and IR/protection observations, with smoothing and emergency maximum. Max avoids loading the CPU/GPU reader libraries.
 

@@ -385,8 +385,7 @@ impl Host {
         edits: &mut Vec<(Feature, Option<Value>)>,
         startup: bool,
     ) -> Result<(), String> {
-        if startup && (self.profile_fan_points.borrow().is_some() || self.profile_fan_invalid.get())
-        {
+        if startup && self.profile_fan_invalid.get() {
             return Err(omen_core::message::msg("fan_profile.err.startup", &[]));
         }
         if self.profile_fan_changed.get() {

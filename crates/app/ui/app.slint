@@ -1192,7 +1192,7 @@ export component AppWindow inherits Window {
                             startup := CheckBox {
                                 text: Workbench.tr("preset.startup_label");
                                 checked <=> Workbench.preset-startup;
-                                enabled: Workbench.preset-ready && !Workbench.busy && (!Workbench.profile-fan-linked || Workbench.preset-startup) && Workbench.confirm-kind == 0;
+                                enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
                                 toggled => { Workbench.startup-edited(self.checked); }
                             }
 
@@ -1207,7 +1207,7 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        if Workbench.preset-startup && Workbench.dirty && !Workbench.profile-fan-linked: Text {
+                        if Workbench.preset-startup && Workbench.dirty: Text {
                             text: Workbench.tr("preset.startup_on_save");
                             color: Theme.warning;
                             font-size: 12px;

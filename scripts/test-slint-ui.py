@@ -421,17 +421,19 @@ def run(args):
                 click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf729');key('\n')
                 click(by_id('AppWindow::startup'))
                 click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf72b');key('\n')
+                # A linked fan curve no longer blocks sign-in (22 November 2026).
                 click(by_id('AppWindow::save-preset'))
-                wait_for(lambda: any(e.get('accessibleLabel')==texts['fan_profile.err.startup'] for e in tree()))
+                wait_for(lambda: scroll_to(texts['preset.selector_label'],'Combobox').get('accessibleValue')=='Edited name')
+                assert not any(e.get('accessibleLabel')==texts['fan_profile.err.startup'] for e in tree())
                 dismiss_notice()
                 click(scroll_to(texts['fan_profile.link'],'Combobox'));key('\uf729');key('\n')
                 click(scroll_to(texts['ui.edit_curve']))
                 wait_for(lambda: by_id('AppWindow::point-y').get('accessibleValue')=='1915')
                 set_point('1930')
                 label_click(texts['ui.back']);label_click(texts['preset.cancel_edit'])
-                wait_for(lambda: name_field().get('accessibleValue')=='Saved baseline')
-                assert field(temp)['accessibleValue']=='85'
-                assert field('CCD0 · 0')['accessibleValue']=='-10'
+                wait_for(lambda: name_field().get('accessibleValue')=='Edited name')
+                assert field(temp)['accessibleValue']=='95'
+                assert field('CCD0 · 0')['accessibleValue']=='-20'
                 assert scroll_to(texts['fan_profile.link'],'Combobox').get('accessibleValue')=='Fan one'
                 assert not by_id('AppWindow::startup').get('accessibleChecked',False)
                 shot('cancel-to-saved-preset')

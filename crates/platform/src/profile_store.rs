@@ -343,9 +343,15 @@ impl ProfileStore {
             || journal.transaction.profile_id != id
             || journal.transaction.profile_digest != digest
             || journal.transaction.binding != profile.binding
-            // Journals before 29 October 2026 hold the raw settings.
+            // Journals before 29 October 2026 hold the raw settings; a preset
+            // with a linked curve journals only its direct controls.
             || (journal.transaction.requested != profile.settings
-                && journal.transaction.requested != profile.effective().settings)
+                && journal.transaction.requested != profile.effective().settings
+                && omen_core::fan_profile::direct_part(&profile)
+                    .map(|direct| direct.effective().settings)
+                    .ok()
+                    .as_ref()
+                    != Some(&journal.transaction.requested))
         {
             return Err(omen_core::message::msg("store.err.startup_revision", &[]));
         }
