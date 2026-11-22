@@ -548,8 +548,20 @@ impl Curve {
             return self.replace(points);
         }
         let (first, last) = self.selection.unwrap_or((0, self.points.len() - 1));
-        let basis = if mode == DragMode::ReferenceOffset {
-            &self.original
+        let gpu = self
+            .gpu
+            .as_ref()
+            .ok_or_else(|| msg("curve.err.driver_limits", &[]))?;
+        // Shift offsets use the NVIDIA driver default curve, the reference the
+        // chart shows. The curve loaded at opening (a saved preset) must not
+        // come back after a reset (user report, 22 November 2026).
+        let factory;
+        let basis: &[Point] = if mode == DragMode::ReferenceOffset {
+            factory = factory_points(gpu)?;
+            if factory.len() != start.len() {
+                return Err(msg("curve.err.grid", &[]));
+            }
+            &factory
         } else {
             start
         };
@@ -557,10 +569,6 @@ impl Curve {
             i64::from(start[selected].y) + i64::from(delta) - i64::from(basis[selected].y);
         let mut lo = i64::MIN;
         let mut hi = i64::MAX;
-        let gpu = self
-            .gpu
-            .as_ref()
-            .ok_or_else(|| msg("curve.err.driver_limits", &[]))?;
         for (i, p) in basis.iter().enumerate().take(last + 1).skip(first) {
             let n = &gpu.nodes[i];
             let base = i64::from(n.frequency_khz) - i64::from(n.delta_khz);
@@ -715,6 +723,61 @@ mod tests {
         assert_eq!(curve.points.iter().map(|p| p.y).collect::<Vec<_>>(), base);
         // Already at the factory curve: nothing to undo, and no error.
         assert_eq!(curve.reset(), Ok(false));
+    }
+    #[test]
+    fn shift_offset_after_reset_never_brings_back_the_loaded_preset() {
+        // Driver base 1000…1600 MHz; the saved preset is a plateau.
+        let live = VfState {
+            nodes: [
+                (0, 1100, 100),
+                (1, 1300, 100),
+                (2, 1400, 0),
+                (3, 1400, -200),
+            ]
+            .iter()
+            .map(|&(i, mhz, delta)| crate::vf::VfNode {
+                index: i,
+                voltage_uv: 800000 + u32::from(i) * 100000,
+                frequency_khz: mhz * 1000,
+                delta_khz: delta * 1000,
+            })
+            .collect(),
+            minimum_delta_khz: -400000,
+            maximum_delta_khz: 400000,
+            first_index: 0,
+            last_index: 3,
+        };
+        let saved = live.value().unwrap();
+        let mut curve = Curve::gpu(live, Some(&saved)).unwrap();
+        assert_eq!(curve.reset(), Ok(true));
+        curve.select(1, false);
+        let start = curve.points.clone();
+        curve
+            .drag_gpu(&start, DragMode::ReferenceOffset, 10)
+            .unwrap();
+        assert_eq!(
+            curve.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1010, 1210, 1410, 1610]
+        );
+        // Shift + Up behaves the same; Ctrl + D still restores the preset.
+        crate::curve_input::edit(
+            &mut curve,
+            crate::curve_input::Key::Up,
+            crate::curve_input::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            curve.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1011, 1211, 1411, 1611]
+        );
+        assert_eq!(curve.revert(), Ok(true));
+        assert_eq!(
+            curve.points.iter().map(|p| p.y).collect::<Vec<_>>(),
+            [1100, 1300, 1400, 1400]
+        );
     }
     #[test]
     fn shift_reference_and_alt_current_offsets_have_distinct_shapes() {
