@@ -15,7 +15,10 @@ The normal workspaces have moved to Rust/Slint on the 0.10.0-beta.1 branch. Soft
 - [ ] Separate CPU protocol ranges, model evidence and stability-tested settings; document the source of each bound. Current PPT/Slow 160 W, CO −50…+30 and PBO 10× exceed the measured trial envelope.
 - [ ] Confirm fan-mode execution using fresh, matching helper status; distinguish selected, waiting, failed, active and handover-pending.
 - [ ] Capture Slow/STAPM/PPT and the GPU flags **before** the HP mode prelude, so Restore returns to the state before Apply (today the originals are read after the prelude; found 20 November 2026).
-- [ ] Measure the battery preset on battery: package/battery discharge at idle and browsing, whether the PPT/Slow targets hold (PPT reset was only seen in Unleashed), dGPU D-state with the window open/closed, internal 60 Hz switch with an external monitor attached.
+- [ ] Measure the battery preset on battery with `scripts/measure-battery.ps1` (read-only): discharge with everything ended, tray only and window open; whether the PPT/Slow targets hold (PPT reset was only seen in Unleashed); dGPU D-state with the fan helper running (the helper now rests a cool GPU for 30 s and never queries a powered-down one); internal 60 Hz switch with an external monitor attached.
+- [ ] Lower the CPU slow limit automatically when the battery drains on AC, as the OMEN Hub does (1 W steps down to 45 W on 8E35). Today the app only reports it. Needs a load test with the reference adapter first; read the adapter rating through the Hub's `GetAdapterStatus` contract.
+- [ ] Identify what invalidates the NVML device state behind the 22 November crash (`nvml.dll+0xfd6e0`); keep every NVML read out of the dashboard process until then. The preset editor still opens a short NVML session when it loads a preset.
+- [ ] Decide whether the original Hub background process should keep starting at sign-in; while it runs, the fan helper waits and the own curve is inactive.
 - [ ] Optional battery controls not yet in the preset catalog: PCIe link-state power management and USB selective suspend (DC index), keyboard backlight off on battery.
 - [ ] Persist nonce, digest, verified/skipped/requested lists and boot time in the journal completion instead of the shared `last-control-result.json`.
 - [ ] Decide the TPP bound: presets can store up to 254 W, the measured acceptance is ≤115 W.
@@ -39,7 +42,8 @@ Acceptance: native controller/cooling recovery, helper loss and aborted ownershi
 
 ## 3. Complete the profile and power lifecycle
 
-- [ ] Connect authorized profile revalidation/reapplication to resume and AC/DC transitions. Existing dashboard notifications renew sensor baselines; they are not a full profile controller. The Settings option **Preset on battery** applies a chosen mode/preset on unplug and returns on AC; validate it on the device.
+- [ ] Connect authorized profile revalidation/reapplication to resume and AC/DC transitions. Existing dashboard notifications renew sensor baselines; they are not a full profile controller. Each preset's **Battery behavior** applies a chosen preset on unplug and returns on AC ([power lifecycle](POWER_LIFECYCLE.md)); validate unplug, plug-in, resume and sign-in on battery on the device.
+- [ ] Keep more than one generation of originals, so a return to AC after a restart on battery also restores values the AC preset does not name.
 - [ ] Run **Disable HP OMEN Cap** and its restore on the device, then apply a CPU PPT/Slow preset and a sign-in approval without HPOmenCap.
 - [ ] Check the elevated self-restart, single instance and the tray logon task on the device, including migration of an old Run entry.
 - [ ] Test actual sign-in after reboot with an exact authorized profile revision.

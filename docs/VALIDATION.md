@@ -1,8 +1,49 @@
 # Validation
 
-Current software summary updated **20 November 2026**, version **0.10.0-beta.12**, Windows x64 / Rust 1.99.0. Source: beta.7 plus Apply-reliability, keep-preset and curve-editor work, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **22 November 2026**, version **0.10.0-beta.13**, Windows x64 / Rust 1.99.0. Source: beta.12 plus battery behavior per preset, the NVML isolation and the settings-row layout, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
+
+## Battery behavior, NVML isolation and settings rows — 22 November 2026
+
+version **0.10.0-beta.13**. [Release notes](releases/0.10.0-beta.13.md). Software
+and UI validation plus read-only device checks. No battery run, no load test and
+no new hardware write path.
+
+- Format check, **362 unit tests** (174 core / 84 app / 104 platform), **14 Guardian
+  process scenarios**, all-target Clippy with `-D warnings` and a locked release
+  build passed. Three device probes stay ignored by default.
+- New regressions: a preset's own battery behavior against the global setting,
+  the boot-bound switch state, source-dependent waits and retry delays, the
+  drain notice, the battery-percent event filter, the dGPU power record and the
+  fan helper's GPU read plan (asleep, resting, query).
+- `test-slint-ui.py` (developer MCP build) passed in German at 1.25 (software)
+  and English at 2.0 (FemtoVG) and in the editor-extension, new-profile,
+  GPU-curve and pending-switch modes. New checks: the battery-behavior choices,
+  the removed profile row, and one row's geometry (48 px pitch, 36 px editor,
+  shared centre line, info button within 12 px of its label, 276 px field).
+  One German run timed out in the long-dropdown keyboard step and one English
+  run found the window shrunk to 50 px; both passed when repeated twice.
+- Read on the device (22 November 2026, on AC, nothing written):
+  - Crash record: `Omen Hub++.exe` 0.10.0 at 10:41:10, access violation in
+    `nvml.dll` 8.17.16.2114 at `+0xfd6e0`; the same signature on 5 November with
+    0.9.0. Ghidra shows a five-try read loop at that address. The faulting thread
+    is the keep-preset thread. A probe that keeps one NVML session while others
+    open and close 20 times did not reproduce it, so the trigger is unknown.
+  - The tray logon task ended with `0xC0000005` and had no restart rule. The new
+    task XML was accepted by Task Scheduler (`RestartCount` 3, `PT1M`) without
+    registering it.
+  - Battery report: 40–51 W mean discharge on battery on 16 and 18 November;
+    65.0 to 36.2 Wh between 09:46 and 14:30 on 22 November with AC reported
+    throughout (gaming on an Unleashed preset with Slow 80 W).
+  - `DEVPKEY_Device_PowerData` of the NVIDIA adapter read D0 in 1 ms; D3 could
+    not be observed because the external monitor uses the dGPU port.
+  - The original Hub background process starts at sign-in; the fan helper then
+    reports `waiting_for_hub`.
+- Not validated: an actual unplug, plug-in, resume or sign-in on battery with
+  this build; the dGPU reaching D3 with the fan helper running; fan behavior
+  with a resting or sleeping GPU under load; the restart rule after a real
+  crash.
 
 ## Curve editor without bottom buttons, shortcut help — 20 November 2026
 

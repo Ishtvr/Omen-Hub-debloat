@@ -1,6 +1,19 @@
 # Power and profile lifecycle
 
-Reviewed **29 October 2026**. **Sensor power handling is implemented; complete automatic profile recovery/reapplication across real transitions is not yet integrated and qualified.** Sign-in application is a separate existing path. [Hardware matrix](HARDWARE_MATRIX.md).
+Reviewed **22 November 2026**. **Sensor power handling and the automatic AC/battery preset change are implemented; neither is qualified across real transitions on the device.** Sign-in application is a separate existing path. [Hardware matrix](HARDWARE_MATRIX.md).
+
+## Automatic AC/battery change
+
+Each preset names its battery behavior ([Getting started](GETTING_STARTED.md)). The dashboard decides on the current level, never on an event alone: Windows reports the source (`GetSystemPowerStatus`; unknown never switches), the policy in `core::battery` compares it with the persisted state, and the apply queue runs the switch behind any manual choice.
+
+- **Events.** `GUID_ACDC_POWER_SOURCE`, suspend/resume, display and power-plan notifications. `PBT_APMPOWERSTATUSCHANGE` also arrives for every battery percent; it counts only when the source differs from the one seen last.
+- **Waits.** 1 s after unplugging, 2 s on AC and after resume, as in the OMEN Hub; then the source is read again. One more check runs 20 s after the dashboard starts, after the sign-in task has finished.
+- **Order.** The preset being left is undone from its journal when it is still the last completed Apply; then the selection is applied. The firmware mode has no readback and is not in a journal, so a battery preset without a Dynamic Boost field first writes Balanced.
+- **Sign-in.** On battery, a sign-in preset with a battery behavior is not applied; the task records it as the preset in use on AC and the dashboard applies the behavior. On AC it is applied as before.
+- **Boot.** `power-switch.json` carries the boot time. A restart resets volatile firmware values, so a battery session or manual override of an earlier boot ends.
+- **Failure.** Three retries after 5, 15 and 60 s, then rest until the next power event. A crashed dashboard is restarted by its logon task (three times, one minute apart).
+
+The journal keeps one generation of originals. After a restart on battery the battery preset is applied on top of its own persistent Windows values, so values the AC preset does not name (for example 60 Hz) can remain after the return. None of this is measured on battery yet.
 
 ## Existing behavior
 
