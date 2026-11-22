@@ -43,6 +43,12 @@ pub(super) struct Editor {
     factory: Option<Vec<Point>>,
     /// Point under the pointer while no button is pressed.
     hover: Option<usize>,
+    /// Fan curves: plain press on free chart space (plot pixels); a release
+    /// without movement adds a point there.
+    click: Option<(f32, f32)>,
+    /// Fan point added by the last click. The second click of a double-click
+    /// lands on it and must not remove it again.
+    added: Option<(usize, std::time::Instant)>,
 }
 impl Host {
     pub(super) fn gpu_curve_dirty(&self) -> bool {
@@ -388,64 +394,10 @@ impl Host {
         modifiers: Modifiers,
     ) {
         let mut range = None;
-        let result = (|| -> Result<(), String> {
-            let mut current = self.curve.borrow_mut();
-            let Some(e) = current.as_mut() else {
-                return Ok(());
-            };
-            let point = e.view.data(x, y);
-            match kind {
-                0 => {
-                    e.finish_gesture(true);
-                    e.gesture = press(e, x, y, plot, modifiers);
-                }
-                1 | 2 => {
-                    if let Some(gesture) = &e.gesture {
-                        match gesture {
-                            Gesture::Band { x: start } => {
-                                e.curve.select_voltage_range(*start, point.x);
-                                if kind == 2 {
-                                    range = Some((*start.min(&point.x), *start.max(&point.x)));
-                                }
-                            }
-                            Gesture::Point { start, down, mode } => {
-                                if e.curve.kind == Kind::Gpu {
-                                    e.curve.drag_gpu(start, *mode, point.y - down.y)?;
-                                } else {
-                                    let selected = e.curve.selected;
-                                    let from = start[selected];
-                                    e.curve.set(
-                                        selected,
-                                        Point {
-                                            x: from.x + point.x - down.x,
-                                            y: from.y + point.y - down.y,
-                                        },
-                                        true,
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                    if kind == 2 {
-                        e.finish_gesture(false);
-                        e.hover = hit(e, x, y, plot);
-                    }
-                }
-                3 => e.finish_gesture(true),
-                5 => {
-                    // Afterburner/old UI: double-click clears the range; on a
-                    // fan curve, free chart space gains a point there.
-                    e.finish_gesture(true);
-                    if e.curve.kind != Kind::Gpu && hit(e, x, y, plot).is_none() {
-                        e.curve.insert_at(point)?;
-                    } else {
-                        e.curve.clear_selection();
-                    }
-                }
-                _ => {}
-            }
-            Ok(())
-        })();
+        let result = match self.curve.borrow_mut().as_mut() {
+            Some(e) => pointer(e, kind, x, y, plot, modifiers).map(|r| range = r),
+            None => Ok(()),
+        };
         if let Err(e) = result {
             self.status(&crate::i18n::error_message(&e), true);
         }
@@ -710,6 +662,8 @@ impl Editor {
             selection_mode: false,
             wheel: 0.0,
             hover: None,
+            click: None,
+            added: None,
         }
     }
     /// Offsets and the reference line compare against the driver default
@@ -799,6 +753,112 @@ fn press(e: &mut Editor, x: f32, y: f32, plot: (f32, f32), m: Modifiers) -> Opti
     }
     e.curve.clear_selection();
     None
+}
+/// Movement (logical px) up to which a press and release still count as a click.
+const CLICK_SLOP: f32 = 4.0;
+/// Slint's double-click interval (500 ms) with margin for the press itself.
+const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(700);
+/// One pointer event on the plot: 0 press, 1 move, 2 release, 3 cancel,
+/// 5 double-click (Slint reports it before the second release). Returns a
+/// completed GPU range selection.
+///
+/// Fan curves: a click on free chart space adds a point there and a
+/// double-click on a point removes it (user request, 22 November 2026).
+fn pointer(
+    e: &mut Editor,
+    kind: i32,
+    x: f32,
+    y: f32,
+    plot: (f32, f32),
+    m: Modifiers,
+) -> Result<Option<(i32, i32)>, String> {
+    let point = e.view.data(x, y);
+    let fan = e.curve.kind != Kind::Gpu;
+    let mut range = None;
+    match kind {
+        0 => {
+            e.finish_gesture(true);
+            e.gesture = press(e, x, y, plot, m);
+            let plain = !(m.shift || m.ctrl || m.alt);
+            e.click = (fan && plain && e.gesture.is_none()).then_some((x * plot.0, y * plot.1));
+            // Only the second click of a double-click on the new point keeps
+            // it; a later double-click on that point removes it as usual.
+            let second_click = e.added.is_some_and(|(index, at)| {
+                index == e.curve.selected && at.elapsed() <= DOUBLE_CLICK_WINDOW
+            });
+            if !matches!(e.gesture, Some(Gesture::Point { .. })) || !second_click {
+                e.added = None;
+            }
+        }
+        1 | 2 => {
+            if let Some((cx, cy)) = e.click
+                && (x * plot.0 - cx).hypot(y * plot.1 - cy) > CLICK_SLOP
+            {
+                e.click = None;
+            }
+            let moved = match &e.gesture {
+                Some(Gesture::Band { x: start }) => {
+                    e.curve.select_voltage_range(*start, point.x);
+                    if kind == 2 {
+                        range = Some((*start.min(&point.x), *start.max(&point.x)));
+                    }
+                    Ok(())
+                }
+                Some(Gesture::Point { start, down, mode }) => {
+                    if kind == 2 {
+                        e.added = None;
+                    }
+                    if e.curve.kind == Kind::Gpu {
+                        e.curve.drag_gpu(start, *mode, point.y - down.y).map(|_| ())
+                    } else {
+                        let selected = e.curve.selected;
+                        let from = start[selected];
+                        e.curve
+                            .set(
+                                selected,
+                                Point {
+                                    x: from.x + point.x - down.x,
+                                    y: from.y + point.y - down.y,
+                                },
+                                true,
+                            )
+                            .map(|_| ())
+                    }
+                }
+                None => Ok(()),
+            };
+            if kind == 2 {
+                e.finish_gesture(false);
+                if e.click.take().is_some() {
+                    e.curve.insert_at(point)?;
+                    e.added = Some((e.curve.selected, std::time::Instant::now()));
+                }
+                e.hover = hit(e, x, y, plot);
+            }
+            moved?;
+        }
+        3 => {
+            e.finish_gesture(true);
+            e.click = None;
+        }
+        5 => {
+            // Afterburner/old UI: double-click clears the GPU range.
+            e.finish_gesture(true);
+            e.click = None;
+            let added = e.added.take();
+            if !fan {
+                e.curve.clear_selection();
+            } else if let Some(index) =
+                hit(e, x, y, plot).filter(|i| added.is_none_or(|(a, _)| a != *i))
+            {
+                e.curve.select(index, false);
+                e.curve.remove()?;
+                e.hover = None;
+            }
+        }
+        _ => {}
+    }
+    Ok(range)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1108,6 +1168,105 @@ mod tests {
         e.hover = Some(0);
         e.view.lo.x = 900;
         assert_eq!(readout_point(&e), None);
+    }
+
+    fn fan_editor() -> Editor {
+        let mut e = Editor::new(Curve::fan(Kind::CpuFan, None).unwrap());
+        e.view = Viewport {
+            lo: Point { x: 0, y: 0 },
+            hi: Point { x: 110, y: 100 },
+        };
+        e
+    }
+    /// Normalized plot position of a fan chart value.
+    fn spot(e: &Editor, x: i32, y: i32) -> (f32, f32) {
+        let v = e.view;
+        (
+            (x - v.lo.x) as f32 / (v.hi.x - v.lo.x) as f32,
+            1.0 - (y - v.lo.y) as f32 / (v.hi.y - v.lo.y) as f32,
+        )
+    }
+    fn send(e: &mut Editor, kind: i32, (x, y): (f32, f32)) {
+        let _ = pointer(e, kind, x, y, PLOT, Modifiers::default());
+    }
+
+    #[test]
+    fn fan_click_adds_a_point_and_double_click_on_a_point_removes_it() {
+        let mut e = fan_editor();
+        let before = e.curve.points.clone();
+        let free = (before[0].x + before[1].x) / 2;
+        let at_free = spot(&e, free, (before[0].y + before[1].y) / 2);
+        assert!(hit(&e, at_free.0, at_free.1, PLOT).is_none());
+        send(&mut e, 0, at_free);
+        send(&mut e, 2, at_free);
+        assert_eq!(e.curve.points.len(), before.len() + 1);
+        assert_eq!(e.curve.points[1].x, free);
+        assert_eq!(e.curve.selected, 1);
+
+        // A double-click on free space adds exactly one point: its second
+        // click lands on the new point and keeps it.
+        send(&mut e, 0, at_free);
+        send(&mut e, 5, at_free);
+        send(&mut e, 2, at_free);
+        assert_eq!(e.curve.points.len(), before.len() + 1);
+
+        // Double-click on an existing point removes it in one undo step.
+        let target = at(&e, 1);
+        for kind in [0, 2, 0, 5, 2] {
+            send(&mut e, kind, target);
+        }
+        assert_eq!(e.curve.points, before);
+        assert!(e.curve.undo());
+        assert_eq!(e.curve.points.len(), before.len() + 1);
+
+        // Pressing and moving on free space is no click; modifiers add nothing.
+        let mut e = fan_editor();
+        send(&mut e, 0, at_free);
+        send(&mut e, 1, (at_free.0 + 0.05, at_free.1));
+        send(&mut e, 2, (at_free.0 + 0.05, at_free.1));
+        assert_eq!(e.curve.points, before);
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        let _ = pointer(&mut e, 0, at_free.0, at_free.1, PLOT, shift);
+        let _ = pointer(&mut e, 2, at_free.0, at_free.1, PLOT, shift);
+        assert_eq!(e.curve.points, before);
+    }
+
+    #[test]
+    fn a_later_double_click_removes_a_point_just_added_by_click() {
+        let mut e = fan_editor();
+        let before = e.curve.points.clone();
+        let at_free = spot(&e, 42, 37);
+        send(&mut e, 0, at_free);
+        send(&mut e, 2, at_free);
+        assert_eq!(e.curve.points.len(), before.len() + 1);
+        // Past the double-click interval the new point is an ordinary point.
+        let (index, when) = e.added.unwrap();
+        e.added = when
+            .checked_sub(std::time::Duration::from_secs(2))
+            .map(|old| (index, old));
+        let target = at(&e, index);
+        for kind in [0, 2, 0, 5, 2] {
+            send(&mut e, kind, target);
+        }
+        assert_eq!(e.curve.points, before);
+    }
+
+    #[test]
+    fn gpu_clicks_never_add_or_remove_anchors() {
+        let mut e = editor();
+        let count = e.curve.points.len();
+        let (x, _) = at(&e, 2);
+        for kind in [0, 2, 0, 5, 2] {
+            send(&mut e, kind, (x, 0.98));
+        }
+        let point = at(&e, 3);
+        for kind in [0, 2, 0, 5, 2] {
+            send(&mut e, kind, point);
+        }
+        assert_eq!(e.curve.points.len(), count);
     }
 
     #[test]

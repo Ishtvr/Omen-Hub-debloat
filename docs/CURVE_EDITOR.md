@@ -29,12 +29,12 @@ On the reference device, all **127 actual Graphics voltage anchors** are fixed i
 | Gesture | Draft change |
 | --- | --- |
 | Drag a point (within 15 px) | Move its frequency vertically; a point inside the selected band moves the whole band by one shared, clamped offset |
-| Shift + drag point | Offset the entire curve/band using the loaded reference shape |
+| Shift + drag point | Offset the entire curve/band using the shape of the NVIDIA driver default curve (since 22 November 2026; previously the curve loaded at opening, which brought an old preset back after a reset) |
 | Alt + drag point | Offset the entire curve/band while preserving the current draft shape |
 | Ctrl + drag point | Tilt around the opposite fixed edge anchor |
 | Shift + drag empty chart | Select a contiguous voltage range |
-| Click on free chart space | Clear range selection |
-| Double-click | Clear range selection; on fan curves, add a point on free space |
+| Click on free chart space | GPU: clear range selection. Fans: add a point there (no movement between press and release, no modifier) |
+| Double-click | GPU: clear range selection. Fans: on a point, remove it; the second click of a double-click on free space keeps the point the first click added |
 | Shift + Enter | Flatten selected range; otherwise plateau from the selected point |
 
 A common offset is constrained consistently by all affected anchors/neighbors. Invalid tilts are rejected atomically. One completed drag is one undo step; Escape restores its starting state and adds no history. During a drag other keys are ignored; toolbar actions finish the drag first. Hovering a point (within the pick radius) or dragging it shows a readout beside it: GPU voltage, frequency and offset from the driver default curve; fan temperature and value, plus the change since the drag started while dragging. There is no `L` shortcut: in Afterburner it locks a voltage, which this editor does not support.
@@ -48,7 +48,7 @@ Commands apply with chart focus unless noted. Native numeric fields provide an a
 | Left/Right, Home/End | Select point / first / last |
 | Up/Down | Change frequency by 1 MHz or fan value by 1 percentage point |
 | Ctrl + Up/Down | Change by 10 steps |
-| Shift or Alt + Up/Down, GPU | Same reference/current-curve offset as the corresponding drag; Ctrl uses 10-MHz steps |
+| Shift or Alt + Up/Down, GPU | Same driver-default/current-curve offset as the corresponding drag; Ctrl uses 10-MHz steps |
 | Shift + Left/Right/Home/End | Extend contiguous GPU selection |
 | Ctrl + A | Select all GPU anchors |
 | Enter | Focus the value field of the selected point; Enter there sets the point (GPU selection: all selected anchors) |
@@ -85,6 +85,6 @@ cannot gain sign-in authorization. [GPU contracts](GPU_PROFILES.md),
 
 `core/curve_editor.rs` owns editing/history, `curve_input.rs` abstract input and `curve_view.rs` viewport/grid rules. `app/curve_widget.rs` owns GDI/native input; `curve_ui.rs` owns load/save/merge. Full curves and unrelated settings survive merge; conflicting concurrent edits fail.
 
-Since 0.10.0-beta.8 the Slint editor implements these gestures itself (`app/slint_ui/curve.rs`: pick radius, press/drag/finish, wheel accumulation, key decoding); unit tests cover point picking, group drag as one undo step, Shift band selection, Escape without history, the key table, grid ticks on round values with the point mapping, hover readouts and offsets against the driver default curve. A mouse run of the Slint editor in `--ui-test` was not performed in this change.
+Since 0.10.0-beta.8 the Slint editor implements these gestures itself (`app/slint_ui/curve.rs`: pick radius, press/drag/finish, wheel accumulation, key decoding); unit tests cover point picking, group drag as one undo step, Shift band selection, Escape without history, the key table, grid ticks on round values with the point mapping, hover readouts and offsets against the driver default curve. On 22 November 2026 fan click add, double-click remove and the GPU Shift offset after Ctrl + R were also exercised by mouse and keyboard events in `--ui-test` (developer MCP build).
 
 Native smoke checks exercised chart opening from new/dirty presets, reference/current dragging, bands, flatten, undo/redo, fit, numeric alternatives and fan draft persistence without hardware Apply. Recorded client renders do not cover all DPI/titlebar/high-contrast/accessibility behavior. [Validation](VALIDATION.md).

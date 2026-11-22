@@ -1,16 +1,16 @@
 # Validation
 
-Current software summary updated **22 November 2026**, version **0.10.0-beta.13**, Windows x64 / Rust 1.99.0. Source: beta.12 plus battery behavior per preset, the NVML isolation and the settings-row layout, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
+Current software summary updated **22 November 2026**, version **0.10.0-beta.14**, Windows x64 / Rust 1.99.0. Source: beta.12 plus the curve fixes of beta.13, battery behavior per preset, the NVML isolation and the settings-row layout, identified by build-info.json. Earlier measurements below remain historical. No new hardware write/lifecycle qualification is implied.
 
 Current support: [Hardware matrix](HARDWARE_MATRIX.md). Exact device evidence: [8E35](models/8e35.md). Pending work: [Roadmap](ROADMAP.md).
 
 ## Battery behavior, NVML isolation and settings rows — 22 November 2026
 
-version **0.10.0-beta.13**. [Release notes](releases/0.10.0-beta.13.md). Software
+version **0.10.0-beta.14**. [Release notes](releases/0.10.0-beta.14.md). Software
 and UI validation plus read-only device checks. No battery run, no load test and
 no new hardware write path.
 
-- Format check, **362 unit tests** (174 core / 84 app / 104 platform), **14 Guardian
+- Format check, **366 unit tests** (175 core / 87 app / 104 platform, including the merged curve regressions), **14 Guardian
   process scenarios**, all-target Clippy with `-D warnings` and a locked release
   build passed. Three device probes stay ignored by default.
 - New regressions: a preset's own battery behavior against the global setting,
@@ -44,6 +44,24 @@ no new hardware write path.
   this build; the dGPU reaching D3 with the fan helper running; fan behavior
   with a resting or sleeping GPU under load; the restart rule after a real
   crash.
+## Fan curve clicks and GPU Shift offset — 22 November 2026
+
+version **0.10.0-beta.13**. [Release notes](releases/0.10.0-beta.13.md). Software
+and UI validation only, no hardware write.
+
+- Format check, **357 unit tests** (171 core / 86 app / 100 platform), all-target
+  Clippy with `-D warnings` and a locked release build passed; the release binary
+  started in `--ui-test` and stayed up without stderr output.
+- New regressions: Shift offsets after a reset follow the NVIDIA driver default,
+  not the loaded preset (drag and Shift + Up, Ctrl + D still restores); fan click
+  adds, double-click on a point removes, a double-click on free space adds one
+  point, a later double-click removes a just-added point; GPU clicks never add or
+  remove anchors.
+- Developer-MCP build in `--ui-test` (software renderer, German): fan chart click
+  added a point, double-click on it removed it, double-click on free space added
+  exactly one, Ctrl + Z restored. GPU: saved a non-uniform preset curve, reopened
+  it, Ctrl + R, Shift + Up gave a uniform +1 MHz offset from the NVIDIA default;
+  Ctrl + D returned the preset. The full `test-slint-ui.py` run was not repeated.
 
 ## Curve editor without bottom buttons, shortcut help — 20 November 2026
 

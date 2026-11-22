@@ -871,8 +871,10 @@ unsafe fn draw(
             }
             // Fan curves draw only the current line; the loaded line would linger
             // behind added or removed points.
+            // GPU: the NVIDIA driver default curve, the basis of Shift offsets.
+            let factory = curve.factory().and_then(Result::ok);
             let reference: &[DataPoint] = if curve.kind == Kind::Gpu {
-                curve.reference()
+                factory.as_deref().unwrap_or(curve.reference())
             } else {
                 &[]
             };
