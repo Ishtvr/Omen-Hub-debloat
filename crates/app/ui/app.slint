@@ -16,6 +16,7 @@ import { CaptionButton, NavigationItem } from "chrome.slint";
 import { NotificationPopup, MessageDialog } from "notifications.slint";
 import {
     ActionButton,
+    InfoButton,
     SegmentedTabs,
     Hairline,
     SectionTitle,
@@ -231,36 +232,43 @@ export global Workbench {
 component FieldRow inherits Rectangle {
     in-out property <FieldData> item;
     in-out property <bool> show-info;
-    height: 44px + (root.show-info ? info-text.preferred-height + 16px : 0px);
-    background: hover.has-hover ? Theme.surface : transparent;
-    hover := TouchArea {
-        enabled: (false) && Workbench.confirm-kind == 0;
-    }
+    // The last row of a group has no divider under it.
+    in property <bool> last;
+    height: Theme.row-height + (root.show-info ? info-text.preferred-height + 16px : 0px);
 
+    // Every control keeps the control height; the same space above and below
+    // centres label, info button, editor and unit on one line.
     HorizontalLayout {
-        height: 44px;
+        y: (Theme.row-height - Theme.control-height) / 2;
+        height: Theme.control-height;
         spacing: 8px;
+        // The check box then starts where the group title text starts.
+        padding-left: 8px;
         padding-right: 16px;
         include := CheckBox {
             text: root.item.label;
             checked <=> root.item.included;
             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
-            horizontal-stretch: 1;
+            horizontal-stretch: 0;
             toggled => { Workbench.include-field(root.item.index, self.checked); }
         }
 
-        info := ActionButton {
+        info := InfoButton {
+            label: Workbench.tr("ui.info") + ": " + root.item.label;
             enabled: Workbench.confirm-kind == 0;
-            text: "i";
-            control-width: Theme.control-height;
-            background: transparent;
+            active: root.show-info;
             clicked => { root.show-info = !root.show-info; }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
         }
 
         if root.item.kind == 0: LineEdit {
             accessible-label: root.item.label;
             text <=> root.item.value;
-            width: Theme.field-width;
+            unit: root.item.unit;
+            width: Theme.number-width;
             horizontal-stretch: 0;
             enabled: (root.item.included && !Workbench.busy) && Workbench.confirm-kind == 0;
             edited(text) => { Workbench.edit-field(root.item.index, text); }
@@ -286,10 +294,9 @@ component FieldRow inherits Rectangle {
             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
             clicked => { Workbench.open-curve(true); }
         }
-        // Same footprint as the other editors plus the value, so labels keep
-        // their room in compact windows.
+        // The slider and its value with unit share the common field width.
         if root.item.kind == 5: HorizontalLayout {
-            width: Theme.field-width + 48px;
+            width: Theme.field-width;
             horizontal-stretch: 0;
             spacing: 8px;
             BrightnessSlider {
@@ -301,8 +308,8 @@ component FieldRow inherits Rectangle {
                 edited(v) => { Workbench.slider-field(root.item.index, v); }
             }
             Text {
-                text: root.item.value;
-                width: 40px;
+                text: root.item.unit == "" ? root.item.value : root.item.value + " " + root.item.unit;
+                width: 60px;
                 color: root.item.included ? Theme.ink : Theme.muted;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -314,19 +321,13 @@ component FieldRow inherits Rectangle {
             width: Theme.field-width;
             vertical-alignment: center;
         }
-        Text {
-            text: root.item.unit;
-            width: 36px;
-            color: Theme.muted;
-            vertical-alignment: center;
-        }
     }
 
     info-text := Text {
         visible: root.show-info;
-        x: 28px;
-        y: 46px;
-        width: parent.width - 40px;
+        x: 38px;
+        y: Theme.row-height + 2px;
+        width: parent.width - 54px;
         text: root.item.info;
         color: Theme.muted;
         font-size: 12px;
@@ -334,6 +335,7 @@ component FieldRow inherits Rectangle {
     }
 
     Rectangle {
+        visible: !root.last;
         y: parent.height - 1px;
         height: 1px;
         background: Theme.line;
@@ -356,10 +358,10 @@ component PresetGroup inherits Rectangle {
             height: root.group.expanded ? row-layout.preferred-height : 0px;
             visible: root.group.expanded;
             row-layout := VerticalLayout {
-                padding-top: 4px;
                 padding-bottom: 4px;
-                for row in root.group.rows: FieldRow {
+                for row[row-index] in root.group.rows: FieldRow {
                     item <=> row;
+                    last: row-index == root.group.rows.length - 1 && root.index != 5;
                 }
                 if root.index == 5: GridLayout {
                     spacing: 8px;
@@ -757,6 +759,7 @@ export component AppWindow inherits Window {
     init => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
     private property <bool> device-details;
     private property <bool> battery-details;
+    private property <bool> fan-link-details;
 
     titlebar := Rectangle {
         x: 0px;
@@ -1014,6 +1017,7 @@ export component AppWindow inherits Window {
                                     Hairline { }
 
                                     HorizontalLayout {
+                                        spacing: 8px;
                                         Text {
                                             text: Workbench.tr("ui.graphics");
                                             color: Theme.ink;
@@ -1021,6 +1025,7 @@ export component AppWindow inherits Window {
                                         }
 
                                         ComboBox {
+                                            accessible-label: Workbench.tr("ui.graphics");
                                             model: [Workbench.tr("mux.hybrid"), Workbench.tr("mux.discrete")];
                                             current-index <=> Workbench.graphics-index;
                                             enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
@@ -1076,6 +1081,7 @@ export component AppWindow inherits Window {
 
                                     new-preset := ActionButton {
                                         text: "+";
+                                        control-width: Theme.info-width;
                                         accessible-label: Workbench.tr("preset.new");
                                         enabled: Workbench.preset-ready && !Workbench.busy && Workbench.confirm-kind == 0;
                                         clicked => { Workbench.new-preset(); }
@@ -1102,7 +1108,7 @@ export component AppWindow inherits Window {
                                     }
 
                                     Rectangle {
-                                        width: Theme.control-height;
+                                        width: Theme.info-width;
                                     }
                                 }
 
@@ -1125,11 +1131,10 @@ export component AppWindow inherits Window {
                                         selected(value) => { Workbench.battery-selected(self.current-index); }
                                     }
 
-                                    battery-info := ActionButton {
-                                        text: "i";
-                                        accessible-label: Workbench.tr("battery.behaviour_info");
-                                        background: transparent;
+                                    battery-info := InfoButton {
+                                        label: Workbench.tr("battery.behaviour_info");
                                         enabled: Workbench.confirm-kind == 0;
+                                        active: root.battery-details;
                                         clicked => { root.battery-details = !root.battery-details; }
                                     }
                                 }
@@ -1143,6 +1148,7 @@ export component AppWindow inherits Window {
 
                                 HorizontalLayout {
                                     spacing: 8px;
+                                    padding-right: 16px;
                                     Text {
                                         text: Workbench.tr("fan_profile.link");
                                         color: Theme.muted;
@@ -1159,12 +1165,15 @@ export component AppWindow inherits Window {
                                         selected(value) => { Workbench.profile-fan-selected(self.current-index); }
                                     }
 
-                                    Rectangle {
-                                        width: Theme.control-height;
+                                    fan-link-info := InfoButton {
+                                        label: Workbench.tr("ui.info") + ": " + Workbench.tr("fan_profile.link");
+                                        enabled: Workbench.confirm-kind == 0;
+                                        active: root.fan-link-details;
+                                        clicked => { root.fan-link-details = !root.fan-link-details; }
                                     }
                                 }
 
-                                if Workbench.profile-fan-linked: Text {
+                                if root.fan-link-details: Text {
                                     text: Workbench.tr("fan_profile.manual_note");
                                     color: Theme.muted;
                                     font-size: 12px;
@@ -1179,6 +1188,7 @@ export component AppWindow inherits Window {
                         }
 
                         HorizontalLayout {
+                            padding-right: 12px;
                             startup := CheckBox {
                                 text: Workbench.tr("preset.startup_label");
                                 checked <=> Workbench.preset-startup;
@@ -1231,7 +1241,7 @@ export component AppWindow inherits Window {
 
                             HorizontalLayout {
                                 width: 400px;
-                                x: parent.width - self.width;
+                                x: parent.width - self.width - 12px;
                                 y: parent.width < 720px ? 44px : 0px;
                                 height: Theme.control-height;
                                 spacing: 8px;

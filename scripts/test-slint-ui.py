@@ -580,18 +580,35 @@ def run(args):
                     'scope':'Isolated UI fixture, no profile persistence or hardware access'},indent=2),encoding='utf-8')
                 print(output)
                 return
-            mode = scroll_to(texts['ui.performance'], 'Combobox')
-            assert abs(mode['size']['width'] - 276) < .1
-            click(mode)
+            # The performance-profile row is gone; presets carry their own
+            # battery behaviour instead.
+            assert not any(e.get('accessibleLabel') == texts['ui.performance'] for e in tree())
+            battery = scroll_to(texts['battery.behaviour'], 'Combobox')
+            assert abs(battery['size']['width'] - 276) < .1
+            click(battery)
             choices = []
             for menu_window in unpack(client.tool('list_windows', {}))['windowHandles']:
                 menu_root = unpack(client.tool('get_window_properties', {'windowHandle': menu_window}))['rootElementHandle']
                 choices.extend(e.get('accessibleLabel') for e in unpack(client.tool('get_element_tree',
                     {'elementHandle': menu_root, 'maxElements': 1000}))['elements'] if e.get('accessibleRole') == 'ListItem')
-            for mode_key in ['mode.quiet', 'mode.balanced', 'mode.performance', 'mode.unleashed']:
-                assert texts['mode.default_entry'].replace('{0}',texts[mode_key]) in choices, (mode_key,choices)
-            key('\uf700');key('\n')
-            click(scroll_to(texts['preset.apply_button']))
+            for expected in [texts['battery.off'], texts['battery.optimized_new']]:
+                assert expected in choices, (expected, choices)
+            assert not any(texts['mode.default_entry'].replace('{0}', texts[k]) in choices
+                           for k in ['mode.quiet', 'mode.balanced', 'mode.performance', 'mode.unleashed']), choices
+            key('\x1b')
+            # The round info button belongs to its row and opens its text.
+            info = scroll_to(texts['battery.behaviour_info'])
+            assert abs(info['size']['width'] - 28) < .1, info['size']
+            click(info)
+            wait_for(lambda: any(e.get('accessibleLabel') == texts['info.battery_behaviour'] for e in tree()))
+            click(scroll_to(texts['battery.behaviour_info']))
+            # A hardware control in the isolated fixture answers with the
+            # test notice; the graphics switch is the nearest one.
+            scroll(10000)
+            label_click(texts['ui.device_modes'])
+            graphics = scroll_to(texts['ui.graphics'], 'Combobox')
+            click(graphics)
+            key('\uf701');key('\n')
             wait_for(lambda: by_id('AppWindow::notification'))
             assert any(e.get('accessibleLabel') == texts['ui.test_no_write'] for e in tree())
             popup = by_id('AppWindow::notification')
@@ -859,6 +876,29 @@ def run(args):
                 key('\uf701')
             key('\n')
             wait_for(lambda: find(boost, 'Combobox').get('accessibleValue') == texts['choice.EfficientAggressiveAtGuaranteed'])
+            # One settings row: label, round info button and editor share one
+            # centre line; rows repeat every 48 px with the 36 px editor in
+            # the middle (6 px above and below); the info button follows its
+            # label directly; number fields keep the common 276 px width.
+            minimum = texts['field.WindowsMinimumProcessorPercent']
+            maximum = texts['field.WindowsMaximumProcessorPercent']
+            click(scroll_to(minimum, 'Checkbox'))
+            wait_for(lambda: find(minimum, 'Checkbox').get('accessibleChecked'))
+            row_check = find(minimum, 'Checkbox'); row_edit = find(minimum, 'TextInput')
+            row_info = find(texts['ui.info'] + ': ' + minimum, 'Button')
+            top = lambda e: e['absolutePosition'].get('y', 0)
+            left = lambda e: e['absolutePosition'].get('x', 0)
+            centre = lambda e: top(e) + e['size']['height'] / 2
+            assert abs(centre(row_check) - centre(row_edit)) < .6, (row_check, row_edit)
+            assert abs(centre(row_info) - centre(row_edit)) < .6, (row_info, row_edit)
+            assert abs(row_edit['size']['height'] - 36) < .1 and abs(row_edit['size']['width'] - 276) < .1
+            assert abs(top(find(maximum, 'Checkbox')) - top(row_check) - 48) < .6
+            assert 0 <= left(row_info) - (left(row_check) + row_check['size']['width']) <= 12
+            assert abs(row_info['size']['width'] - 28) < .1
+            assert abs(left(row_edit) + row_edit['size']['width'] - (left(combo) + combo['size']['width'])) < .6
+            shot('field-rows')
+            click(find(minimum, 'Checkbox'))
+            wait_for(lambda: not find(minimum, 'Checkbox').get('accessibleChecked'))
             scroll(10000)
             click(by_id('AppWindow::save-preset'))
             wait_for(lambda: any(e.get('accessibleLabel', '').startswith(texts['ui.test_saved']) for e in tree()))

@@ -308,7 +308,7 @@ pub(crate) fn execute_battery_switch(switch: &Switch, serial: bool) -> Result<St
         },
         &[&name],
     );
-    text.push(' ');
+    text.push('\n');
     text.push_str(&match selection {
         Selection::Preset(_) => crate::elevation::applied_status(&record),
         // A mode SET has no thermal-mode readback; name what was confirmed.

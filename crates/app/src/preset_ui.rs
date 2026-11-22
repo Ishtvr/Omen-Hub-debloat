@@ -324,7 +324,7 @@ pub(crate) fn worker(
                                             t("preset.saved_startup"),
                                         ),
                                         Err(error) => format!(
-                                            "{} {}",
+                                            "{}\n{}",
                                             elevation::applied_status(&record),
                                             tf(
                                                 "preset.startup_not_enabled",

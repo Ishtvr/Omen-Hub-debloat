@@ -55,6 +55,62 @@ export component ActionButton inherits Rectangle {
     }
 }
 
+// Round "i" that opens the explanation of a row. The circle is 20 px; the
+// pointer and keyboard target keeps the control height.
+export component InfoButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> active;
+    callback clicked();
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    min-width: Theme.info-width;
+    max-width: Theme.info-width;
+    min-height: Theme.control-height;
+    max-height: Theme.control-height;
+    vertical-stretch: 0;
+    horizontal-stretch: 0;
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: focus.has-focus ? 2px : 1px;
+        border-color: !root.enabled ? Theme.line : focus.has-focus || root.active ? Theme.accent : area.has-hover ? Theme.ink : Theme.muted;
+        background: area.pressed || area.has-hover || root.active ? Theme.hover : transparent;
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: "i";
+            color: root.enabled ? Theme.ink : Theme.quiet;
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+
+    focus := FocusScope {
+        x: 0px;
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+}
+
 export component SegmentedTabs inherits Rectangle {
     in property <[string]> labels;
     in property <bool> enabled: true;

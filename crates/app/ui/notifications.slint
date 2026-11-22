@@ -89,9 +89,19 @@ export component MessageDialog inherits FocusScope {
         }
     }
 
+    // Sized to its text: the title, the lines of the message and the button
+    // row, between a readable minimum and the window.
+    measure := Text {
+        visible: false;
+        width: min(560px, parent.width - 40px) - 64px;
+        text: root.text;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+
     Rectangle {
         width: min(560px,parent.width - 40px);
-        height: min(360px,parent.height - 40px);
+        height: min(parent.height - 40px, max(180px, measure.preferred-height + 148px));
         background: Theme.surface;
         border-radius: 8px;
         border-width: 1px;

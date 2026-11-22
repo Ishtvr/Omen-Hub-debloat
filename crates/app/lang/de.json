@@ -639,6 +639,7 @@
   "ui.gpu_curve": "GPU · Spannung / Frequenz",
   "ui.curve_in_draft": "Kurve im Entwurf übernommen. Das Preset wurde noch nicht gespeichert oder angewendet.",
   "ui.details": "Details",
+  "ui.info": "Erklärung",
   "ui.ready": "Bereit.",
   "ui.loading": "Wird geladen …",
   "ui.test_mode": "UI-Test · Testdaten · Keine Hardwareänderungen",

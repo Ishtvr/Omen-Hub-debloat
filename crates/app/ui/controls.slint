@@ -89,6 +89,9 @@ export component BrightnessSlider inherits Rectangle {
 export component LineEdit inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> placeholder-text;
+    // Shown dimmed at the right inside the frame, so value and unit read as one.
+    in property <string> unit;
+    private property <length> unit-space: root.unit == "" ? 0px : unit-label.preferred-width + 8px;
     in property <bool> enabled: true;
     out property <bool> has-focus: input.has-focus;
     callback edited(string);
@@ -114,11 +117,21 @@ export component LineEdit inherits Rectangle {
     border-color: root.enabled && input.has-focus ? Theme.accent : Theme.line;
     Text {
         x: 12px;
-        width: parent.width - 24px;
+        width: max(0px, parent.width - 24px - root.unit-space);
         text: root.text == "" && input.preedit-text == "" ? root.placeholder-text : "";
         color: Theme.muted;
         vertical-alignment: center;
         overflow: elide;
+        accessible-role: none;
+    }
+
+    unit-label := Text {
+        x: parent.width - 12px - self.width;
+        width: self.preferred-width;
+        height: parent.height;
+        text: root.unit;
+        color: Theme.muted;
+        vertical-alignment: center;
         accessible-role: none;
     }
 
@@ -161,7 +174,7 @@ export component LineEdit inherits Rectangle {
 
     Rectangle {
         x: 12px;
-        width: max(0px, parent.width - 24px);
+        width: max(0px, parent.width - 24px - root.unit-space);
         clip: true;
         input := TextInput {
             property <length> offset;
@@ -203,6 +216,7 @@ export component CheckBox inherits Rectangle {
     accessible-action-default => { root.toggle(); }
     height: max(Theme.control-height, label.preferred-height + 8px);
     min-width: 24px + label.min-width;
+    preferred-width: 34px + label.preferred-width;
     horizontal-stretch: 1;
     border-radius: 6px;
     border-width: focus.has-focus ? 1px : 0px;

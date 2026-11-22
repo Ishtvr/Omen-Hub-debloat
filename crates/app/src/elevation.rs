@@ -164,8 +164,9 @@ fn run_inner(
     result
 }
 
-/// Status line for a successful preset Apply: values that were left at their
-/// original are named, translated; raw technical reasons stay in the journal.
+/// Status of a successful preset Apply, one statement per line: values that
+/// were left at their original are named, translated; raw technical reasons
+/// stay in the journal.
 pub fn applied_status(record: &serde_json::Value) -> String {
     let skipped = skipped_names(record);
     let fan_requested = record["cooling"]["state"] == "requested";
@@ -178,7 +179,7 @@ pub fn applied_status(record: &serde_json::Value) -> String {
         tf("preset.applied_except", &[&skipped.join("; ")])
     };
     let mut add = |text: String| {
-        status.push(' ');
+        status.push('\n');
         status.push_str(&text);
     };
     if fan_requested && !skipped.is_empty() {
@@ -222,7 +223,7 @@ pub fn startup_status(applied: &serde_json::Value, done: &str) -> String {
     if skipped_names(applied).is_empty() {
         done.to_owned()
     } else {
-        format!("{} {done}", applied_status(applied))
+        format!("{}\n{done}", applied_status(applied))
     }
 }
 fn skipped_names(record: &serde_json::Value) -> Vec<String> {

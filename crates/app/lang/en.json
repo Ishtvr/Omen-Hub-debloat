@@ -639,6 +639,7 @@
   "ui.gpu_curve": "GPU · Voltage / frequency",
   "ui.curve_in_draft": "Curve added to the draft. The preset has not been saved or applied.",
   "ui.details": "Details",
+  "ui.info": "Explanation",
   "ui.ready": "Ready.",
   "ui.loading": "Loading …",
   "ui.test_mode": "UI test · Test data · No hardware changes",

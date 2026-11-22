@@ -16,6 +16,13 @@ export global Theme {
     out property <color> error: dark ? #F3A1AF : #A21635;
     out property <length> control-height: 36px;
     out property <length> field-width: 276px;
+    // Number fields carry their unit inside the frame and keep the common
+    // field width, so every editor column has the same left and right edge.
+    out property <length> number-width: self.field-width;
+    // A settings row: the control height plus equal space above and below.
+    out property <length> row-height: 48px;
+    // Slot of the round info button; also kept free in rows without one.
+    out property <length> info-width: 28px;
     out property <length> action-width: 128px;
     out property <length> workspace-width: 1280px;
 }
