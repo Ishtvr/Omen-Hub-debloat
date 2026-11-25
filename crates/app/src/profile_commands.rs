@@ -90,6 +90,10 @@ pub fn handles(command: &str) -> bool {
             | "profile-startup-check"
             | "profile-storage"
             | "profile-migrate-legacy"
+            | "nvpcf-ppt-status"
+            | "nvpcf-ppt-restore"
+            | "gpu-tgp-status"
+            | "gpu-tgp-restore"
     )
 }
 
@@ -183,8 +187,12 @@ fn apply_hp_prelude(
         // Let the firmware settle its mode tables before Windows and SMU
         // values follow (300–500 ms, battery-switch order).
         std::thread::sleep(std::time::Duration::from_millis(400));
-        // The firmware keeps the mode's PL1; make it the preset's Slow PPT.
-        if let Some(watts) = HpMode::cpu_pl1_of_profile(profile)
+        // The firmware keeps the mode's PL1; make it the preset's Slow PPT
+        // (or cap to Fast PPT when Fast < mode default). In Unleashed, values
+        // outside HP 0x29's 45..=80 W window are applied directly via SMU
+        // after NVPCF Sub-function #9 is unlocked.
+        if let Some(watts) = HpMode::effective_pl1_for_preset(profile, mode)
+            && !(mode == HpMode::Unleashed && !(45..=80).contains(&watts))
             && let Err(error) = omen_platform::write_hp_cpu_pl1(inventory, watts)
         {
             failed.push(error);
@@ -375,6 +383,37 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
             return print(&report);
         }
+        Some("nvpcf-ppt-status") if args.len() == 1 => {
+            let store = ProfileStore::user_data()?;
+            return print(&omen_platform::nvpcf_ppt::inspect(
+                &omen_platform::inventory(),
+                &store,
+            ));
+        }
+        Some("nvpcf-ppt-restore") if args.len() == 1 => {
+            let _lease = ControlLease::acquire_foreground()?;
+            let store = ProfileStore::user_data()?;
+            let restored =
+                omen_platform::nvpcf_ppt::restore_if_saved(&omen_platform::inventory(), &store)?;
+            return print(&serde_json::json!({"restored": restored}));
+        }
+        Some("gpu-tgp-status") if args.len() == 1 => {
+            let store = ProfileStore::user_data()?;
+            return print(&omen_platform::vbios_tgp::inspect(
+                &omen_platform::inventory(),
+                &store,
+            ));
+        }
+        Some("gpu-tgp-restore") if args.len() == 1 => {
+            let _lease = ControlLease::acquire_foreground()?;
+            let store = ProfileStore::user_data()?;
+            let restored = omen_platform::vbios_tgp::restore_if_active(
+                &omen_platform::inventory(),
+                &store,
+                omen_platform::read_nvml_power_limits,
+            )?;
+            return print(&serde_json::json!({"restored": restored}));
+        }
         Some("mode-ui-apply" | "mode-ui-replace") if args.len() == 3 => {
             validate_nonce(Some(&args[2]))?;
             let mode = omen_core::hp_mode::HpMode::parse(&args[1])?;
@@ -385,7 +424,14 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             } else if user_store.pending()? || user_store.fan_policy_pending()? {
                 return Err(omen_core::message::msg("store.err.pending_checkpoint", &[]));
             }
-            let report = omen_platform::apply_hp_mode(&omen_platform::inventory(), mode)?;
+            let inventory = omen_platform::inventory();
+            let _ = omen_platform::nvpcf_ppt::restore_if_saved(&inventory, &user_store);
+            let _ = omen_platform::vbios_tgp::restore_if_active(
+                &inventory,
+                &user_store,
+                omen_platform::read_nvml_power_limits,
+            );
+            let report = omen_platform::apply_hp_mode(&inventory, mode)?;
             ProfileStore::user_data()?.save_control_result(&serde_json::json!({"schema":1,"operation":"mode","nonce":args[2],"result":{"Ok":report}}))?;
             return print(&report);
         }
@@ -642,6 +688,8 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             };
             validate_nonce(nonce)?;
             let profile = store.load(&args[1])?;
+            let max_tgp_w = store.gpu_tgp_max_w()?;
+            let requested_tgp_w = profile.gpu_dynamic_boost_limit_w_max(max_tgp_w)?;
             let digest = profile_digest(&profile)?;
             let parts = omen_core::fan_profile::split(&profile)?;
             if profile
@@ -660,6 +708,26 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 false,
                 args[0] == "profile-ui-replace",
             )?;
+            let tgp_outcome = if requested_tgp_w.is_some() || store.vbios_tgp_state().is_some() {
+                // Close any live NVML/NVAPI handles before a potential dGPU PnP restart.
+                let inventory = controller.inventory().clone();
+                drop(controller);
+                let outcome = omen_platform::vbios_tgp::apply_for_profile(
+                    &inventory,
+                    &store,
+                    &profile,
+                    omen_platform::read_nvml_power_limits,
+                )?;
+                controller = Controller::for_profile(&parts.direct)?;
+                outcome
+            } else {
+                omen_platform::vbios_tgp::ApplyOutcome::Unchanged
+            };
+            let ac = omen_platform::power_status().ac_connected == Some(true);
+            if omen_platform::nvpcf_ppt::preset_needs_unlock(&profile, ac) {
+                omen_platform::nvpcf_ppt::ensure_unlocked(controller.inventory(), &store)?;
+                controller.set_nvpcf_ppt_unlocked(true);
+            }
             let cooling_request =
                 crate::profile_fan::prepare(&profile, &store, controller.inventory())?;
             let prelude_failed = match apply_hp_prelude(&profile, controller.inventory()) {
@@ -709,12 +777,21 @@ fn run_inner(args: &[String]) -> Result<(), String> {
             let overridden: Vec<_> = profile
                 .settings
                 .iter()
-                .filter(|s| !effective.iter().any(|e| e.feature == s.feature))
+                .filter(|s| {
+                    !matches!(
+                        s.feature,
+                        Feature::HpSharedPowerMw | Feature::GpuDynamicBoostLimitMw
+                    ) && !effective.iter().any(|e| e.feature == s.feature)
+                })
                 .map(|s| s.feature)
                 .collect();
             // Keep preset holds only an Apply made since the current boot.
             let boot = omen_platform::boot_unix_s();
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"mode_requested":mode,"overridden":overridden,"prelude_failed":prelude_failed,"boot_unix_s":boot,"cooling":cooling,"result":result}))?;
+            let gpu_tgp_w = tgp_outcome.active_watts();
+            let gpu_tgp_restored =
+                tgp_outcome == omen_platform::vbios_tgp::ApplyOutcome::RestoredToStock;
+            let gpu_restarted = tgp_outcome.gpu_restarted();
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"apply","nonce":nonce,"profile_id":profile.id,"profile_digest":digest,"notes":notes,"unconfirmed":unconfirmed,"mode_requested":mode,"overridden":overridden,"prelude_failed":prelude_failed,"gpu_tgp_w":gpu_tgp_w,"gpu_tgp_restored":gpu_tgp_restored,"gpu_restarted":gpu_restarted,"boot_unix_s":boot,"cooling":cooling,"result":result}))?;
             if tracing {
                 print(
                     &serde_json::json!({"result":result,"cpu_readbacks":controller.cpu_readback_observations()}),
@@ -763,8 +840,12 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 store.disable_startup()?;
             }
             let mut controller = Controller::for_recovery(&saved)?;
+            let inventory = controller.inventory().clone();
             let mut direct_restored = false;
             let mut cooling_restored = false;
+            let mut nvpcf_restored = false;
+            let mut gpu_tgp_restored = false;
+            let keep_startup = args[0] == "profile-ui-restore-keep";
             let result = transaction::recover(&saved, &mut controller, &mut store).and_then(|()| {
                 direct_restored = true;
                 crate::profile_fan::restore_for(&store, &saved.profile_id, &saved.profile_digest)
@@ -779,10 +860,35 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                         rollback_errors: vec![],
                     })
             });
-            store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result,"direct_restored":direct_restored,"cooling_preferences_restored":cooling_restored,"cooling_hardware_verified":false}))?;
+            drop(controller);
+            let result = result.and_then(|()| {
+                if !keep_startup {
+                    nvpcf_restored = omen_platform::nvpcf_ppt::restore_if_saved(&inventory, &store)
+                        .map_err(|error| transaction::ApplyFailure {
+                            error,
+                            rollback_errors: vec![],
+                        })?;
+                    gpu_tgp_restored = omen_platform::vbios_tgp::restore_if_active(
+                        &inventory,
+                        &store,
+                        omen_platform::read_nvml_power_limits,
+                    )
+                    .map_err(|error| transaction::ApplyFailure {
+                        error,
+                        rollback_errors: vec![],
+                    })?;
+                }
+                Ok(())
+            });
+            store.save_control_result(&serde_json::json!({"schema":1,"operation":"restore","nonce":nonce,"result":result,"direct_restored":direct_restored,"cooling_preferences_restored":cooling_restored,"nvpcf_restored":nvpcf_restored,"gpu_tgp_restored":gpu_tgp_restored,"cooling_hardware_verified":false}))?;
             result.map_err(|e| serde_json::to_string_pretty(&e).unwrap_or(e.error))?;
+            let gpu_after = if saved.requested.iter().any(|s| s.feature.needs_nvidia()) {
+                Some(Controller::for_recovery(&saved)?.gpu_report()?)
+            } else {
+                None
+            };
             print(
-                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu":if saved.requested.iter().any(|s|s.feature.needs_nvidia()){Some(controller.gpu_report()?)}else{None}}),
+                &serde_json::json!({"restored":true,"profile_id":saved.profile_id,"gpu_tgp_restored":gpu_tgp_restored,"nvpcf_restored":nvpcf_restored,"gpu":gpu_after}),
             )
         }
         Some("profile-startup-enable" | "profile-ui-startup-enable")
@@ -852,6 +958,12 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 let direct = omen_core::fan_profile::direct_part(&profile)?;
                 let mut controller = prepare_apply(&direct, &mut store, true, false)?;
                 device_checked = true;
+                if omen_platform::nvpcf_ppt::preset_needs_unlock(&profile, ac == Some(true))
+                    && omen_platform::nvpcf_ppt::ensure_unlocked(controller.inventory(), &store)
+                        .is_ok()
+                {
+                    controller.set_nvpcf_ppt_unlocked(true);
+                }
                 // The linked curve is requested from the fan helper exactly as
                 // a manual Apply does. A helper that cannot take it yet (it
                 // may still be starting) does not hold back the other values.

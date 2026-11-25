@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const PROFILE_SCHEMA: u32 = 1;
+/// Qualified flashless GPU Dynamic Boost TGP ceiling bounds (HP 8E35 / RTX 5070 Laptop).
+pub const GPU_DYNAMIC_BOOST_LIMIT_MIN_W: u32 = 115;
+/// Verified default upper bound for the Dynamic Boost TGP slider (tested on 8E35 / RTX 5070 Laptop).
+pub const GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W: u32 = 135;
+/// Absolute hard upper ceiling selectable in Settings (above 135 W is untested / user risk).
+pub const GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W: u32 = 175;
+/// Alias for the default tested ceiling.
+pub const GPU_DYNAMIC_BOOST_LIMIT_MAX_W: u32 = GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -341,7 +349,43 @@ impl PerformanceProfile {
         for setting in &self.settings {
             setting.validate()?;
         }
+        self.gpu_dynamic_boost_limit_w()?;
         Ok(())
+    }
+
+    /// Validated GPU Dynamic Boost / Max TGP limit in whole watts (`115..=175 W`),
+    /// if configured in this preset.
+    pub fn gpu_dynamic_boost_limit_w(&self) -> Result<Option<u32>, String> {
+        self.gpu_dynamic_boost_limit_w_max(GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W)
+    }
+
+    /// Validated GPU Dynamic Boost / Max TGP limit in whole watts against an
+    /// explicit upper ceiling (clamped to `115..=175 W`).
+    pub fn gpu_dynamic_boost_limit_w_max(&self, max_w: u32) -> Result<Option<u32>, String> {
+        let ceiling = max_w.clamp(
+            GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+            GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+        );
+        let Some(setting) = self
+            .settings
+            .iter()
+            .find(|s| s.feature == Feature::GpuDynamicBoostLimitMw)
+        else {
+            return Ok(None);
+        };
+        match setting.value {
+            Value::Integer(mw)
+                if mw % 1000 == 0
+                    && (i64::from(GPU_DYNAMIC_BOOST_LIMIT_MIN_W)..=i64::from(ceiling))
+                        .contains(&(mw / 1000)) =>
+            {
+                Ok(Some((mw / 1000) as u32))
+            }
+            _ => Err(crate::message::msg(
+                "vbios_tgp.err.range",
+                &[&GPU_DYNAMIC_BOOST_LIMIT_MIN_W, &ceiling],
+            )),
+        }
     }
 
     /// Storage validation preserves readable legacy intent. Hardware preflight
@@ -366,10 +410,14 @@ impl PerformanceProfile {
     pub fn effective(&self) -> PerformanceProfile {
         let mut profile = self.clone();
         let find = |feature| self.settings.iter().find(|s| s.feature == feature);
-        // The shared budget (TPP) has no readback; Apply writes it beforehand,
-        // outside the transaction. The HP mode is no longer a preset field
-        // (30 October 2026); legacy entries are discarded.
-        let mut overridden = vec![Feature::OmenPerformanceMode, Feature::HpSharedPowerMw];
+        // The shared budget (TPP) and flashless GPU Dynamic Boost TGP ceiling
+        // are applied outside the direct transaction. The HP mode is no longer
+        // a preset field (30 October 2026); legacy entries are discarded.
+        let mut overridden = vec![
+            Feature::OmenPerformanceMode,
+            Feature::HpSharedPowerMw,
+            Feature::GpuDynamicBoostLimitMw,
+        ];
         if find(Feature::GpuVfCurve).is_some() {
             overridden.push(Feature::GpuCoreOffsetMhz);
         }
@@ -393,6 +441,34 @@ impl PerformanceProfile {
                     feature: Feature::WindowsPowerPlan,
                     value: Value::Choice(Choice::Balanced),
                 }),
+            }
+        }
+        let dynamic_boost = [Feature::GpuDynamicBoost, Feature::GpuUnleashed]
+            .iter()
+            .find_map(|f| find(*f))
+            .is_some_and(|s| s.value == Value::Boolean(true));
+        if !dynamic_boost
+            && let Some(Setting {
+                value: Value::Integer(fast_mw),
+                ..
+            }) = find(Feature::CpuPptLimitMw)
+            && (15_000..=160_000).contains(fast_mw)
+        {
+            if let Some(slow) = profile
+                .settings
+                .iter_mut()
+                .find(|s| s.feature == Feature::CpuSlowPptLimitMw)
+            {
+                if let Value::Integer(slow_mw) = slow.value
+                    && slow_mw > *fast_mw
+                {
+                    slow.value = Value::Integer(*fast_mw);
+                }
+            } else if *fast_mw < 55_000 {
+                profile.settings.push(Setting {
+                    feature: Feature::CpuSlowPptLimitMw,
+                    value: Value::Integer(*fast_mw),
+                });
             }
         }
         profile

@@ -23,6 +23,29 @@ struct UiSettingsFile {
     schema: u32,
     appearance: omen_core::appearance::Appearance,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GpuTgpSettingsFile {
+    schema: u32,
+    max_w: u32,
+}
+/// Saved original `HKLM\SYSTEM\CurrentControlSet\Services\nvpcf` registry values
+/// captured before Omen Hub++ disables NVPCF Sub-function #9 (CPU TDP overwriter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NvpcfPptOriginal {
+    pub config_version: Option<u32>,
+    pub supported_funcs: Option<u32>,
+}
+/// Durable state of an active flashless GPU Dynamic Boost TGP VBIOS override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VbiosTgpState {
+    pub driver_subkey: String,
+    pub stock_sha256: String,
+    pub applied_sha256: String,
+    pub target_watts: u32,
+}
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 pub fn profile_digest(profile: &PerformanceProfile) -> Result<String, String> {
@@ -595,6 +618,89 @@ impl ProfileStore {
                 appearance: appearance.clone(),
             },
         )
+    }
+    /// User-configured upper limit for the Dynamic Boost (GPU TGP) watt slider,
+    /// kept separate from `app-settings.json` so older protected helpers keep
+    /// parsing their unchanged schema. Defaults to 135 W when absent.
+    pub fn gpu_tgp_max_w(&self) -> Result<u32, String> {
+        use omen_core::profiles::{
+            GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W, GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+            GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+        };
+        let path = self.root.join("gpu-tgp-settings.json");
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W);
+        }
+        let record: GpuTgpSettingsFile = read_json(&path)?;
+        if record.schema != 1 {
+            return Err(omen_core::message::msg("settings.invalid_schema", &[]));
+        }
+        if !(GPU_DYNAMIC_BOOST_LIMIT_MIN_W..=GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W)
+            .contains(&record.max_w)
+        {
+            return Err(omen_core::message::msg(
+                "settings.invalid_gpu_tgp_max",
+                &[
+                    &GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+                    &GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+                ],
+            ));
+        }
+        Ok(record.max_w)
+    }
+    pub fn save_gpu_tgp_max_w(&self, max_w: u32) -> Result<(), String> {
+        use omen_core::profiles::{GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W, GPU_DYNAMIC_BOOST_LIMIT_MIN_W};
+        if !(GPU_DYNAMIC_BOOST_LIMIT_MIN_W..=GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W).contains(&max_w) {
+            return Err(omen_core::message::msg(
+                "settings.invalid_gpu_tgp_max",
+                &[
+                    &GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+                    &GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+                ],
+            ));
+        }
+        atomic_json(
+            &self.root.join("gpu-tgp-settings.json"),
+            &GpuTgpSettingsFile { schema: 1, max_w },
+        )
+    }
+    /// Saved original NVPCF registry values before Omen Hub++ unlocked PPT.
+    pub fn nvpcf_ppt_original(&self) -> Option<NvpcfPptOriginal> {
+        serde_json::from_value(self.power_state()["nvpcf_ppt_original"].clone()).ok()
+    }
+    pub fn save_nvpcf_ppt_original(&self, value: Option<NvpcfPptOriginal>) -> Result<(), String> {
+        let encoded = match value {
+            Some(original) => serde_json::to_value(original).map_err(|e| e.to_string())?,
+            None => serde_json::Value::Null,
+        };
+        self.update_power_state("nvpcf_ppt_original", encoded)
+    }
+    /// Active flashless GPU Dynamic Boost TGP VBIOS override state, if any.
+    pub fn vbios_tgp_state(&self) -> Option<VbiosTgpState> {
+        serde_json::from_value(self.power_state()["vbios_tgp_state"].clone()).ok()
+    }
+    pub fn save_vbios_tgp_state(&self, state: Option<&VbiosTgpState>) -> Result<(), String> {
+        let encoded = match state {
+            Some(state) => serde_json::to_value(state).map_err(|e| e.to_string())?,
+            None => serde_json::Value::Null,
+        };
+        self.update_power_state("vbios_tgp_state", encoded)
+    }
+    pub fn vbios_stock_path(&self) -> PathBuf {
+        self.root.join("vbios-stock-original.bin")
+    }
+    pub fn read_vbios_stock(&self) -> Result<Option<Vec<u8>>, String> {
+        let path = self.vbios_stock_path();
+        if !path.try_exists().map_err(|e| e.to_string())? {
+            return Ok(None);
+        }
+        read_bytes(&path).map(Some)
+    }
+    pub fn save_vbios_stock(&self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err(omen_core::message::msg("store.err.size", &[]));
+        }
+        atomic_bytes(&self.vbios_stock_path(), bytes)
     }
     /// Preset applied automatically when the charger is unplugged; absent or
     /// unreadable means no automatic change.

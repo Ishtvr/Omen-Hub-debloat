@@ -17,6 +17,15 @@ pub(crate) struct Readout {
     lost: bool,
 }
 pub(crate) fn read_in_child() -> Readout {
+    // Yield cleanly while a foreground hardware operation (e.g. dGPU TGP restart)
+    // holds the control lease so NVML/NVAPI is never opened mid-restart.
+    let Ok(_lease) = omen_platform::ControlLease::acquire_background() else {
+        return Readout {
+            sample: None,
+            warnings: vec![],
+            lost: false,
+        };
+    };
     let mut nvidia = omen_platform::Nvidia::new();
     let sample = nvidia.sample();
     Readout {

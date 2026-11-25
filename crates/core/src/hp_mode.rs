@@ -105,6 +105,39 @@ impl HpMode {
                 _ => None,
             })
     }
+    /// Default firmware PL1 in whole watts for each HP mode.
+    fn default_pl1_w(mode: Self) -> u8 {
+        match mode {
+            Self::Quiet | Self::Balanced => BALANCED_PL1_W,
+            Self::Performance => PERFORMANCE_PL1_W,
+            Self::Unleashed => UNLEASHED_PL1_W,
+        }
+    }
+    /// Effective firmware PL1 for a preset: explicit Slow PPT if set; otherwise
+    /// if Fast PPT is below the mode's default PL1 (e.g. 30 W in Balanced/55 W),
+    /// cap PL1 to Fast PPT so the mode's default does not invert Slow > Fast.
+    pub fn effective_pl1_for_preset(
+        profile: &crate::profiles::PerformanceProfile,
+        mode: Self,
+    ) -> Option<u8> {
+        if let Some(w) = Self::cpu_pl1_of_profile(profile) {
+            return Some(w);
+        }
+        profile
+            .effective()
+            .settings
+            .iter()
+            .find(|s| s.feature == crate::features::Feature::CpuPptLimitMw)
+            .and_then(|s| match s.value {
+                crate::profiles::Value::Integer(mw)
+                    if mw % 1000 == 0 && (15..=254).contains(&(mw / 1000)) =>
+                {
+                    let w = (mw / 1000) as u8;
+                    (w < Self::default_pl1_w(mode)).then_some(w)
+                }
+                _ => None,
+            })
+    }
     /// The shared CPU+GPU budget (TPP) a preset selects, in whole watts. It is
     /// written after the HP mode and before the transaction; the firmware has
     /// no readback. Only implausible values are refused.

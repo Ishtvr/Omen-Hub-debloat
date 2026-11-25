@@ -84,6 +84,11 @@ pub fn module_present() -> bool {
     !MODULE.is_empty()
 }
 
+fn embedded_module_verified() -> bool {
+    static VERIFIED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *VERIFIED.get_or_init(|| format!("{:x}", Sha256::digest(MODULE)) == SMU_MODULE_SHA256)
+}
+
 pub struct Smu {
     driver: Handle,
     pci: Handle,
@@ -153,7 +158,7 @@ impl Smu {
         {
             return Err("PawnIO version differs from the measured 2.2.0 ABI".into());
         }
-        if format!("{:x}", Sha256::digest(MODULE)) != SMU_MODULE_SHA256 {
+        if !embedded_module_verified() {
             return Err("Embedded SMU module differs from its signed release".into());
         }
         ioctl(&driver, LOAD, MODULE, &mut []).map_err(|e| format!("SMU module load: {e}"))?;
@@ -167,8 +172,8 @@ impl Smu {
             pci: Handle(pci),
         };
         // The module itself refuses unknown CPUs; double-check its decision.
-        let name = smu.call("ioctl_get_code_name", &[], 1)?;
-        if name.first().copied().unwrap_or(0) == 0 {
+        let name: [u64; 1] = smu.call_fixed("ioctl_get_code_name", &[])?;
+        if name[0] == 0 {
             return Err("SMU module did not recognise this CPU".into());
         }
         if smu.smu_version()? != 0x546f00 {
@@ -184,9 +189,41 @@ impl Smu {
         }
         Ok(PciLease(&self.pci))
     }
-    fn call(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
+    fn call_fixed<const IN: usize, const OUT: usize>(
+        &self,
+        name: &str,
+        input: &[u64; IN],
+    ) -> Result<[u64; OUT], String> {
         let _lease = self.lease()?;
-        self.call_locked(name, input, outputs)
+        self.call_fixed_locked(name, input)
+    }
+    fn call_fixed_locked<const IN: usize, const OUT: usize>(
+        &self,
+        name: &str,
+        input: &[u64; IN],
+    ) -> Result<[u64; OUT], String> {
+        const MAX_IN: usize = 8;
+        const MAX_OUT: usize = 8;
+        debug_assert!(IN <= MAX_IN && OUT <= MAX_OUT && name.len() <= 32);
+        let mut req = [0u8; 32 + 8 * MAX_IN];
+        req[..name.len()].copy_from_slice(name.as_bytes());
+        for (i, cell) in input.iter().enumerate() {
+            req[32 + 8 * i..40 + 8 * i].copy_from_slice(&cell.to_le_bytes());
+        }
+        let mut out_bytes = [0u8; 8 * MAX_OUT];
+        let out_slice = &mut out_bytes[..8 * OUT];
+        let count = ioctl(&self.driver, EXECUTE, &req[..32 + 8 * IN], out_slice)? as usize;
+        if count != out_slice.len() {
+            return Err(format!(
+                "{name} returned {count} of {} bytes",
+                out_slice.len()
+            ));
+        }
+        let mut out = [0u64; OUT];
+        for (i, chunk) in out_slice.chunks_exact(8).enumerate() {
+            out[i] = u64::from_le_bytes(chunk.try_into().unwrap());
+        }
+        Ok(out)
     }
     /// Caller holds the shared PCI lease across a complete logical read.
     fn call_locked(&self, name: &str, input: &[u64], outputs: usize) -> Result<Vec<u64>, String> {
@@ -199,11 +236,10 @@ impl Smu {
     }
     /// Sends one fixed RSMU message; returns the six response arguments.
     pub fn send(&self, message: Message, arg: u32) -> Result<[u32; 6], String> {
-        let out = self
-            .call(
+        let out: [u64; 6] = self
+            .call_fixed(
                 "ioctl_send_smu_command",
                 &[message.id(), u64::from(arg), 0, 0, 0, 0, 0],
-                6,
             )
             .map_err(|e| format!("SMU {message:?}: {e}"))?;
         Ok(std::array::from_fn(|i| out[i] as u32))
@@ -230,8 +266,8 @@ impl Smu {
     }
     fn pm_table_once(&self, floats: usize) -> Result<(u32, Vec<f32>), String> {
         let _lease = self.lease()?;
-        let resolved = self.call_locked("ioctl_resolve_pm_table", &[], 2)?;
-        self.call_locked("ioctl_update_pm_table", &[], 0)?;
+        let resolved: [u64; 2] = self.call_fixed_locked("ioctl_resolve_pm_table", &[])?;
+        let _: [u64; 0] = self.call_fixed_locked("ioctl_update_pm_table", &[])?;
         let raw = self.call_locked("ioctl_read_pm_table", &[], floats.div_ceil(2))?;
         let values = raw
             .iter()
@@ -246,7 +282,8 @@ impl Smu {
         Ok((resolved[0] as u32, values))
     }
     pub fn smu_version(&self) -> Result<u32, String> {
-        Ok(self.call("ioctl_get_smu_version", &[], 1)?[0] as u32)
+        let out: [u64; 1] = self.call_fixed("ioctl_get_smu_version", &[])?;
+        Ok(out[0] as u32)
     }
 }
 

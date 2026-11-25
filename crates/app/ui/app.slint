@@ -140,6 +140,8 @@ export global Workbench {
     in-out property <bool> start-in-tray;
     in-out property <int> close-index;
     in-out property <bool> hold-preset;
+    in-out property <string> gpu-tgp-max-w;
+    in property <string> gpu-tgp-max-error;
     in property <[string]> battery-choices;
     in-out property <int> battery-index;
     in property <bool> settings-ready;
@@ -234,7 +236,7 @@ component FieldRow inherits Rectangle {
     in-out property <bool> show-info;
     // The last row of a group has no divider under it.
     in property <bool> last;
-    height: Theme.row-height + (root.show-info ? info-text.preferred-height + 16px : 0px);
+    height: Theme.row-height + (root.show-info ? info-text.preferred-height + 34px : 0px);
 
     // Every control keeps the control height; the same space above and below
     // centres label, info button, editor and unit on one line.
@@ -323,15 +325,26 @@ component FieldRow inherits Rectangle {
         }
     }
 
-    info-text := Text {
+    Rectangle {
         visible: root.show-info;
-        x: 38px;
-        y: Theme.row-height + 2px;
-        width: parent.width - 54px;
-        text: root.item.info;
-        color: Theme.muted;
-        font-size: 12px;
-        wrap: word-wrap;
+        x: 36px;
+        y: Theme.row-height + 4px;
+        width: parent.width - 52px;
+        height: root.show-info ? info-text.preferred-height + 20px : 0px;
+        background: Theme.surface;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.line;
+
+        info-text := Text {
+            x: 12px;
+            y: 10px;
+            width: parent.width - 24px;
+            text: root.item.info;
+            color: Theme.muted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
     }
 
     Rectangle {
@@ -1767,6 +1780,35 @@ export component AppWindow inherits Window {
                             wrap: word-wrap;
                         }
 
+                        Hairline { }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: Workbench.tr("settings.gpu_tgp_max");
+                                color: Theme.ink;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            gpu-tgp-max := LineEdit {
+                                accessible-label: Workbench.tr("settings.gpu_tgp_max");
+                                text <=> Workbench.gpu-tgp-max-w;
+                                unit: "W";
+                                width: Theme.number-width;
+                                horizontal-stretch: 0;
+                                enabled: (Workbench.settings-ready && !Workbench.busy) && Workbench.confirm-kind == 0;
+                                edited(text) => { Workbench.settings-changed(); }
+                            }
+                        }
+
+                        Text {
+                            text: Workbench.gpu-tgp-max-error != "" ? Workbench.gpu-tgp-max-error : Workbench.tr("settings.gpu_tgp_max_warning");
+                            color: Workbench.gpu-tgp-max-error != "" ? Theme.error : Theme.warning;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
                         HorizontalLayout {
                             Rectangle {
                                 horizontal-stretch: 1;
@@ -1777,7 +1819,7 @@ export component AppWindow inherits Window {
                                 min-width: 110px;
                                 max-width: 140px;
                                 primary: Workbench.settings-dirty;
-                                enabled: (Workbench.settings-ready && Workbench.settings-dirty && Workbench.appearance-error == "" && !Workbench.busy) && Workbench.confirm-kind == 0;
+                                enabled: (Workbench.settings-ready && Workbench.settings-dirty && Workbench.appearance-error == "" && Workbench.gpu-tgp-max-error == "" && !Workbench.busy) && Workbench.confirm-kind == 0;
                                 clicked => { Workbench.save-settings(); }
                             }
                         }

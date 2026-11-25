@@ -95,9 +95,10 @@ pub struct Controller {
     windows_targets: BTreeMap<Feature, Value>,
     planned_power_scheme: Option<u128>,
     /// The preset runs the HP mode Unleashed: the firmware keeps the fast
-    /// limit (PPT) at its own value there (about 2,200 rewrites, 12 to 20
-    /// November 2026, always back at 80 W), so this preset skips PPT.
+    /// limit (PPT) at its own value there unless NVPCF Sub-function #9 is
+    /// unlocked for this session.
     firmware_ppt: bool,
+    nvpcf_ppt_unlocked: bool,
     smu: Option<super::smu::Smu>,
     cpu_readback_trace: Option<Vec<super::cpu_tuning::CpuReadbackTrace>>,
 }
@@ -209,12 +210,16 @@ impl Controller {
             windows_targets: BTreeMap::new(),
             planned_power_scheme: None,
             firmware_ppt: false,
+            nvpcf_ppt_unlocked: false,
             smu: None,
             cpu_readback_trace: None,
         })
     }
     pub fn trace_cpu_readbacks(&mut self) {
         self.cpu_readback_trace = Some(Vec::new());
+    }
+    pub fn set_nvpcf_ppt_unlocked(&mut self, unlocked: bool) {
+        self.nvpcf_ppt_unlocked = unlocked;
     }
     pub fn cpu_readback_observations(&self) -> &[super::cpu_tuning::CpuReadbackTrace] {
         self.cpu_readback_trace.as_deref().unwrap_or(&[])
@@ -711,10 +716,11 @@ impl Backend for Controller {
         // A running HP service no longer blocks the whole preset (user rule,
         // 30 October 2026); each PPT/Slow write checks it and is skipped alone.
         self.planned_power_scheme = super::windows_settings::requested_scheme(settings)?;
-        self.firmware_ppt = omen_core::hp_mode::HpMode::of_settings(
-            settings,
-            super::power_status().ac_connected == Some(true),
-        ) == Some(omen_core::hp_mode::HpMode::Unleashed);
+        self.firmware_ppt = !self.nvpcf_ppt_unlocked
+            && omen_core::hp_mode::HpMode::of_settings(
+                settings,
+                super::power_status().ac_connected == Some(true),
+            ) == Some(omen_core::hp_mode::HpMode::Unleashed);
         Ok(())
     }
     fn write_order(&self, settings: &[Setting]) -> Vec<usize> {
@@ -961,6 +967,33 @@ impl Backend for Controller {
                 integer_range: Some((1_000, 254_000)),
                 requires_ac: false,
                 startup_safe: true,
+            };
+        }
+        if feature == Feature::GpuDynamicBoostLimitMw {
+            if self.inventory.manufacturer != "HP"
+                || self.inventory.board != "8E35"
+                || self.inventory.bios != "F.13"
+                || !self
+                    .inventory
+                    .gpus
+                    .iter()
+                    .any(|g| g.to_ascii_lowercase().contains("rtx 5070 laptop"))
+            {
+                return Capability::unsupported(
+                    feature,
+                    omen_core::message::msg("vbios_tgp.err.unsupported", &[]),
+                );
+            }
+            return Capability {
+                feature,
+                access: Access::ReadWrite,
+                reason: "Flashless VBIOS Policy[2] Dynamic Boost TGP ceiling (115-175 W, verified via NVML)".into(),
+                integer_range: Some((
+                    i64::from(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W) * 1_000,
+                    i64::from(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W) * 1_000,
+                )),
+                requires_ac: true,
+                startup_safe: false,
             };
         }
         let reason = match feature {

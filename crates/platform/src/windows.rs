@@ -15,11 +15,13 @@ mod hp;
 pub mod hp_control;
 mod lighting;
 mod nvidia;
+pub mod nvpcf_ppt;
 mod smu;
 mod startup;
 mod thermal;
 mod tray_task;
 mod user_data;
+pub mod vbios_tgp;
 mod vf;
 mod windows_settings;
 pub use ccd::{WindowsProcesses, ccd_masks};
@@ -41,7 +43,7 @@ pub use hp::{
     write_hp_thermal_mode,
 };
 pub use lighting::DirectLighting;
-pub use nvidia::{GpuLimitProbe, Nvidia};
+pub use nvidia::{GpuLimitProbe, Nvidia, read_nvml_power_limits};
 use omen_core::{Inventory, PowerStatus};
 pub use smu::{
     LimitCalibration, SmuProbe, calibrate_limits as smu_calibrate_limits, probe as smu_probe,

@@ -195,6 +195,11 @@ pub fn applied_status(record: &serde_json::Value) -> String {
     if !prelude.is_empty() {
         add(tf("preset.prelude_failed", &[&prelude.join("; ")]));
     }
+    if let Some(tgp_w) = record["gpu_tgp_w"].as_u64() {
+        add(tf("preset.gpu_tgp_applied", &[&tgp_w]));
+    } else if record["gpu_tgp_restored"] == true {
+        add(t("preset.gpu_tgp_restored").into());
+    }
     if let Some(mode) = record["mode_requested"].as_str() {
         add(tf("preset.mode_requested", &[&t(&format!("mode.{mode}"))]));
     }
@@ -210,6 +215,13 @@ pub fn applied_status(record: &serde_json::Value) -> String {
         .flatten()
         .filter_map(|item| item.as_str())
         .filter_map(|key| serde_json::from_value(key.into()).ok())
+        .filter(|feature: &omen_core::features::Feature| {
+            !matches!(
+                feature,
+                omen_core::features::Feature::HpSharedPowerMw
+                    | omen_core::features::Feature::GpuDynamicBoostLimitMw
+            )
+        })
         .map(|feature: omen_core::features::Feature| t(&format!("field.{feature:?}")).to_owned())
         .collect();
     if !overridden.is_empty() {
@@ -250,7 +262,7 @@ fn skipped_names(record: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 pub fn restored_status(record: &serde_json::Value) -> String {
-    if record["cooling_preferences_restored"] == true {
+    let mut text = if record["cooling_preferences_restored"] == true {
         let mut text = if record["direct_restored"] == true {
             t("fan_profile.direct_restored").to_owned() + " "
         } else {
@@ -260,7 +272,12 @@ pub fn restored_status(record: &serde_json::Value) -> String {
         text
     } else {
         t("preset.restored").to_owned()
+    };
+    if record["gpu_tgp_restored"] == true {
+        text.push('\n');
+        text.push_str(t("preset.gpu_tgp_restored"));
     }
+    text
 }
 
 /// A mode SET is not a thermal-mode GET. Keep verified CPU PL1 separate from

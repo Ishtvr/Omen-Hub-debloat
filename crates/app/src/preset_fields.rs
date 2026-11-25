@@ -100,20 +100,39 @@ pub const DEVICE_DEFAULTS: &[F] = &[
     F::GpuCoreOffsetMhz,
     F::GpuMemoryOffsetMhz,
 ];
-/// Slider bounds in whole watts, taken from the OMEN Hub's own panel for this
-/// model (1101.2611.2.0, PowerControl.JSON.Khalilah_DRG_N22X4X6, 8E35/F.13):
-/// TPP TppMinValue-TppMaxValue 55-72 W; CPU PL1 in Unleashed
-/// UnleashedModeMinPL1-UnleashedModeMaxPL1 45-80 W in 1-W steps, written
-/// as SetPowerLimit = 0x29 [PL1, PL1, FF, FF]. Without Dynamic Boost the
-/// CPU slider spans the qualified Slow range instead. Validation and Apply
-/// keep their own checks; the slider only guides the value.
-pub fn slider_watts(feature: F, dynamic_boost: bool) -> Option<(i64, i64)> {
+/// Slider bounds in whole watts for Dynamic Boost and CPU power limits.
+/// - `GpuDynamicBoostLimitMw`: 115 W stock up to `gpu_tgp_max_w` (default 135 W,
+///   configurable up to 175 W in Settings).
+/// - `HpSharedPowerMw`: 55–72 W matching HP OMEN Hub's Unleashed panel.
+/// - `CpuSlowPptLimitMw`: 15–80 W with Dynamic Boost (NVPCF Sub-function #9
+///   unlock lifts the 45 W firmware floor); 15–160 W without Dynamic Boost.
+pub fn slider_watts_with_gpu_max(
+    feature: F,
+    dynamic_boost: bool,
+    gpu_tgp_max_w: u32,
+) -> Option<(i64, i64)> {
+    let gpu_max = i64::from(gpu_tgp_max_w.clamp(
+        omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+        omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+    ));
     match feature {
+        F::GpuDynamicBoostLimitMw => Some((
+            i64::from(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W),
+            gpu_max,
+        )),
         F::HpSharedPowerMw => Some((55, 72)),
-        F::CpuSlowPptLimitMw if dynamic_boost => Some((45, 80)),
+        F::CpuSlowPptLimitMw if dynamic_boost => Some((15, 80)),
         F::CpuSlowPptLimitMw => Some((15, 160)),
         _ => None,
     }
+}
+#[cfg(test)]
+pub fn slider_watts(feature: F, dynamic_boost: bool) -> Option<(i64, i64)> {
+    slider_watts_with_gpu_max(
+        feature,
+        dynamic_boost,
+        omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W,
+    )
 }
 pub fn retired(feature: F) -> bool {
     feature.retired()
@@ -148,6 +167,8 @@ pub fn fields() -> Vec<Field> {
         (F::GpuUnleashed, 1, 0),
         // cTGP is on unless the user turns it off (user decision, 30 October 2026).
         (F::GpuCustomTgp, 1, 1),
+        // Flashless GPU Dynamic Boost TGP ceiling (115 W stock; up to Settings ceiling).
+        (F::GpuDynamicBoostLimitMw, 1, 115000),
         // The Hub's Unleashed default budget (TppMaxValue of this model).
         (F::HpSharedPowerMw, 1, 72000),
         (F::CpuSlowPptLimitMw, 1, 55000),
@@ -348,15 +369,26 @@ mod tests {
         for feature in [
             F::GpuUnleashed,
             F::GpuCustomTgp,
+            F::GpuDynamicBoostLimitMw,
             F::HpSharedPowerMw,
             F::CpuSlowPptLimitMw,
         ] {
             assert_eq!(group(feature), Some(1), "{feature:?}");
         }
         assert_eq!(GROUPS[1], "group.dynamic_boost");
-        // OMEN Hub 1101.2611.2.0 panel bounds for 8E35 (Khalilah_DRG_N22X4X6).
+        assert_eq!(slider_watts(F::GpuDynamicBoostLimitMw, true), Some((115, 135)));
+        assert_eq!(
+            slider_watts_with_gpu_max(F::GpuDynamicBoostLimitMw, true, 160),
+            Some((115, 160))
+        );
+        assert_eq!(
+            slider_watts_with_gpu_max(F::GpuDynamicBoostLimitMw, true, 999),
+            Some((115, 175))
+        );
+        // OMEN Hub 1101.2611.2.0 panel bounds for 8E35 (Khalilah_DRG_N22X4X6),
+        // with NVPCF Sub-function #9 bypass lifting the 45 W Slow floor.
         assert_eq!(slider_watts(F::HpSharedPowerMw, true), Some((55, 72)));
-        assert_eq!(slider_watts(F::CpuSlowPptLimitMw, true), Some((45, 80)));
+        assert_eq!(slider_watts(F::CpuSlowPptLimitMw, true), Some((15, 80)));
         assert_eq!(slider_watts(F::CpuSlowPptLimitMw, false), Some((15, 160)));
         assert_eq!(slider_watts(F::CpuPptLimitMw, true), None);
         // The seeds start inside their sliders.

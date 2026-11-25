@@ -378,6 +378,8 @@ fn run() -> Result<(), String> {
         }
         #[cfg(windows)]
         Some("gpu-limit-read") if args.len() == 1 => {
+            // Yield while a foreground control (e.g. dGPU TGP restart) holds the lease.
+            let _lease = omen_platform::ControlLease::acquire_background()?;
             // One short NVML session per read, in this disposable process.
             let reading = omen_platform::GpuLimitProbe::new()?.read()?;
             println!(

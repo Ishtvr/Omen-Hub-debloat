@@ -128,6 +128,7 @@ enum Aux {
         settings::Snapshot,
         omen_core::app_settings::AppSettings,
         omen_core::appearance::Appearance,
+        u32,
         bool,
     ),
     Lighting(Option<(KeyboardState, [[u8; 3]; 4], bool)>),
@@ -189,8 +190,14 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     .flatten()
                     .map(|s| s.disabled),
             ),
-            Aux::SaveSettings(base, options, appearance, startup) => {
-                AuxResult::SettingsSaved(settings::save(&base, &options, &appearance, startup))
+            Aux::SaveSettings(base, options, appearance, gpu_tgp_max_w, startup) => {
+                AuxResult::SettingsSaved(settings::save(
+                    &base,
+                    &options,
+                    &appearance,
+                    gpu_tgp_max_w,
+                    startup,
+                ))
             }
             Aux::Lighting(target) => {
                 let applied = target.is_some();
@@ -251,6 +258,7 @@ struct Host {
     groups: Rc<VecModel<GroupData>>,
     cores: RefCell<Vec<CoreDelta>>,
     baseline_settings: RefCell<Option<settings::Snapshot>>,
+    gpu_tgp_max_w: Cell<u32>,
     profiles: RefCell<Vec<PerformanceProfile>>,
     battery_entries: RefCell<Vec<Selection>>,
     lighting: RefCell<Option<KeyboardState>>,
@@ -557,7 +565,11 @@ impl Host {
             .iter()
             .zip(fields.iter())
             .any(|(f, d)| f.feature == Feature::GpuUnleashed && d.included);
-        let slider = preset_fields::slider_watts(field.feature, dynamic_boost);
+        let slider = preset_fields::slider_watts_with_gpu_max(
+            field.feature,
+            dynamic_boost,
+            self.gpu_tgp_max_w.get(),
+        );
         let kind = match field.feature.descriptor().value_kind {
             _ if slider.is_some() => 5,
             ValueKind::Choice => 1,
@@ -854,6 +866,26 @@ impl Host {
                     value: value.clone(),
                 }
                 .validate()?;
+                if field.feature == Feature::GpuDynamicBoostLimitMw {
+                    let ceiling = self.gpu_tgp_max_w.get().clamp(
+                        omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+                        omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+                    );
+                    let valid = matches!(
+                        value,
+                        Value::Integer(mw)
+                            if mw % 1000 == 0
+                                && (i64::from(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W)
+                                    ..=i64::from(ceiling))
+                                    .contains(&(mw / 1000))
+                    );
+                    if !valid {
+                        return Err(omen_core::message::msg(
+                            "vbios_tgp.err.range",
+                            &[&omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W, &ceiling],
+                        ));
+                    }
+                }
             }
             edits.push((field.feature, value));
         }
@@ -1396,8 +1428,14 @@ impl Host {
         d.set_start_in_tray(s.options.start_in_tray);
         d.set_close_index(i32::from(!s.options.close_to_tray));
         d.set_hold_preset(s.options.hold_preset);
+        d.set_gpu_tgp_max_w(s.gpu_tgp_max_w.to_string().into());
+        d.set_gpu_tgp_max_error("".into());
+        let tgp_changed = self.gpu_tgp_max_w.replace(s.gpu_tgp_max_w) != s.gpu_tgp_max_w;
         d.set_settings_ready(true);
         d.set_settings_dirty(false);
+        if tgp_changed {
+            self.update_fields();
+        }
         if saved {
             self.status(
                 t(
@@ -1417,12 +1455,31 @@ impl Host {
         }
         *self.baseline_settings.borrow_mut() = Some(s);
     }
+    fn parse_gpu_tgp_max_w(&self) -> Result<u32, String> {
+        let Some(w) = self.window.upgrade() else {
+            return Ok(self.gpu_tgp_max_w.get());
+        };
+        let raw = w.global::<Workbench>().get_gpu_tgp_max_w();
+        let trimmed = raw.trim();
+        let value = trimmed.parse::<u32>().map_err(|_| {
+            omen_core::message::msg(
+                "settings.invalid_gpu_tgp_max",
+                &[
+                    &omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_MIN_W,
+                    &omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_HARD_MAX_W,
+                ],
+            )
+        })?;
+        settings::validate_gpu_tgp_max_w(value)?;
+        Ok(value)
+    }
     fn settings_target(
         &self,
     ) -> Option<(
         settings::Snapshot,
         omen_core::app_settings::AppSettings,
         omen_core::appearance::Appearance,
+        u32,
         bool,
     )> {
         let w = self.window.upgrade()?;
@@ -1437,22 +1494,38 @@ impl Host {
         options.start_in_tray = d.get_start_in_tray();
         options.close_to_tray = d.get_close_index() == 0;
         options.hold_preset = d.get_hold_preset();
+        let gpu_tgp_max_w = match self.parse_gpu_tgp_max_w() {
+            Ok(v) => {
+                d.set_gpu_tgp_max_error("".into());
+                v
+            }
+            Err(e) => {
+                d.set_gpu_tgp_max_error(crate::i18n::error_message(&e).into());
+                return None;
+            }
+        };
         Some((
             base,
             options,
             self.appearance_draft.borrow().clone(),
+            gpu_tgp_max_w,
             d.get_autostart(),
         ))
     }
     fn save_settings(&self) {
-        if let Some((base, options, appearance, startup)) = self.settings_target() {
-            if let Err(e) = options.validate().and_then(|_| appearance.validate()) {
+        if let Some((base, options, appearance, gpu_tgp_max_w, startup)) = self.settings_target() {
+            if let Err(e) = options
+                .validate()
+                .and_then(|_| appearance.validate())
+                .and_then(|_| settings::validate_gpu_tgp_max_w(gpu_tgp_max_w))
+            {
                 self.status(&crate::i18n::error_message(&e), true);
                 return;
             }
             if self.test {
                 if let Some(store) = &self.test_settings
-                    && let Err(e) = settings::persist_options(store, &options, &appearance)
+                    && let Err(e) =
+                        settings::persist_options(store, &options, &appearance, gpu_tgp_max_w)
                 {
                     self.status(&crate::i18n::error_message(&e), true);
                     return;
@@ -1461,6 +1534,7 @@ impl Host {
                     settings::Snapshot {
                         options,
                         appearance,
+                        gpu_tgp_max_w,
                         run_entry: startup.then(|| "UI TEST".to_owned()),
                     },
                     false,
@@ -1478,14 +1552,21 @@ impl Host {
                 }
                 return;
             }
-            self.send_aux(Aux::SaveSettings(base, options, appearance, startup));
+            self.send_aux(Aux::SaveSettings(
+                base,
+                options,
+                appearance,
+                gpu_tgp_max_w,
+                startup,
+            ));
         }
     }
     fn settings_dirty(&self) -> bool {
         self.settings_target()
-            .is_some_and(|(base, options, appearance, startup)| {
+            .is_some_and(|(base, options, appearance, gpu_tgp_max_w, startup)| {
                 base.options != options
                     || base.appearance != appearance
+                    || base.gpu_tgp_max_w != gpu_tgp_max_w
                     || base.run_entry.is_some() != startup
             })
     }
@@ -1708,6 +1789,16 @@ pub fn run(
             .collect::<Vec<_>>(),
     ));
     d.set_groups(groups.clone().into());
+    let initial_gpu_tgp_max_w = if test {
+        test_settings
+            .as_ref()
+            .and_then(|s| s.gpu_tgp_max_w().ok())
+            .unwrap_or(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W)
+    } else {
+        ProfileStore::user_data()
+            .and_then(|s| s.gpu_tgp_max_w())
+            .unwrap_or(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W)
+    };
     let host = Rc::new(Host {
         fan_library: Default::default(),
         library_attempted: Cell::new(false),
@@ -1737,6 +1828,7 @@ pub fn run(
         groups,
         cores: RefCell::new(vec![]),
         baseline_settings: RefCell::new(None),
+        gpu_tgp_max_w: Cell::new(initial_gpu_tgp_max_w),
         profiles: RefCell::new(vec![]),
         battery_entries: RefCell::new(vec![]),
         lighting: RefCell::new(None),
@@ -1887,6 +1979,12 @@ pub fn run(
                     .map(|s| s.ui_appearance())
                     .transpose()?
                     .unwrap_or_default(),
+                gpu_tgp_max_w: host
+                    .test_settings
+                    .as_ref()
+                    .map(|s| s.gpu_tgp_max_w())
+                    .transpose()?
+                    .unwrap_or(omen_core::profiles::GPU_DYNAMIC_BOOST_LIMIT_DEFAULT_MAX_W),
                 run_entry: None,
             },
             false,

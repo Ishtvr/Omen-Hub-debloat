@@ -408,6 +408,26 @@ impl Drop for GpuLimitProbe {
     }
 }
 
+/// One-shot NVML query of `(default_limit_mw, min_limit_mw, max_limit_mw)`
+/// for verifying flashless GPU Dynamic Boost TGP ceiling changes after a
+/// dGPU PnP restart.
+pub fn read_nvml_power_limits() -> Result<(u32, u32, u32), String> {
+    let nvml = Nvml::new(Some("NVIDIA GeForce RTX 5070 Laptop GPU"))?;
+    let (mut default_mw, mut min_mw, mut max_mw) = (0u32, 0u32, 0u32);
+    // SAFETY: Live NVML device handle and exact documented u32 out parameters.
+    unsafe {
+        let status = (nvml.default_limit)(nvml.gpu, &mut default_mw);
+        if status != 0 {
+            return Err(format!("NVML default power limit unavailable: {status}"));
+        }
+        let status = (nvml.constraints)(nvml.gpu, &mut min_mw, &mut max_mw);
+        if status != 0 {
+            return Err(format!("NVML power constraints unavailable: {status}"));
+        }
+    }
+    Ok((default_mw, min_mw, max_mw))
+}
+
 /// Construct and use on a single worker thread. No unsafe Send/Sync implementation.
 pub struct Nvidia {
     nvapi: Option<Nvapi>,
