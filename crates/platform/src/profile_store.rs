@@ -431,38 +431,79 @@ impl ProfileStore {
         }
         Ok(false)
     }
+    /// Complete discovered defaults record (settings + per-mode Standard /
+    /// Performance TDC, EDC and power limits) for this exact board/BIOS.
+    /// Backwards-compatible with older `device-defaults.json` files.
+    pub fn device_defaults_record(
+        &self,
+        board: &str,
+        bios: &str,
+    ) -> Option<omen_core::device_defaults::DeviceDefaultsRecord> {
+        let mut record: omen_core::device_defaults::DeviceDefaultsRecord =
+            read_json(&self.root.join("device-defaults.json")).ok()?;
+        if record.schema != omen_core::device_defaults::DEFAULTS_SCHEMA
+            || record.board != board
+            || record.bios != bios
+        {
+            return None;
+        }
+        record.settings = record
+            .settings
+            .into_iter()
+            .filter_map(|s| {
+                omen_core::device_defaults::sanitize_default(s.feature, s.value).map(|value| {
+                    Setting {
+                        feature: s.feature,
+                        value,
+                    }
+                })
+            })
+            .collect();
+        Some(record)
+    }
+    /// Atomically persists the complete device-defaults record (preserving
+    /// schema 1 compatibility with `board`, `bios`, `settings` plus `modes`).
+    pub fn save_device_defaults_record(
+        &self,
+        record: &omen_core::device_defaults::DeviceDefaultsRecord,
+    ) -> Result<(), String> {
+        if record.schema != omen_core::device_defaults::DEFAULTS_SCHEMA {
+            return Err(omen_core::message::msg("store.err.journal_schema", &[]));
+        }
+        for setting in &record.settings {
+            setting.validate()?;
+        }
+        atomic_json(&self.root.join("device-defaults.json"), record)
+    }
     /// The device's own values (read while no control was active since boot)
     /// for this exact board/BIOS; empty for another firmware.
     pub fn device_defaults(&self, board: &str, bios: &str) -> Vec<Setting> {
-        read_json::<serde_json::Value>(&self.root.join("device-defaults.json"))
-            .ok()
-            .filter(|v| v["schema"] == 1 && v["board"] == board && v["bios"] == bios)
-            .and_then(|v| serde_json::from_value::<Vec<Setting>>(v["settings"].clone()).ok())
-            .map(|settings| {
-                settings
-                    .into_iter()
-                    .filter(|s| s.validate().is_ok())
-                    .collect()
-            })
+        self.device_defaults_record(board, bios)
+            .map(|record| record.settings)
             .unwrap_or_default()
     }
-    /// Newer readings replace older ones of the same feature.
+    /// Newer readings replace older ones of the same feature while retaining
+    /// any previously discovered per-mode Standard/Performance limits.
     pub fn save_device_defaults(
         &self,
         board: &str,
         bios: &str,
         readings: &[Setting],
     ) -> Result<(), String> {
-        let mut settings = self.device_defaults(board, bios);
+        let existing = self.device_defaults_record(board, bios);
         for reading in readings {
             reading.validate()?;
-            settings.retain(|s| s.feature != reading.feature);
-            settings.push(reading.clone());
         }
-        atomic_json(
-            &self.root.join("device-defaults.json"),
-            &serde_json::json!({"schema":1,"board":board,"bios":bios,"settings":settings}),
-        )
+        let merged = omen_core::device_defaults::merge_discovered(
+            board,
+            bios,
+            "",
+            existing.as_ref(),
+            readings,
+            None,
+            None,
+        );
+        self.save_device_defaults_record(&merged)
     }
     pub fn save_control_result<T: Serialize>(&self, value: &T) -> Result<(), String> {
         atomic_json(&self.root.join("last-control-result.json"), value)
@@ -1102,6 +1143,33 @@ mod tests {
             .unwrap();
         assert!(store.controlled_since(0).unwrap());
         assert!(!store.controlled_since(u64::MAX).unwrap());
+
+        // Per-mode Standard & Performance TDC/EDC persist alongside settings,
+        // and dirty factory offsets (e.g. CO +10) are sanitized back to 0.
+        let mut record = omen_core::device_defaults::DeviceDefaultsRecord::new("8E35", "F.13");
+        record.modes.standard = Some(omen_core::device_defaults::ModePowerDefaults {
+            ppt_mw: Some(80_000),
+            slow_ppt_mw: Some(55_000),
+            tdc_ma: Some(108_000),
+            edc_ma: Some(160_000),
+            tctl_c: Some(100),
+        });
+        record.modes.performance = Some(omen_core::device_defaults::ModePowerDefaults {
+            ppt_mw: Some(80_000),
+            slow_ppt_mw: Some(60_000),
+            tdc_ma: Some(108_000),
+            edc_ma: Some(160_000),
+            tctl_c: Some(100),
+        });
+        record.settings.push(reading(Feature::CpuCurveOptimizerAllCore, 10));
+        store.save_device_defaults_record(&record).unwrap();
+        let loaded = store.device_defaults_record("8E35", "F.13").unwrap();
+        assert_eq!(loaded.mode_tdc_edc(false), (Some(108_000), Some(160_000)));
+        assert_eq!(loaded.mode_tdc_edc(true), (Some(108_000), Some(160_000)));
+        assert_eq!(
+            loaded.get(Feature::CpuCurveOptimizerAllCore),
+            Some(&Value::Integer(0))
+        );
     }
 
     #[test]

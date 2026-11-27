@@ -10,6 +10,7 @@ pub mod cpu;
 pub mod curve_editor;
 pub mod curve_input;
 pub mod curve_view;
+pub mod device_defaults;
 pub mod fan;
 pub mod fan_profile;
 pub mod features;

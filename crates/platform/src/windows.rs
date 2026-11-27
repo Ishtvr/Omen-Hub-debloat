@@ -5,6 +5,7 @@ mod cooling;
 mod cpu;
 mod cpu_hardware;
 mod cpu_tuning;
+mod device_defaults;
 mod dgpu;
 mod fan_service;
 mod fan_task;
@@ -31,6 +32,10 @@ pub use cooling::{FanReport, MaxFanImage, read_hp_fans};
 pub use cpu::Cpu;
 pub use cpu_hardware::{CPU_DRIVER_SHA256, CPU_MODULE_SHA256, CpuHardwareReader};
 pub use cpu_tuning::{CpuReadbackTrace, SmuImage};
+pub use device_defaults::{
+    discover_active_elevated as discover_device_defaults,
+    discover_passive as discover_passive_defaults,
+};
 pub use dgpu::nvidia_gpu_awake;
 pub use fan_service::{FanServiceStatus, run as run_fan_service};
 pub use fan_service::{request_stop as stop_fan_service, run_until as run_fan_service_until};

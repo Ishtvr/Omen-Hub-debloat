@@ -26,6 +26,18 @@ const UNLEASHED_MODE: u8 = 0x04;
 const BALANCED_PL1_W: u8 = 55;
 const PERFORMANCE_PL1_W: u8 = 60;
 const UNLEASHED_PL1_W: u8 = 80;
+/// Measured firmware/SMU limits for 8E35 / F.13 / Ryzen 9 8940HX
+/// (25 November 2026: PM table 0x540208 cells 2/4/8/62/10 and fused GETs).
+/// Both Standard (Balanced) and Performance keep the 108 A TDC / 160 A EDC
+/// firmware envelope while HP modes vary PL1 (55 W / 60 W / 80 W).
+pub const STOCK_PPT_MW: i64 = 80_000;
+pub const BALANCED_TDC_MA: i64 = 108_000;
+pub const BALANCED_EDC_MA: i64 = 160_000;
+pub const PERFORMANCE_TDC_MA: i64 = 108_000;
+pub const PERFORMANCE_EDC_MA: i64 = 160_000;
+pub const UNLEASHED_TDC_MA: i64 = 108_000;
+pub const UNLEASHED_EDC_MA: i64 = 160_000;
+pub const STOCK_TCTL_C: i64 = 100;
 /// Hard-coded GPU temperature target in the Hub's TGP/PPAB write.
 const GPS_MAX_TEMPERATURE: u8 = 87;
 /// `GpuDState.D1`, the only state the Hub writes outside IR-overheat handling.
@@ -111,6 +123,46 @@ impl HpMode {
             Self::Quiet | Self::Balanced => BALANCED_PL1_W,
             Self::Performance => PERFORMANCE_PL1_W,
             Self::Unleashed => UNLEASHED_PL1_W,
+        }
+    }
+    /// Default sustained CPU power limit (Slow/PL1) in mW for 8E35 / F.13.
+    pub fn default_pl1_mw(self) -> i64 {
+        i64::from(Self::default_pl1_w(self)) * 1_000
+    }
+    /// Default short-term CPU power limit (PPT) in mW for 8E35 / F.13.
+    pub fn default_ppt_mw(self) -> i64 {
+        let _ = self;
+        STOCK_PPT_MW
+    }
+    /// Default sustained CPU current limit (TDC) in mA for 8E35 / F.13.
+    pub fn default_tdc_ma(self) -> i64 {
+        match self {
+            Self::Quiet | Self::Balanced => BALANCED_TDC_MA,
+            Self::Performance => PERFORMANCE_TDC_MA,
+            Self::Unleashed => UNLEASHED_TDC_MA,
+        }
+    }
+    /// Default peak CPU current limit (EDC) in mA for 8E35 / F.13.
+    pub fn default_edc_ma(self) -> i64 {
+        match self {
+            Self::Quiet | Self::Balanced => BALANCED_EDC_MA,
+            Self::Performance => PERFORMANCE_EDC_MA,
+            Self::Unleashed => UNLEASHED_EDC_MA,
+        }
+    }
+    /// Stock CPU thermal ceiling (Tctl / Tjmax) in °C for 8E35 / F.13.
+    pub fn default_tctl_c(self) -> i64 {
+        let _ = self;
+        STOCK_TCTL_C
+    }
+    /// Complete measured 8E35 / F.13 power & current defaults for this HP mode.
+    pub fn default_power_limits(self) -> crate::device_defaults::ModePowerDefaults {
+        crate::device_defaults::ModePowerDefaults {
+            ppt_mw: Some(self.default_ppt_mw()),
+            slow_ppt_mw: Some(self.default_pl1_mw()),
+            tdc_ma: Some(self.default_tdc_ma()),
+            edc_ma: Some(self.default_edc_ma()),
+            tctl_c: Some(self.default_tctl_c()),
         }
     }
     /// Effective firmware PL1 for a preset: explicit Slow PPT if set; otherwise
@@ -453,6 +505,23 @@ mod tests {
             HpMode::Unleashed,
         ] {
             assert_eq!(HpMode::parse(mode.name()).unwrap(), mode);
+        }
+    }
+
+    #[test]
+    fn mode_power_and_current_defaults_match_measured_8e35_firmware() {
+        for (mode, pl1_mw, tdc_ma, edc_ma) in [
+            (HpMode::Quiet, 55_000, 108_000, 160_000),
+            (HpMode::Balanced, 55_000, 108_000, 160_000),
+            (HpMode::Performance, 60_000, 108_000, 160_000),
+            (HpMode::Unleashed, 80_000, 108_000, 160_000),
+        ] {
+            let limits = mode.default_power_limits();
+            assert_eq!(limits.ppt_mw, Some(80_000));
+            assert_eq!(limits.slow_ppt_mw, Some(pl1_mw));
+            assert_eq!(limits.tdc_ma, Some(tdc_ma));
+            assert_eq!(limits.edc_ma, Some(edc_ma));
+            assert_eq!(limits.tctl_c, Some(100));
         }
     }
 }

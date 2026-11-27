@@ -157,6 +157,7 @@ export global Workbench {
     in property <string> appearance-error;
     in property <bool> hp-disabled;
     in property <bool> hp-available;
+    in property <string> device-defaults-summary;
     in-out property <int> confirm-kind;
     in property <bool> notice-visible;
     in property <bool> notice-failed;
@@ -223,6 +224,7 @@ export global Workbench {
     callback open-color-picker(int);
     callback reset-appearance();
     callback hp-service();
+    callback detect-defaults();
     callback show-about();
     callback confirm(bool);
     callback confirm-save();
@@ -1821,6 +1823,38 @@ export component AppWindow inherits Window {
                                 primary: Workbench.settings-dirty;
                                 enabled: (Workbench.settings-ready && Workbench.settings-dirty && Workbench.appearance-error == "" && Workbench.gpu-tgp-max-error == "" && !Workbench.busy) && Workbench.confirm-kind == 0;
                                 clicked => { Workbench.save-settings(); }
+                            }
+                        }
+
+                        Hairline { }
+
+                        SectionTitle {
+                            text: Workbench.tr("settings.device_defaults");
+                        }
+
+                        Text {
+                            text: Workbench.device-defaults-summary != "" ? Workbench.device-defaults-summary : Workbench.tr("settings.device_defaults_note");
+                            color: Theme.muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ActionButton {
+                                text: Workbench.tr("settings.detect_defaults");
+                                control-width: Theme.field-width;
+                                enabled: (!Workbench.busy) && Workbench.confirm-kind == 0;
+                                clicked => { Workbench.detect-defaults(); }
+                            }
+
+                            Text {
+                                text: Workbench.tr("settings.detect_defaults_note");
+                                color: Theme.muted;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
                             }
                         }
 

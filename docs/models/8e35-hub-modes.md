@@ -23,12 +23,14 @@ The ownership byte is separate from the performance byte. The examined AC route 
 
 HP mode changes also update cTGP/PPAB through 0x22, shared budget and paired CPU limits through 0x29, and Max-Fan state. The paired CPU payload `[W,W,FF,FF]` is not an independently qualified STAPM interface.
 
-| Own factory-style choice | Thermal byte | cTGP / PPAB on AC | CPU PL1 target |
-| --- | --- | --- | --- |
-| Quiet | 0x10 | Off / Off | 55 W |
-| Balanced | 0x30 | Off / On | 55 W |
-| Performance | 0x31 | On / On | 60 W |
-| Unleashed | 0x04 | On / On | 80 W |
+| Own factory-style choice | Thermal byte | cTGP / PPAB on AC | CPU PL1 target | Firmware TDC / EDC |
+| --- | --- | --- | --- | --- |
+| Quiet | 0x10 | Off / Off | 55 W | 108 A / 160 A |
+| Balanced (Standard) | 0x30 | Off / On | 55 W | 108 A / 160 A |
+| Performance | 0x31 | On / On | 60 W | 108 A / 160 A |
+| Unleashed | 0x04 | On / On | 80 W | 108 A / 160 A |
+
+Live SMU PM-table verification (**25 November 2026**, `0x540208` cells 2/4/8/9/62/63 + fused GETs `0xDA/0xDB/0xDC`) and static inspection of `HP.Omen.Core.Common.PowerControl.JSON.Khalilah_DRG_N22X4X6.json` (`Version: 20250523`) confirm that neither HP BIOS `F.13` nor OMEN Gaming Hub changes TDC or EDC per mode on 8E35: all four modes share **108 A TDC** (fused `GetFusedTdc = 108000 mA`) and **160 A EDC** (`cell 62 = 160 A`), while live current draw scales with PL1 (Quiet ~40.2 A / 52.8 A, Standard/Balanced ~40.4 A / 51.8 A, Performance ~45.8 A / 54.3–68.8 A, Unleashed ~62.7–65.7 A / 71.5–104.3 A). Other boards/BIOS versions can discover their own per-mode TDC/EDC automatically via `device-defaults-detect` or Settings → *Detect device defaults*.
 
 The source resource's default shared budget was 45; Unleashed uses the separately observed 72-W payload field. This shared-budget field is not an independently chosen GPU TGP. The original Hub can retain a user's Unleashed PL1, so its configured value need not equal the own factory-style 80-W target. Exact current payload construction is in `core/hp_mode.rs`; do not generalize it to other boards/BIOS.
 

@@ -26,6 +26,8 @@ pub enum Action {
     Graphics(omen_core::quick_switch::GraphicsMode),
     /// `true` stops and disables HPOmenCap, `false` restores it.
     HpService(bool),
+    /// Discovers this device's hardware/mode defaults (incl. Standard & Performance TDC/EDC).
+    DetectDefaults,
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -37,6 +39,7 @@ impl Action {
             Self::FanService => "fan",
             Self::Graphics(_) => "mux",
             Self::HpService(_) => "hp_service",
+            Self::DetectDefaults => "device_defaults",
         }
     }
 }
@@ -91,6 +94,7 @@ fn run_inner(
             "hp-service-ui {} {nonce}",
             if disable { "disable" } else { "restore" }
         ),
+        Action::DetectDefaults => format!("device-defaults-ui-detect {nonce}"),
     };
     let arguments = format!("--lang {} {arguments}", crate::i18n::language_code());
     let file = wide(

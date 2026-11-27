@@ -12,7 +12,7 @@ use omen_core::{
     features::{Feature, ValueKind},
     preset,
     profiles::{CoreDelta, DeviceBinding, PROFILE_SCHEMA, PerformanceProfile, Setting, Value},
-    transaction::{self, Access, Backend},
+    transaction::{self, Backend},
 };
 use omen_platform::{Controller, profile_store::ProfileStore};
 use std::{
@@ -73,6 +73,8 @@ pub(crate) struct View {
     pub(crate) binding: DeviceBinding,
     /// This device's own values, shown greyed and used by Reset.
     pub(crate) defaults: BTreeMap<Feature, Value>,
+    /// Full discovered defaults record including Standard & Performance TDC/EDC.
+    pub(crate) defaults_record: omen_core::device_defaults::DeviceDefaultsRecord,
     pub(crate) curve: Result<omen_core::vf::VfState, String>,
     pub(crate) removed_options: usize,
     pub(crate) pending: bool,
@@ -87,39 +89,13 @@ fn load(id: Option<&str>) -> Result<View, String> {
     let store = ProfileStore::user_data()?;
     let selected = id.map(|id| store.load(id)).transpose()?;
     let mut controller = Controller::new(true, None)?;
-    let capabilities: BTreeMap<Feature, bool> = preset_fields::fields()
-        .iter()
-        .map(|f| {
-            (
-                f.feature,
-                controller.capability(f.feature).access == Access::ReadWrite,
-            )
-        })
-        .collect();
+    let inventory = controller.inventory().clone();
     let binding = controller.context()?.binding;
-    // Record the firmware's own values only while untouched since boot; a
-    // preset, mode or other control may have changed them afterwards.
-    if !store
-        .controlled_since(omen_platform::boot_unix_s())
-        .unwrap_or(true)
-    {
-        let readings: Vec<Setting> = preset_fields::DEVICE_DEFAULTS
-            .iter()
-            .filter(|f| capabilities.get(f) == Some(&true))
-            .filter_map(|f| {
-                controller
-                    .read(*f)
-                    .ok()
-                    .map(|value| Setting { feature: *f, value })
-            })
-            .collect();
-        let _ = store.save_device_defaults(&binding.board, &binding.bios, &readings);
-    }
-    let defaults = store
-        .device_defaults(&binding.board, &binding.bios)
-        .into_iter()
-        .map(|s| (s.feature, s.value))
-        .collect();
+    // Automatically discover safe system/Windows/BIOS defaults and, on a clean
+    // boot before any control ran, volatile SMU limits as well.
+    let defaults_record =
+        omen_platform::discover_passive_defaults(&inventory, &store, &mut controller);
+    let defaults = defaults_record.map();
     let curve = controller.gpu_curve();
     let removed_options = selected.as_ref().map_or(0, |p| {
         p.settings
@@ -159,6 +135,7 @@ fn load(id: Option<&str>) -> Result<View, String> {
         selected,
         binding,
         defaults,
+        defaults_record,
         curve,
         removed_options,
         pending: store.pending()? || store.fan_policy_pending()?,
@@ -1462,10 +1439,15 @@ fn field_index(state: &State, id: usize) -> Option<usize> {
 }
 fn explain(hwnd: HWND, state: &State, index: usize) {
     if let Some(row) = state.rows.borrow().get(index) {
+        let view = state.view.borrow();
+        let text = preset_fields::field_info_with_defaults(
+            &row.field,
+            view.as_ref().map(|v| &v.defaults_record),
+        );
         unsafe {
             MessageBoxW(
                 hwnd,
-                wide(row.field.info()).as_ptr(),
+                wide(&text).as_ptr(),
                 wide(row.field.label()).as_ptr(),
                 MB_OK | MB_ICONINFORMATION,
             );

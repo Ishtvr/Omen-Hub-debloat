@@ -412,7 +412,17 @@ impl Drop for GpuLimitProbe {
 /// for verifying flashless GPU Dynamic Boost TGP ceiling changes after a
 /// dGPU PnP restart.
 pub fn read_nvml_power_limits() -> Result<(u32, u32, u32), String> {
-    let nvml = Nvml::new(Some("NVIDIA GeForce RTX 5070 Laptop GPU"))?;
+    read_nvml_power_limits_for(Some("NVIDIA GeForce RTX 5070 Laptop GPU"))
+}
+
+/// Board-agnostic one-shot NVML query of `(default_limit_mw, min_limit_mw, max_limit_mw)`
+/// used by device-defaults discovery on any NVIDIA laptop.
+pub(super) fn read_any_nvml_power_limits() -> Result<(u32, u32, u32), String> {
+    read_nvml_power_limits_for(None)
+}
+
+fn read_nvml_power_limits_for(expected_name: Option<&str>) -> Result<(u32, u32, u32), String> {
+    let nvml = Nvml::new(expected_name)?;
     let (mut default_mw, mut min_mw, mut max_mw) = (0u32, 0u32, 0u32);
     // SAFETY: Live NVML device handle and exact documented u32 out parameters.
     unsafe {

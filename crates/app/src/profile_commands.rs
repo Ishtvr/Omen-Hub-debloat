@@ -94,6 +94,8 @@ pub fn handles(command: &str) -> bool {
             | "nvpcf-ppt-restore"
             | "gpu-tgp-status"
             | "gpu-tgp-restore"
+            | "device-defaults-detect"
+            | "device-defaults-ui-detect"
     )
 }
 
@@ -269,6 +271,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some("profile-ui-startup-enable") if args.len() == 3 => {
                 Some(("startup", args[2].as_str()))
             }
+            Some("device-defaults-ui-detect") if args.len() == 2 => {
+                Some(("device_defaults", args[1].as_str()))
+            }
             _ => None,
         };
         if let Some((operation, nonce)) = ui {
@@ -413,6 +418,25 @@ fn run_inner(args: &[String]) -> Result<(), String> {
                 omen_platform::read_nvml_power_limits,
             )?;
             return print(&serde_json::json!({"restored": restored}));
+        }
+        Some("device-defaults-detect") if args.len() == 1 => {
+            let store = ProfileStore::user_data()?;
+            let record =
+                omen_platform::discover_device_defaults(&omen_platform::inventory(), &store)?;
+            return print(&record);
+        }
+        Some("device-defaults-ui-detect") if args.len() == 2 => {
+            validate_nonce(Some(&args[1]))?;
+            let store = ProfileStore::user_data()?;
+            let record =
+                omen_platform::discover_device_defaults(&omen_platform::inventory(), &store)?;
+            store.save_control_result(&serde_json::json!({
+                "schema": 1,
+                "operation": "device_defaults",
+                "nonce": args[1],
+                "result": { "Ok": record }
+            }))?;
+            return print(&record);
         }
         Some("mode-ui-apply" | "mode-ui-replace") if args.len() == 3 => {
             validate_nonce(Some(&args[2]))?;

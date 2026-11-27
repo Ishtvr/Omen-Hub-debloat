@@ -23,7 +23,6 @@ use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
     ptr,
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
@@ -133,6 +132,7 @@ enum Aux {
     ),
     Lighting(Option<(KeyboardState, [[u8; 3]; 4], bool)>),
     HpService(bool),
+    DetectDefaults,
     Stop,
 }
 enum AuxResult {
@@ -148,10 +148,15 @@ enum AuxResult {
     ),
     FanPresetDeleted(Result<(String, String, Vec<omen_core::fan_profile::FanPreset>), String>),
     FanPolicyRequested(Result<(), String>, bool),
-    Settings(Result<settings::Snapshot, String>, Option<bool>),
+    Settings(
+        Result<settings::Snapshot, String>,
+        Option<bool>,
+        Option<omen_core::device_defaults::DeviceDefaultsRecord>,
+    ),
     SettingsSaved(Result<settings::Snapshot, String>),
     Lighting(Result<KeyboardState, String>, bool),
     Hp(Result<bool, String>),
+    DefaultsDetected(Result<omen_core::device_defaults::DeviceDefaultsRecord, String>),
 }
 fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>) {
     while let Ok(request) = rx.recv() {
@@ -183,13 +188,25 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                     .unwrap_or(true);
                 AuxResult::FanPolicyRequested(result, pending)
             }
-            Aux::Settings => AuxResult::Settings(
-                settings::load(),
-                omen_platform::hp_control::oem_service()
+            Aux::Settings => {
+                let inv = crate::inventory::read();
+                let stored = ProfileStore::user_data()
                     .ok()
-                    .flatten()
-                    .map(|s| s.disabled),
-            ),
+                    .and_then(|s| s.device_defaults_record(&inv.board, &inv.bios));
+                let resolved = omen_core::device_defaults::resolve_defaults(
+                    &inv.board,
+                    &inv.bios,
+                    stored.as_ref(),
+                );
+                AuxResult::Settings(
+                    settings::load(),
+                    omen_platform::hp_control::oem_service()
+                        .ok()
+                        .flatten()
+                        .map(|s| s.disabled),
+                    Some(resolved),
+                )
+            }
             Aux::SaveSettings(base, options, appearance, gpu_tgp_max_w, startup) => {
                 AuxResult::SettingsSaved(settings::save(
                     &base,
@@ -215,6 +232,13 @@ fn aux_worker(hwnd: usize, rx: mpsc::Receiver<Aux>, tx: mpsc::Sender<AuxResult>)
                         omen_platform::hp_control::oem_service()?
                             .map(|s| s.disabled)
                             .ok_or_else(|| t("control.unavailable").to_owned())
+                    }),
+            ),
+            Aux::DetectDefaults => AuxResult::DefaultsDetected(
+                crate::elevation::run(None, crate::elevation::Action::DetectDefaults, || false)
+                    .and_then(|record| {
+                        serde_json::from_value(record["result"]["Ok"].clone())
+                            .map_err(|e| e.to_string())
                     }),
             ),
             Aux::Stop => break,
@@ -517,6 +541,7 @@ impl Host {
                 Aux::Lighting(Some(_)) => "lighting.applying",
                 Aux::HpService(true) => "hp_service.disabling",
                 Aux::HpService(false) => "hp_service.restoring",
+                Aux::DetectDefaults => "settings.detecting_defaults",
                 Aux::SaveFanPreset(..) => "preset.saving",
                 Aux::DeleteFanPreset(..) => "preset.deleting",
                 Aux::RequestFanPreset(..) => "control.working",
@@ -578,6 +603,11 @@ impl Host {
             ValueKind::PerCore => 4,
             _ => 0,
         };
+        let view = self.view.borrow();
+        let info = preset_fields::field_info_with_defaults(
+            field,
+            view.as_ref().map(|v| &v.defaults_record),
+        );
         let data = FieldData {
             index: index as i32,
             label: field.label().into(),
@@ -596,7 +626,7 @@ impl Host {
                 .iter()
                 .position(|c| draft.value == Value::Choice(*c))
                 .unwrap_or(0) as i32,
-            info: field.info().into(),
+            info: info.into(),
             slider_min: slider.map_or(0.0, |(lo, _)| lo as f32),
             slider_max: slider.map_or(0.0, |(_, hi)| hi as f32),
         };
@@ -741,8 +771,84 @@ impl Host {
         if view.pending {
             self.status(t("preset.pending"), true);
         }
+        if let Some(w) = self.window.upgrade() {
+            w.global::<Workbench>().set_device_defaults_summary(
+                preset_fields::format_device_defaults_summary(&view.defaults_record).into(),
+            );
+        }
         *self.view.borrow_mut() = Some(view);
         self.reset_profile_fan();
+        self.sync_unticked_mode_defaults();
+        self.update_fields();
+    }
+    /// Updates unticked mode-dependent fields (Slow PPT, TDC, EDC) to reflect
+    /// the device's Standard (Balanced) vs Performance/Unleashed defaults as
+    /// Dynamic Boost is toggled on or off, without modifying user-included rows.
+    fn sync_unticked_mode_defaults(&self) {
+        let view = self.view.borrow();
+        let Some(record) = view.as_ref().map(|v| &v.defaults_record) else {
+            return;
+        };
+        let catalog = preset_fields::fields();
+        let mut fields = self.fields.borrow_mut();
+        let dynamic_boost = catalog
+            .iter()
+            .zip(fields.iter())
+            .any(|(f, d)| f.feature == Feature::GpuUnleashed && d.included);
+        let (mode_tdc, mode_edc) = record.mode_tdc_edc(dynamic_boost);
+        let mode_slow = record.mode_slow_ppt_mw(dynamic_boost);
+        for (field, draft) in catalog.iter().zip(fields.iter_mut()) {
+            if draft.included {
+                continue;
+            }
+            let target = match field.feature {
+                Feature::CpuTdcMa => mode_tdc,
+                Feature::CpuEdcMa => mode_edc,
+                Feature::CpuSlowPptLimitMw => mode_slow,
+                _ => None,
+            };
+            if let Some(val) = target {
+                draft.value = Value::Integer(val);
+                draft.text =
+                    crate::i18n::number(&omen_core::preset::format_number(val, field.scale()));
+            }
+        }
+    }
+    /// Refreshes unticked preset fields after an explicit "Detect device
+    /// defaults" run so newly measured values appear immediately everywhere.
+    fn apply_detected_defaults(&self, record: omen_core::device_defaults::DeviceDefaultsRecord) {
+        if let Some(w) = self.window.upgrade() {
+            w.global::<Workbench>().set_device_defaults_summary(
+                preset_fields::format_device_defaults_summary(&record).into(),
+            );
+        }
+        let map = record.map();
+        if let Some(view) = self.view.borrow_mut().as_mut() {
+            view.defaults_record = record;
+            view.defaults = map.clone();
+        }
+        let catalog = preset_fields::fields();
+        {
+            let mut fields = self.fields.borrow_mut();
+            for (field, draft) in catalog.iter().zip(fields.iter_mut()) {
+                if draft.included
+                    || field.feature.descriptor().value_kind == ValueKind::Boolean
+                    || field.feature.descriptor().value_kind == ValueKind::VfCurve
+                {
+                    continue;
+                }
+                if let Some(val) = map.get(&field.feature) {
+                    draft.value = val.clone();
+                    draft.text = match val {
+                        Value::Integer(v) => {
+                            crate::i18n::number(&omen_core::preset::format_number(*v, field.scale()))
+                        }
+                        _ => String::new(),
+                    };
+                }
+            }
+        }
+        self.sync_unticked_mode_defaults();
         self.update_fields();
     }
     fn select(&self, index: i32) {
@@ -1256,17 +1362,31 @@ impl Host {
                             Err(e) => self.status(&crate::i18n::error_message(&e), true),
                         }
                     }
-                    AuxResult::Settings(result, hp) => {
+                    AuxResult::Settings(result, hp, defaults_record) => {
                         if let Some(w) = self.window.upgrade() {
                             let data = w.global::<Workbench>();
                             data.set_hp_available(hp.is_some());
                             data.set_hp_disabled(hp.unwrap_or(false));
+                            if let Some(record) = defaults_record {
+                                data.set_device_defaults_summary(
+                                    preset_fields::format_device_defaults_summary(&record).into(),
+                                );
+                            }
                         }
                         match result {
                             Ok(s) => self.show_settings(s, false),
                             Err(e) => self.status(&e, true),
                         }
                     }
+                    AuxResult::DefaultsDetected(result) => match result {
+                        Ok(record) => {
+                            self.apply_detected_defaults(record);
+                            let msg = t("settings.defaults_detected");
+                            self.status(msg, false);
+                            self.completed(msg);
+                        }
+                        Err(e) => self.status(&crate::i18n::error_message(&e), true),
+                    },
                     AuxResult::Hp(result) => match result {
                         Ok(disabled) => {
                             if let Some(w) = self.window.upgrade() {
@@ -2271,6 +2391,8 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
     } else {
         0
     };
+    let defaults_record = omen_core::device_defaults::resolve_defaults("TEST", "TEST", None);
+    let defaults = defaults_record.map();
     preset_ui::View {
         profiles: profiles.to_vec(),
         selected: id.and_then(|id| profiles.iter().find(|p| p.id == id).cloned()),
@@ -2283,7 +2405,8 @@ fn test_view(id: Option<&str>, profiles: &[PerformanceProfile]) -> preset_ui::Vi
             nvidia_driver: Some("TEST-DRIVER".into()),
             nvidia_vbios: Some("TEST-VBIOS".into()),
         },
-        defaults: BTreeMap::new(),
+        defaults,
+        defaults_record,
         curve: Ok(omen_core::vf::VfState {
             nodes: (0..80)
                 .map(|i| omen_core::vf::VfNode {
@@ -2365,11 +2488,12 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
             row.included = value;
         }
         h.dirty();
-        // Dynamic Boost changes the CPU watt slider's range.
+        // Dynamic Boost changes the CPU watt slider's range and mode defaults.
         if preset_fields::fields()
             .get(index as usize)
             .is_some_and(|f| f.feature == Feature::GpuUnleashed)
         {
+            h.sync_unticked_mode_defaults();
             h.update_fields();
         } else {
             h.update_field(index as usize);
@@ -2443,6 +2567,7 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
     });
     callback!(on_reset_preset, |h| {
         let view = h.view.borrow();
+        let mut reset_cores = omen_core::device_defaults::zero_per_core(16);
         for (field, row) in preset_fields::fields()
             .iter()
             .zip(h.fields.borrow_mut().iter_mut())
@@ -2453,19 +2578,38 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
                 .cloned()
                 .unwrap_or_else(|| field.initial());
             row.included = matches!(row.value, Value::Boolean(true));
-            row.text = match row.value {
+            row.text = match &row.value {
                 Value::Integer(v) => {
-                    crate::i18n::number(&omen_core::preset::format_number(v, field.scale()))
+                    crate::i18n::number(&omen_core::preset::format_number(*v, field.scale()))
+                }
+                Value::PerCore(cores) if !cores.is_empty() => {
+                    reset_cores = cores.clone();
+                    String::new()
                 }
                 _ => String::new(),
             };
         }
         drop(view);
+        *h.cores.borrow_mut() = reset_cores.clone();
         *h.gpu_draft.borrow_mut() = None;
         if let Some(w) = h.window.upgrade() {
-            w.global::<Workbench>().set_preset_startup(false);
+            let d = w.global::<Workbench>();
+            d.set_preset_startup(false);
+            d.set_cores(
+                Rc::new(VecModel::from(
+                    reset_cores
+                        .iter()
+                        .map(|c| CoreRow {
+                            label: format!("CCD{} · {}", c.ccd, c.core).into(),
+                            value: c.steps.to_string().into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            );
         }
         h.dirty();
+        h.sync_unticked_mode_defaults();
         h.update_fields();
     });
     callback!(on_cancel_preset, |h| {
@@ -2634,6 +2778,9 @@ fn bind(w: &AppWindow, h: &Rc<Host>) {
         if let Some(w) = h.window.upgrade() {
             h.send_aux(Aux::HpService(!w.global::<Workbench>().get_hp_disabled()));
         }
+    });
+    callback!(on_detect_defaults, |h| {
+        h.send_aux(Aux::DetectDefaults);
     });
     callback!(on_confirm, |h, accept| {
         let Some(w) = h.window.upgrade() else { return };

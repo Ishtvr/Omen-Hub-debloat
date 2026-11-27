@@ -1,6 +1,7 @@
 //! Declarative presentation of typed preset features. No register/API knowledge.
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use omen_core::{
+    device_defaults::DeviceDefaultsRecord,
     features::{Feature as F, Unit, ValueKind},
     profiles::{Choice as C, Value},
 };
@@ -89,6 +90,7 @@ pub const REMOVED_CPU_OPTIONS: &[F] = &[
 pub const REMOVED_PRESET_OPTIONS: &[F] = &[F::MaxFan];
 /// Volatile values the firmware and driver set again at every boot. While no
 /// control ran since boot, the live reading is this device's own default.
+#[allow(dead_code)]
 pub const DEVICE_DEFAULTS: &[F] = &[
     F::CpuPptLimitMw,
     F::CpuSlowPptLimitMw,
@@ -172,24 +174,24 @@ pub fn fields() -> Vec<Field> {
         // The Hub's Unleashed default budget (TppMaxValue of this model).
         (F::HpSharedPowerMw, 1, 72000),
         (F::CpuSlowPptLimitMw, 1, 55000),
-        (F::CpuTemperatureLimitC, 2, 85),
+        (F::CpuTemperatureLimitC, 2, 100),
         (F::CpuPptLimitMw, 2, 80000),
         (F::CpuTdcMa, 2, 108000),
         (F::CpuEdcMa, 2, 160000),
         (F::CpuPboScalar, 3, 1),
         (F::CpuCurveOptimizerAllCore, 4, 0),
         (F::CpuCurveOptimizerPerCore, 5, 0),
-        (F::WindowsBoostMode, 6, 0),
+        (F::WindowsBoostMode, 6, 2),
         (F::WindowsMinimumProcessorPercent, 6, 5),
         (F::WindowsMaximumProcessorPercent, 6, 100),
         (F::WindowsProcessorEppPercent, 6, 50),
         (F::WindowsCoreParkingMinPercent, 6, 0),
         (F::WindowsCoreParkingMaxPercent, 6, 100),
         (F::CpuCcdAffinity, 6, 3),
-        (F::WindowsEnergyMode, 7, 0),
-        (F::WindowsPowerPlan, 7, 0),
+        (F::WindowsEnergyMode, 7, 1),
+        (F::WindowsPowerPlan, 7, 1),
         (F::DisplayRefreshRateHz, 7, 60),
-        (F::GraphicsMode, 7, 0),
+        (F::GraphicsMode, 7, 1),
     ];
     rows.iter()
         .map(|(feature, group, seed)| Field {
@@ -290,9 +292,16 @@ impl Field {
     }
     pub fn initial(&self) -> Value {
         match self.feature.descriptor().value_kind {
-            ValueKind::Choice => Value::Choice(self.choices()[0]),
+            ValueKind::Choice => {
+                let choices = self.choices();
+                let idx = usize::try_from(self.seed)
+                    .ok()
+                    .filter(|&i| i < choices.len())
+                    .unwrap_or(0);
+                Value::Choice(choices[idx])
+            }
             ValueKind::Boolean => Value::Boolean(self.seed != 0),
-            ValueKind::PerCore => Value::PerCore(vec![]),
+            ValueKind::PerCore => Value::PerCore(omen_core::device_defaults::zero_per_core(16)),
             ValueKind::VfCurve => Value::VfCurve(vec![]),
             _ => Value::Integer(self.seed),
         }
@@ -301,6 +310,111 @@ impl Field {
 
 pub fn choice_label(choice: C) -> &'static str {
     t(&format!("choice.{choice:?}"))
+}
+
+/// Formats this device's discovered Standard (Balanced) and Performance TDC/EDC
+/// and Slow/PL1 defaults for the Settings summary line.
+pub fn format_device_defaults_summary(record: &DeviceDefaultsRecord) -> String {
+    let (std_tdc, std_edc) = record.mode_tdc_edc(false);
+    let (perf_tdc, perf_edc) = record.mode_tdc_edc(true);
+    let std_slow = record.mode_slow_ppt_mw(false);
+    let perf_slow = record
+        .modes
+        .performance
+        .as_ref()
+        .and_then(|m| m.slow_ppt_mw);
+    let amps = |v: Option<i64>| {
+        v.map_or_else(
+            || t("common.unknown").to_owned(),
+            |ma| format!("{} A", ma / 1000),
+        )
+    };
+    let watts = |v: Option<i64>| {
+        v.map_or_else(
+            || t("common.unknown").to_owned(),
+            |mw| format!("{} W", mw / 1000),
+        )
+    };
+    let board = if record.board.is_empty() {
+        t("common.unknown")
+    } else {
+        record.board.as_str()
+    };
+    let bios = if record.bios.is_empty() {
+        t("common.unknown")
+    } else {
+        record.bios.as_str()
+    };
+    tf(
+        "settings.device_defaults_summary",
+        &[
+            &board,
+            &bios,
+            &amps(std_tdc),
+            &amps(std_edc),
+            &watts(std_slow),
+            &amps(perf_tdc),
+            &amps(perf_edc),
+            &watts(perf_slow),
+        ],
+    )
+}
+
+/// Enriches a preset field's explanation text with the device's own discovered
+/// Standard & Performance defaults where applicable.
+pub fn field_info_with_defaults(
+    field: &Field,
+    record: Option<&DeviceDefaultsRecord>,
+) -> String {
+    let base = field.info();
+    let Some(record) = record else {
+        return base.to_owned();
+    };
+    let extra = match field.feature {
+        F::CpuTdcMa => {
+            let (std_tdc, _) = record.mode_tdc_edc(false);
+            let (perf_tdc, _) = record.mode_tdc_edc(true);
+            match (std_tdc, perf_tdc) {
+                (Some(s), Some(p)) => Some(tf(
+                    "defaults.info_tdc",
+                    &[&(s / 1000), &(p / 1000)],
+                )),
+                _ => None,
+            }
+        }
+        F::CpuEdcMa => {
+            let (_, std_edc) = record.mode_tdc_edc(false);
+            let (_, perf_edc) = record.mode_tdc_edc(true);
+            match (std_edc, perf_edc) {
+                (Some(s), Some(p)) => Some(tf(
+                    "defaults.info_edc",
+                    &[&(s / 1000), &(p / 1000)],
+                )),
+                _ => None,
+            }
+        }
+        F::CpuSlowPptLimitMw => {
+            let std_w = record.mode_slow_ppt_mw(false);
+            let perf_w = record.modes.performance.as_ref().and_then(|m| m.slow_ppt_mw);
+            let unl_w = record.modes.unleashed.as_ref().and_then(|m| m.slow_ppt_mw);
+            match (std_w, perf_w, unl_w) {
+                (Some(s), Some(p), Some(u)) => Some(tf(
+                    "defaults.info_slow_ppt",
+                    &[&(s / 1000), &(p / 1000), &(u / 1000)],
+                )),
+                _ => None,
+            }
+        }
+        F::CpuTemperatureLimitC => match record.get(F::CpuTemperatureLimitC) {
+            Some(Value::Integer(c)) => Some(tf("defaults.info_tctl", &[c])),
+            _ => None,
+        },
+        _ => None,
+    };
+    match extra {
+        Some(line) => format!("{base}\n\n{line}"),
+        None => base.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -482,5 +596,28 @@ mod tests {
             );
         }
         assert!(!F::GpuCustomTgp.needs_nvidia() && F::GpuVfCurve.needs_nvidia());
+        // Sane factory seeds: 100 °C Tctl, Balanced Windows defaults, Hybrid MUX, 16 zeroed cores.
+        let initial = |feature| {
+            fields
+                .iter()
+                .find(|f| f.feature == feature)
+                .unwrap()
+                .initial()
+        };
+        assert_eq!(initial(F::CpuTemperatureLimitC), Value::Integer(100));
+        assert_eq!(initial(F::WindowsPowerPlan), Value::Choice(C::Balanced));
+        assert_eq!(initial(F::WindowsEnergyMode), Value::Choice(C::Balanced));
+        assert_eq!(initial(F::WindowsBoostMode), Value::Choice(C::Aggressive));
+        assert_eq!(initial(F::GraphicsMode), Value::Choice(C::Hybrid));
+        assert!(matches!(
+            initial(F::CpuCurveOptimizerPerCore),
+            Value::PerCore(ref cores) if cores.len() == 16 && cores.iter().all(|c| c.steps == 0)
+        ));
+        let rec = omen_core::device_defaults::resolve_defaults("8E35", "F.13", None);
+        let summary = format_device_defaults_summary(&rec);
+        assert!(summary.contains("108 A") && summary.contains("160 A"));
+        let tdc_field = fields.iter().find(|f| f.feature == F::CpuTdcMa).unwrap();
+        assert!(field_info_with_defaults(tdc_field, Some(&rec)).contains("108 A"));
+        assert!(!DEVICE_DEFAULTS.is_empty());
     }
 }
